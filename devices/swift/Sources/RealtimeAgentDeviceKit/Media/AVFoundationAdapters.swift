@@ -118,32 +118,182 @@ public final class RealtimeAgentDefaultCameraFrameSource: NSObject, RealtimeAgen
 /// AVFoundation 默认 speaker sink。
 ///
 /// 主要功能：把 SDK speaker buffer drain 出来的 PCM16LE chunk 写入本机播放器。
-public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, @unchecked Sendable {
+public final class RealtimeAgentDefaultSpeakerSink: RealtimeAgentSpeakerSink, RealtimeAgentSpeakerSinkDiagnostics, @unchecked Sendable {
     private let voiceEngine = RealtimeAgentVoiceConversationEngine.shared
+    private let lock = NSRecursiveLock()
+    private let engine = AVAudioEngine()
+    private let ringBuffer = RealtimeAgentFloatRingBuffer(
+        capacityFrames: 24000 * 30,
+        startThresholdFrames: 24000 * 300 / 1000
+    )
+    private var format = RealtimeAgentSpeakerFormat()
+    private var sourceNode: AVAudioSourceNode?
+    private var playbackFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 24_000, channels: 1, interleaved: false)!
+    private var preparedRingFormat: RealtimeAgentSpeakerFormat?
+    private var preparedSessionSampleRate: Int?
+    private var lastPrepareDiagnostics = "ring_prepare=none"
 
     public init() {}
 
     public func prepare(format: RealtimeAgentSpeakerFormat) async throws {
-        try voiceEngine.prepareSpeaker(format: format)
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        guard format.codec == "pcm16le" else {
+            throw RealtimeAgentDeviceError.invalidStreamChunk("unsupported speaker codec: \(format.codec)")
+        }
+        let shouldConfigureSession = shouldConfigureAudioSession(sampleRate: format.sampleRate)
+        let configureStartedAt = DispatchTime.now().uptimeNanoseconds
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        if shouldConfigureSession {
+            try RealtimeAgentAudioSession.configureVoiceConversation(sampleRate: Double(format.sampleRate))
+        }
+        #endif
+        let configuredAt = DispatchTime.now().uptimeNanoseconds
+        try resetRingPlayerState(
+            format: format,
+            diagnostics: "ring_prepare=completed elapsed_ms=\(elapsedMS(startedAt, DispatchTime.now().uptimeNanoseconds)) configure_session_ms=\(elapsedMS(configureStartedAt, configuredAt)) session_reused=\(!shouldConfigureSession)"
+        )
     }
 
     public func write(_ chunk: RealtimeAgentStreamChunk) async throws {
-        try await voiceEngine.writeSpeakerChunk(chunk)
+        let samples = floatSamples(fromPCM16LE: chunk.payload)
+        appendSamples(samples)
     }
 
     public func drain() async throws {
-        try await voiceEngine.drainSpeaker()
+        voiceEngine.setExternalSpeakerPlaybackActive(true)
+        ringBuffer.forceStart()
+        while ringBuffer.bufferedFrames > 0 {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        try await Task.sleep(nanoseconds: 120_000_000)
+        voiceEngine.setExternalSpeakerPlaybackActive(false)
     }
 
     public func cancel() async {
-        await voiceEngine.cancelSpeaker()
+        cancelRingPlayerState()
+        voiceEngine.setExternalSpeakerPlaybackActive(false)
+    }
+
+    public func diagnosticSummary() async -> String {
+        "\(ringPlayerDiagnosticSummary()) \(voiceEngine.diagnosticSummary())"
+    }
+
+    private func elapsedMS(_ start: UInt64, _ end: UInt64) -> Int {
+        Int((end - start) / 1_000_000)
+    }
+
+    private func shouldConfigureAudioSession(sampleRate: Int) -> Bool {
+        lock.lock()
+        let shouldConfigure = preparedSessionSampleRate != sampleRate
+        if shouldConfigure {
+            preparedSessionSampleRate = sampleRate
+        }
+        lock.unlock()
+        return shouldConfigure
+    }
+
+    private func resetRingPlayerState(format: RealtimeAgentSpeakerFormat, diagnostics: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        self.format = format
+        ringBuffer.reset()
+        if preparedRingFormat == format, sourceNode != nil {
+            if !engine.isRunning {
+                try engine.start()
+            }
+            lastPrepareDiagnostics = "ring_prepare=reused \(diagnostics)"
+            return
+        }
+        engine.stop()
+        if let sourceNode {
+            engine.detach(sourceNode)
+        }
+        guard let outputFormat = AVAudioFormat(
+            commonFormat: .pcmFormatFloat32,
+            sampleRate: Double(format.sampleRate),
+            channels: AVAudioChannelCount(format.channels),
+            interleaved: false
+        ) else {
+            throw RealtimeAgentDeviceError.invalidStreamChunk("cannot create ring speaker format")
+        }
+        playbackFormat = outputFormat
+        let node = AVAudioSourceNode { [weak self] _, _, frameCount, audioBufferList -> OSStatus in
+            self?.renderRingBuffer(frameCount: frameCount, audioBufferList: audioBufferList)
+            return noErr
+        }
+        sourceNode = node
+        if !engine.attachedNodes.contains(node) {
+            engine.attach(node)
+        }
+        engine.connect(node, to: engine.mainMixerNode, format: outputFormat)
+        engine.prepare()
+        if !engine.isRunning {
+            try engine.start()
+        }
+        preparedRingFormat = format
+        lastPrepareDiagnostics = diagnostics
+    }
+
+    private func appendSamples(_ samples: [Float]) {
+        if !samples.isEmpty {
+            ringBuffer.append(samples)
+            voiceEngine.setExternalSpeakerPlaybackActive(true)
+        }
+    }
+
+    private func cancelRingPlayerState() {
+        ringBuffer.reset()
+        lock.lock()
+        engine.stop()
+        if let sourceNode {
+            engine.detach(sourceNode)
+        }
+        sourceNode = nil
+        preparedRingFormat = nil
+        preparedSessionSampleRate = nil
+        lock.unlock()
+    }
+
+    private func ringPlayerDiagnosticSummary() -> String {
+        "ring_player=true ring_buffered_frames=\(ringBuffer.bufferedFrames) ring_capacity_frames=\(ringBuffer.capacityFrames) ring_start_threshold_frames=\(ringBuffer.startThresholdFrames) ring_playback_started=\(ringBuffer.playbackStarted) ring_dropped_frames=\(ringBuffer.droppedFrames) ring_underrun_events=\(ringBuffer.underrunEvents) ring_underrun_frames=\(ringBuffer.underrunFrames) ring_warmup_zero_frames=\(ringBuffer.warmupZeroFrames) ring_engine_running=\(engine.isRunning) ring_sample_rate=\(Int(playbackFormat.sampleRate)) \(lastPrepareDiagnostics)"
+    }
+
+    private func renderRingBuffer(frameCount: AVAudioFrameCount, audioBufferList: UnsafeMutablePointer<AudioBufferList>) {
+        let rendered = ringBuffer.render(count: Int(frameCount))
+        let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
+        for bufferIndex in buffers.indices {
+            guard let pointer = buffers[bufferIndex].mData?.assumingMemoryBound(to: Float.self) else {
+                continue
+            }
+            for frameIndex in 0..<Int(frameCount) {
+                pointer[frameIndex] = frameIndex < rendered.count ? rendered[frameIndex] : 0
+            }
+            buffers[bufferIndex].mDataByteSize = UInt32(Int(frameCount) * MemoryLayout<Float>.size)
+        }
+    }
+
+    private func floatSamples(fromPCM16LE data: Data) -> [Float] {
+        let sampleCount = data.count / 2
+        guard sampleCount > 0 else { return [] }
+        return data.withUnsafeBytes { rawBuffer in
+            guard let bytes = rawBuffer.bindMemory(to: UInt8.self).baseAddress else { return [] }
+            var samples = [Float]()
+            samples.reserveCapacity(sampleCount)
+            for index in 0..<sampleCount {
+                let low = UInt16(bytes[index * 2])
+                let high = UInt16(bytes[index * 2 + 1]) << 8
+                let value = Int16(bitPattern: high | low)
+                samples.append(Float(value) / 32768.0)
+            }
+            return samples
+        }
     }
 }
 
 /// iOS 默认实时语音音频引擎。
 ///
-/// 主要功能：让 SDK 默认麦克风和 speaker 共用同一个 `AVAudioEngine`，并在同一条
-/// Voice Processing I/O 路径里启用系统回声消除，避免端侧外放被本机麦克风再次采集。
+/// 主要功能：让 SDK 默认麦克风和 speaker 共用同一个 `AVAudioEngine`，并在麦克风输入侧
+/// 启用系统语音处理；播放期间使用静音 PCM 抑制本机外放被麦克风再次采集。
 private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
     static let shared = RealtimeAgentVoiceConversationEngine()
 
@@ -159,10 +309,20 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
     private var preparedSpeakerFormat: RealtimeAgentSpeakerFormat?
     private var pendingPlaybackBuffers = 0
     private var pendingPlaybackMS = 0
+    private var externalSpeakerPlaybackActive = false
+    private var externalSpeakerPlaybackStartedAt: UInt64?
+    private var microphoneDuringSpeakerPlayback: MicrophoneDuringSpeakerPlayback = .allowInterruptions
+    private var speakerPlaybackWarmupMuteMS = 500
+    private var lastSpeakerPrepareDiagnostics = "prepare=none"
+    private var lastAudioSessionNotification = "audio_session_notification=none"
+    private var audioSessionObserversInstalled = false
+    private var audioSessionObserverTokens: [NSObjectProtocol] = []
     private static let drainPollNanoseconds: UInt64 = 20_000_000
     private static let drainGraceNanoseconds: UInt64 = 3_000_000_000
 
-    private init() {}
+    private init() {
+        installAudioSessionObserversIfNeeded()
+    }
 
     func startMicrophone(
         configuration: RealtimeAgentMicrophoneConfiguration,
@@ -171,6 +331,8 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
+        microphoneDuringSpeakerPlayback = configuration.microphoneDuringSpeakerPlayback
+        speakerPlaybackWarmupMuteMS = configuration.speakerPlaybackWarmupMuteMS
         try configureAudioSession(sampleRate: Double(configuration.sampleRate))
         try configureVoiceProcessingIfNeeded()
         if microphoneTapInstalled {
@@ -228,13 +390,18 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         defer { lock.unlock() }
 
         if isPreparedForCurrentPlayback(format) {
+            lastSpeakerPrepareDiagnostics = "prepare=reused"
             return
         }
         guard format.codec == "pcm16le" else {
             throw RealtimeAgentDeviceError.invalidStreamChunk("unsupported speaker codec: \(format.codec)")
         }
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let configureStartedAt = startedAt
         try configureAudioSession(sampleRate: Double(format.sampleRate))
+        let configuredAt = DispatchTime.now().uptimeNanoseconds
         try configureVoiceProcessingIfNeeded()
+        let voiceProcessedAt = DispatchTime.now().uptimeNanoseconds
         guard let playbackFormat = AVAudioFormat(
             commonFormat: .pcmFormatFloat32,
             sampleRate: Double(format.sampleRate),
@@ -243,16 +410,30 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         ) else {
             throw RealtimeAgentDeviceError.invalidStreamChunk("cannot create speaker format")
         }
+        let formatCreatedAt = DispatchTime.now().uptimeNanoseconds
         speakerFormat = playbackFormat
         if !engine.attachedNodes.contains(player) {
             engine.attach(player)
         }
         engine.connect(player, to: engine.mainMixerNode, format: playbackFormat)
+        let connectedAt = DispatchTime.now().uptimeNanoseconds
         try startEngineIfNeeded()
+        let engineStartedAt = DispatchTime.now().uptimeNanoseconds
         if !player.isPlaying {
             player.play()
         }
+        let playerStartedAt = DispatchTime.now().uptimeNanoseconds
         preparedSpeakerFormat = format
+        lastSpeakerPrepareDiagnostics = [
+            "prepare=completed",
+            "total_ms=\(elapsedMS(startedAt, playerStartedAt))",
+            "configure_session_ms=\(elapsedMS(configureStartedAt, configuredAt))",
+            "voice_processing_ms=\(elapsedMS(configuredAt, voiceProcessedAt))",
+            "format_ms=\(elapsedMS(voiceProcessedAt, formatCreatedAt))",
+            "connect_ms=\(elapsedMS(formatCreatedAt, connectedAt))",
+            "engine_start_ms=\(elapsedMS(connectedAt, engineStartedAt))",
+            "player_play_ms=\(elapsedMS(engineStartedAt, playerStartedAt))",
+        ].joined(separator: " ")
     }
 
     func writeSpeakerChunk(_ chunk: RealtimeAgentStreamChunk) async throws {
@@ -271,6 +452,24 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
 
     func cancelSpeaker() async {
         cancelSpeakerNow()
+    }
+
+    func diagnosticSummary() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return diagnosticSummaryLocked()
+    }
+
+    func setExternalSpeakerPlaybackActive(_ active: Bool) {
+        lock.lock()
+        if active, externalSpeakerPlaybackStartedAt == nil {
+            externalSpeakerPlaybackStartedAt = DispatchTime.now().uptimeNanoseconds
+        }
+        if !active {
+            externalSpeakerPlaybackStartedAt = nil
+        }
+        externalSpeakerPlaybackActive = active
+        lock.unlock()
     }
 
     private func cancelSpeakerNow() {
@@ -310,9 +509,36 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         }
         #if os(iOS) || os(tvOS) || os(visionOS)
         try RealtimeAgentAudioSession.enableVoiceProcessing(on: engine.inputNode, role: "microphone")
-        try RealtimeAgentAudioSession.enableVoiceProcessing(on: engine.outputNode, role: "speaker")
         #endif
         voiceProcessingEnabled = true
+    }
+
+    private func installAudioSessionObserversIfNeeded() {
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        guard !audioSessionObserversInstalled else { return }
+        audioSessionObserversInstalled = true
+        let center = NotificationCenter.default
+        let names: [Notification.Name] = [
+            AVAudioSession.routeChangeNotification,
+            AVAudioSession.interruptionNotification,
+            AVAudioSession.mediaServicesWereResetNotification,
+        ]
+        audioSessionObserverTokens = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: nil) { [weak self] notification in
+                self?.recordAudioSessionNotification(notification)
+            }
+        }
+        #endif
+    }
+
+    private func recordAudioSessionNotification(_ notification: Notification) {
+        lock.lock()
+        defer { lock.unlock() }
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        lastAudioSessionNotification = RealtimeAgentAudioSession.notificationSummary(notification)
+        #else
+        lastAudioSessionNotification = "audio_session_notification=\(notification.name.rawValue)"
+        #endif
     }
 
     private func startEngineIfNeeded() throws {
@@ -372,7 +598,34 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         } else {
             outputBuffer = buffer
         }
+        if shouldMuteMicrophoneForSpeakerPlayback() {
+            return Data(repeating: 0, count: Int(outputBuffer.frameLength) * 2)
+        }
         return AudioPCMConverter.pcm16LE(fromFloat32: monoSamples(from: outputBuffer))
+    }
+
+    private func shouldMuteMicrophoneForSpeakerPlayback() -> Bool {
+        lock.lock()
+        let playbackActive = externalSpeakerPlaybackActive || pendingPlaybackMS > 0 || pendingPlaybackBuffers > 0
+        let shouldMute: Bool
+        if microphoneDuringSpeakerPlayback == .muteDuringSpeakerPlayback {
+            shouldMute = playbackActive
+        } else {
+            shouldMute = playbackActive
+                && speakerPlaybackWarmupMuteMS > 0
+                && isWithinSpeakerWarmupMuteWindowLocked()
+                && isBuiltInSpeakerRoute()
+        }
+        lock.unlock()
+        return shouldMute
+    }
+
+    private func isWithinSpeakerWarmupMuteWindowLocked() -> Bool {
+        guard let startedAt = externalSpeakerPlaybackStartedAt else {
+            return false
+        }
+        let elapsedMS = Int((DispatchTime.now().uptimeNanoseconds - startedAt) / 1_000_000)
+        return elapsedMS < speakerPlaybackWarmupMuteMS
     }
 
     private func monoSamples(from buffer: AVAudioPCMBuffer) -> [Float] {
@@ -459,6 +712,153 @@ private final class RealtimeAgentVoiceConversationEngine: @unchecked Sendable {
         }
         return buffer
     }
+
+    private func diagnosticSummaryLocked() -> String {
+        let renderSummary: String
+        if engine.attachedNodes.contains(player),
+           let nodeTime = player.lastRenderTime,
+           let playerTime = player.playerTime(forNodeTime: nodeTime) {
+            let sampleRate = max(playerTime.sampleRate, 1)
+            let renderedMS = Int((Double(playerTime.sampleTime) / sampleRate) * 1000)
+            renderSummary = "rendered_ms=\(renderedMS) render_sample_rate=\(Int(sampleRate))"
+        } else {
+            renderSummary = "rendered_ms=unknown render_sample_rate=unknown"
+        }
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        let sessionSummary = RealtimeAgentAudioSession.currentDiagnosticSummary()
+        #else
+        let sessionSummary = "audio_session=unavailable"
+        #endif
+        return [
+            sessionSummary,
+            "engine_running=\(engine.isRunning)",
+            "player_playing=\(player.isPlaying)",
+            "voice_processing_enabled=\(voiceProcessingEnabled)",
+            "external_speaker_playback_active=\(externalSpeakerPlaybackActive)",
+            "microphone_during_speaker_playback=\(microphoneDuringSpeakerPlayback.rawValue)",
+            "speaker_playback_warmup_mute_ms=\(speakerPlaybackWarmupMuteMS)",
+            "speaker_playback_warmup_active=\(isWithinSpeakerWarmupMuteWindowLocked())",
+            "mic_muted_by_speaker=\(shouldMuteMicrophoneForSpeakerPlaybackLocked())",
+            "pending_buffers=\(pendingPlaybackBuffers)",
+            "pending_ms=\(pendingPlaybackMS)",
+            renderSummary,
+            lastSpeakerPrepareDiagnostics,
+            lastAudioSessionNotification,
+        ].joined(separator: " ")
+    }
+
+    private func elapsedMS(_ start: UInt64, _ end: UInt64) -> Int {
+        Int((end - start) / 1_000_000)
+    }
+
+    private func shouldMuteMicrophoneForSpeakerPlaybackLocked() -> Bool {
+        let playbackActive = externalSpeakerPlaybackActive || pendingPlaybackMS > 0 || pendingPlaybackBuffers > 0
+        if microphoneDuringSpeakerPlayback == .muteDuringSpeakerPlayback {
+            return playbackActive
+        }
+        return playbackActive
+            && speakerPlaybackWarmupMuteMS > 0
+            && isWithinSpeakerWarmupMuteWindowLocked()
+            && isBuiltInSpeakerRoute()
+    }
+
+    private func isBuiltInSpeakerRoute() -> Bool {
+        #if os(iOS) || os(tvOS) || os(visionOS)
+        AVAudioSession.sharedInstance().currentRoute.outputs.contains { output in
+            output.portType == .builtInSpeaker
+        }
+        #else
+        false
+        #endif
+    }
+}
+
+private final class RealtimeAgentFloatRingBuffer: @unchecked Sendable {
+    let capacityFrames: Int
+    let startThresholdFrames: Int
+    private let lock = NSRecursiveLock()
+    private var storage: [Float]
+    private var readIndex = 0
+    private var writeIndex = 0
+    private var count = 0
+    private(set) var playbackStarted = false
+    private(set) var droppedFrames = 0
+    private(set) var underrunEvents = 0
+    private(set) var underrunFrames = 0
+    private(set) var warmupZeroFrames = 0
+
+    init(capacityFrames: Int, startThresholdFrames: Int) {
+        self.capacityFrames = max(capacityFrames, 1)
+        self.startThresholdFrames = max(startThresholdFrames, 1)
+        self.storage = [Float](repeating: 0, count: self.capacityFrames)
+    }
+
+    var bufferedFrames: Int {
+        lock.lock()
+        let value = count
+        lock.unlock()
+        return value
+    }
+
+    func append(_ samples: [Float]) {
+        lock.lock()
+        defer { lock.unlock() }
+        for sample in samples {
+            if count == capacityFrames {
+                readIndex = (readIndex + 1) % capacityFrames
+                count -= 1
+                droppedFrames += 1
+            }
+            storage[writeIndex] = sample
+            writeIndex = (writeIndex + 1) % capacityFrames
+            count += 1
+        }
+    }
+
+    func render(count requestedCount: Int) -> [Float] {
+        lock.lock()
+        defer { lock.unlock() }
+        let requestedCount = max(requestedCount, 0)
+        guard requestedCount > 0 else { return [] }
+        if !playbackStarted {
+            guard count >= min(startThresholdFrames, capacityFrames) else {
+                warmupZeroFrames += requestedCount
+                return [Float](repeating: 0, count: requestedCount)
+            }
+            playbackStarted = true
+        }
+        let outputCount = min(requestedCount, count)
+        var output = [Float](repeating: 0, count: requestedCount)
+        for index in 0..<outputCount {
+            output[index] = storage[readIndex]
+            readIndex = (readIndex + 1) % capacityFrames
+            count -= 1
+        }
+        if outputCount < requestedCount {
+            underrunEvents += 1
+            underrunFrames += requestedCount - outputCount
+        }
+        return output
+    }
+
+    func forceStart() {
+        lock.lock()
+        playbackStarted = true
+        lock.unlock()
+    }
+
+    func reset() {
+        lock.lock()
+        readIndex = 0
+        writeIndex = 0
+        count = 0
+        playbackStarted = false
+        droppedFrames = 0
+        underrunEvents = 0
+        underrunFrames = 0
+        warmupZeroFrames = 0
+        lock.unlock()
+    }
 }
 
 #if os(iOS) || os(tvOS) || os(visionOS)
@@ -480,8 +880,8 @@ private enum RealtimeAgentAudioSession {
 
     /// 启用系统语音处理链路。
     ///
-    /// 主要逻辑：让麦克风和扬声器都进入 AVAudioEngine 的 voice-processing I/O 路径，
-    /// 这样系统回声消除器可以获得播放参考信号，降低端侧播报被本机麦克风再次采集后触发误打断的概率。
+    /// 主要逻辑：只在输入节点启用 voice processing，让系统输入侧完成回声抑制、自动增益和噪声处理。
+    /// 扬声器输出仍走普通 player 节点，避免外放路由下输出节点语音处理影响播放稳定性。
     static func enableVoiceProcessing(on node: AVAudioIONode, role: String) throws {
         do {
             try node.setVoiceProcessingEnabled(true)
@@ -489,6 +889,58 @@ private enum RealtimeAgentAudioSession {
             throw RealtimeAgentDeviceError.transportClosed(
                 "cannot enable \(role) voice processing: \(error.localizedDescription)"
             )
+        }
+    }
+
+    static func currentDiagnosticSummary() -> String {
+        let audioSession = AVAudioSession.sharedInstance()
+        return [
+            "category=\(audioSession.category.rawValue)",
+            "mode=\(audioSession.mode.rawValue)",
+            "sample_rate=\(Int(audioSession.sampleRate))",
+            "preferred_sample_rate=\(Int(audioSession.preferredSampleRate))",
+            "io_buffer_ms=\(Int(audioSession.ioBufferDuration * 1000))",
+            "preferred_io_buffer_ms=\(Int(audioSession.preferredIOBufferDuration * 1000))",
+            "input_latency_ms=\(Int(audioSession.inputLatency * 1000))",
+            "output_latency_ms=\(Int(audioSession.outputLatency * 1000))",
+            "route=\(routeSummary(audioSession.currentRoute))",
+            "secondary_audio_silenced=\(audioSession.secondaryAudioShouldBeSilencedHint)",
+        ].joined(separator: " ")
+    }
+
+    static func notificationSummary(_ notification: Notification) -> String {
+        var fields = ["audio_session_notification=\(notification.name.rawValue)"]
+        if notification.name == AVAudioSession.routeChangeNotification,
+           let rawReason = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt,
+           let reason = AVAudioSession.RouteChangeReason(rawValue: rawReason) {
+            fields.append("reason=\(routeChangeReasonName(reason))")
+        }
+        if notification.name == AVAudioSession.interruptionNotification,
+           let rawType = notification.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt,
+           let type = AVAudioSession.InterruptionType(rawValue: rawType) {
+            fields.append("interruption=\(type == .began ? "began" : "ended")")
+        }
+        fields.append(currentDiagnosticSummary())
+        return fields.joined(separator: " ")
+    }
+
+    private static func routeSummary(_ route: AVAudioSessionRouteDescription) -> String {
+        let inputs = route.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+        let outputs = route.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
+        return "inputs[\(inputs.isEmpty ? "-" : inputs)] outputs[\(outputs.isEmpty ? "-" : outputs)]"
+    }
+
+    private static func routeChangeReasonName(_ reason: AVAudioSession.RouteChangeReason) -> String {
+        switch reason {
+        case .unknown: return "unknown"
+        case .newDeviceAvailable: return "new_device_available"
+        case .oldDeviceUnavailable: return "old_device_unavailable"
+        case .categoryChange: return "category_change"
+        case .override: return "override"
+        case .wakeFromSleep: return "wake_from_sleep"
+        case .noSuitableRouteForCategory: return "no_suitable_route"
+        case .routeConfigurationChange: return "route_configuration_change"
+        @unknown default: return "unknown_future"
         }
     }
 }

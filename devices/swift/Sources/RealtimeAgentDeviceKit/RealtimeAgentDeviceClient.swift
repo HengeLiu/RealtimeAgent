@@ -36,6 +36,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var speakerReceivedChunkCounts: [String: Int] = [:]
     private var speakerDrainedChunkCounts: [String: Int] = [:]
     private var speakerAppendedLastSeq: [String: Int] = [:]
+    private var speakerFirstChunkTimes: [String: UInt64] = [:]
+    private var speakerPreviousChunkTimes: [String: UInt64] = [:]
+    private var speakerFirstDrainTimes: [String: UInt64] = [:]
+    private var speakerPreviousDrainTimes: [String: UInt64] = [:]
     private var readyOutputStreams = Set<String>()
     private var startedOutputStreams = Set<String>()
     private var completedOutputStreams = Set<String>()
@@ -204,6 +208,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             speakerReceivedChunkCounts = [:]
             speakerDrainedChunkCounts = [:]
             speakerAppendedLastSeq = [:]
+            speakerFirstChunkTimes = [:]
+            speakerPreviousChunkTimes = [:]
+            speakerFirstDrainTimes = [:]
+            speakerPreviousDrainTimes = [:]
             readyOutputStreams = []
             startedOutputStreams = []
             completedOutputStreams = []
@@ -713,6 +721,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         let sink = speaker.sink ?? RealtimeAgentNoopSpeakerSink()
         let format = speakerFormat(for: event)
         let bufferConfiguration = speaker.buffer
+        let prepareStartedAt = DispatchTime.now().uptimeNanoseconds
+        if let diagnostics = sink as? RealtimeAgentSpeakerSinkDiagnostics {
+            await debugLog("speaker audio before_prepare stream=\(session.streamID) \(await diagnostics.diagnosticSummary())")
+        }
         let task = Task<SpeakerPlaybackBuffer, Error> {
             try await sink.prepare(format: format)
             return SpeakerPlaybackBuffer(configuration: bufferConfiguration, sink: sink)
@@ -738,7 +750,11 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             }
             throw error
         }
-        await debugLog("speaker prepared stream=\(session.streamID)")
+        let prepareElapsedMS = elapsedMS(from: prepareStartedAt, to: DispatchTime.now().uptimeNanoseconds)
+        await debugLog("speaker prepared stream=\(session.streamID) elapsed_ms=\(prepareElapsedMS)")
+        if let diagnostics = sink as? RealtimeAgentSpeakerSinkDiagnostics {
+            await debugLog("speaker audio after_prepare stream=\(session.streamID) \(await diagnostics.diagnosticSummary())")
+        }
     }
 
     private func speakerFormat(for event: RealtimeAgentEvent) -> RealtimeAgentSpeakerFormat {
@@ -791,9 +807,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             speakerReceivedChunkCounts[chunk.streamID] = count
             return count
         }
+        let receiveTiming = recordSpeakerChunkTiming(streamID: chunk.streamID)
         if shouldLogSpeakerChunk(count: receivedCount) {
             await debugLog(
-                "speaker chunk received stream=\(chunk.streamID) seq=\(chunk.seq) count=\(receivedCount) bytes=\(chunk.payload.count) duration_ms=\(chunk.durationMS)"
+                "speaker chunk received stream=\(chunk.streamID) seq=\(chunk.seq) count=\(receivedCount) bytes=\(chunk.payload.count) duration_ms=\(chunk.durationMS) first_elapsed_ms=\(receiveTiming.firstElapsedMS) gap_ms=\(receiveTiming.gapMS)"
             )
         }
         if withStateLock({ speakerBuffers[chunk.streamID] == nil }) {
@@ -806,7 +823,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         if let snapshot = await buffer?.snapshot(),
            shouldLogSpeakerBuffer(count: receivedCount, actions: actions) {
             await debugLog(
-                "speaker buffer append stream=\(chunk.streamID) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes) started=\(snapshot.hasStarted) paused=\(snapshot.isPaused) actions=\(describeSpeakerActions(actions))"
+                "speaker buffer append stream=\(chunk.streamID) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes) next_seq=\(snapshot.nextDrainSeq.map(String.init) ?? "nil") pending_min_seq=\(snapshot.pendingMinSeq.map(String.init) ?? "nil") pending_max_seq=\(snapshot.pendingMaxSeq.map(String.init) ?? "nil") out_of_order=\(snapshot.outOfOrderChunks) duplicates=\(snapshot.duplicateChunks) started=\(snapshot.hasStarted) paused=\(snapshot.isPaused) actions=\(describeSpeakerActions(actions))"
             )
         }
         try await applySpeakerActions(actions, session: session)
@@ -922,12 +939,19 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             try await applySpeakerActions(actions, session: session)
         }
         try await buffer.drainSink()
+        if let diagnostics = speaker.sink as? RealtimeAgentSpeakerSinkDiagnostics {
+            await debugLog("speaker audio after_drain stream=\(streamID) \(await diagnostics.diagnosticSummary())")
+        }
         withStateLock {
             speakerBuffers.removeValue(forKey: streamID)
             speakerPreparationTasks.removeValue(forKey: streamID)
             speakerReceivedChunkCounts.removeValue(forKey: streamID)
             speakerDrainedChunkCounts.removeValue(forKey: streamID)
             speakerAppendedLastSeq.removeValue(forKey: streamID)
+            speakerFirstChunkTimes.removeValue(forKey: streamID)
+            speakerPreviousChunkTimes.removeValue(forKey: streamID)
+            speakerFirstDrainTimes.removeValue(forKey: streamID)
+            speakerPreviousDrainTimes.removeValue(forKey: streamID)
             readyOutputStreams.remove(streamID)
             startedOutputStreams.remove(streamID)
         }
@@ -948,6 +972,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 if shouldStart {
                     await debugLog("speaker action started stream=\(session.streamID)")
                     try await session.started()
+                    if let diagnostics = speaker.sink as? RealtimeAgentSpeakerSinkDiagnostics {
+                        await debugLog("speaker audio after_started stream=\(session.streamID) \(await diagnostics.diagnosticSummary())")
+                    }
                     startSpeakerDrainLoop(session: session)
                 }
             case let .pause(bufferedMS, highWatermarkMS):
@@ -1019,6 +1046,32 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         }.joined(separator: ",")
     }
 
+    private func recordSpeakerChunkTiming(streamID: String) -> (firstElapsedMS: Int, gapMS: Int) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return withStateLock {
+            let first = speakerFirstChunkTimes[streamID] ?? now
+            let previous = speakerPreviousChunkTimes[streamID] ?? now
+            speakerFirstChunkTimes[streamID] = first
+            speakerPreviousChunkTimes[streamID] = now
+            return (elapsedMS(from: first, to: now), elapsedMS(from: previous, to: now))
+        }
+    }
+
+    private func recordSpeakerDrainTiming(streamID: String) -> (firstElapsedMS: Int, gapMS: Int) {
+        let now = DispatchTime.now().uptimeNanoseconds
+        return withStateLock {
+            let first = speakerFirstDrainTimes[streamID] ?? now
+            let previous = speakerPreviousDrainTimes[streamID] ?? now
+            speakerFirstDrainTimes[streamID] = first
+            speakerPreviousDrainTimes[streamID] = now
+            return (elapsedMS(from: first, to: now), elapsedMS(from: previous, to: now))
+        }
+    }
+
+    private func elapsedMS(from start: UInt64, to end: UInt64) -> Int {
+        Int((end - start) / 1_000_000)
+    }
+
     private func startSpeakerDrainLoop(session: RealtimeAgentOutputStreamSession) {
         let streamID = session.streamID
         let buffer = withStateLock { () -> SpeakerPlaybackBuffer? in
@@ -1044,11 +1097,12 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                             self.speakerDrainedChunkCounts[streamID] = count
                             return count
                         }
+                        let drainTiming = self.recordSpeakerDrainTiming(streamID: streamID)
                         drainedInBurst += 1
                         if self.shouldLogSpeakerChunk(count: drainedCount) {
                             let snapshot = await buffer.snapshot()
                             await self.debugLog(
-                                "speaker drain tick stream=\(streamID) count=\(drainedCount) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes)"
+                                "speaker drain tick stream=\(streamID) count=\(drainedCount) buffered_ms=\(snapshot.bufferedMS) queued=\(snapshot.queuedChunks) bytes=\(snapshot.bufferedBytes) next_seq=\(snapshot.nextDrainSeq.map(String.init) ?? "nil") pending_min_seq=\(snapshot.pendingMinSeq.map(String.init) ?? "nil") pending_max_seq=\(snapshot.pendingMaxSeq.map(String.init) ?? "nil") out_of_order=\(snapshot.outOfOrderChunks) duplicates=\(snapshot.duplicateChunks) first_elapsed_ms=\(drainTiming.firstElapsedMS) gap_ms=\(drainTiming.gapMS)"
                             )
                         }
                         if drainedInBurst % Self.speakerDrainYieldEveryChunks == 0 {
@@ -1102,6 +1156,8 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         microphoneTask = Task { [weak self] in
             guard let self else { return }
             var sequence = 0
+            var firstMicChunkAt: UInt64?
+            var previousMicChunkAt: UInt64?
             await self.debugLog("mic source started session=\(sessionID) stream=\(streamID)")
             do {
                 for try await payload in source.streamPCM16LE(configuration: configuration) {
@@ -1120,8 +1176,15 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                     )
                     sequence += 1
                     try await self.sendStreamChunk(chunk)
+                    let sentAt = DispatchTime.now().uptimeNanoseconds
+                    if firstMicChunkAt == nil {
+                        firstMicChunkAt = sentAt
+                    }
+                    let firstElapsedMS = elapsedMS(from: firstMicChunkAt ?? sentAt, to: sentAt)
+                    let gapMS = previousMicChunkAt.map { elapsedMS(from: $0, to: sentAt) } ?? 0
+                    previousMicChunkAt = sentAt
                     if sequence <= 5 || sequence % 50 == 0 {
-                        await self.debugLog("mic chunk sent stream=\(streamID) seq=\(sequence - 1) bytes=\(payload.count)")
+                        await self.debugLog("mic chunk sent stream=\(streamID) seq=\(sequence - 1) bytes=\(payload.count) expected_duration_ms=\(configuration.chunkMS) first_elapsed_ms=\(firstElapsedMS) gap_ms=\(gapMS)")
                     }
                 }
                 await self.debugLog("mic source finished stream=\(streamID) chunks=\(sequence)")
@@ -1265,6 +1328,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             speakerReceivedChunkCounts.removeValue(forKey: streamID)
             speakerDrainedChunkCounts.removeValue(forKey: streamID)
             speakerAppendedLastSeq.removeValue(forKey: streamID)
+            speakerFirstChunkTimes.removeValue(forKey: streamID)
+            speakerPreviousChunkTimes.removeValue(forKey: streamID)
+            speakerFirstDrainTimes.removeValue(forKey: streamID)
+            speakerPreviousDrainTimes.removeValue(forKey: streamID)
             readyOutputStreams.remove(streamID)
             startedOutputStreams.remove(streamID)
             if markCompleted {

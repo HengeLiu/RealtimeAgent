@@ -116,6 +116,15 @@ final class FailingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
     }
 }
 
+final class DelayedWriteSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
+    var writeDelayNanoseconds: UInt64 = 80_000_000
+
+    override func write(_ chunk: RealtimeAgentStreamChunk) async throws {
+        try await Task.sleep(nanoseconds: writeDelayNanoseconds)
+        try await super.write(chunk)
+    }
+}
+
 final class BlockingDrainSpeakerSink: RecordingSpeakerSink, @unchecked Sendable {
     var drainStarted = false
 
@@ -227,6 +236,16 @@ func waitForSentEvent(
     #expect(throws: RealtimeAgentDeviceError.self) {
         _ = try RealtimeAgentStreamChunkCodec.decode(data)
     }
+}
+
+@Test func microphoneConfigurationAllowsInterruptionsByDefault() throws {
+    // 测试目标：确认默认麦克风配置允许播放期间继续上传音频，从而支持用户打断。
+    // 测试方法：直接构造默认 `RealtimeAgentMicrophoneConfiguration` 并检查 speaker 播放期间策略。
+    // 预期结果：默认值为 `allowInterruptions`，并保留短暂外放起播静音保护。
+    let configuration = RealtimeAgentMicrophoneConfiguration()
+
+    #expect(configuration.microphoneDuringSpeakerPlayback == .allowInterruptions)
+    #expect(configuration.speakerPlaybackWarmupMuteMS == 500)
 }
 
 @Test func clientRegistersAndSendsHeartbeatOverTransport() async throws {
@@ -587,6 +606,40 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(logs.contains { $0.contains("speaker prepare stream=stream-speaker-debug") })
     #expect(logs.contains { $0.contains("speaker action started stream=stream-speaker-debug") })
     #expect(logs.contains { $0.contains("speaker drain tick stream=stream-speaker-debug") })
+}
+
+@Test func speakerPlaybackBufferDrainsChunksBySeqWhenAppendOrderIsOutOfOrder() async throws {
+    // 测试目标：speaker chunk 因并发处理乱序进入 SDK buffer 时，播放 sink 仍应按 seq 顺序收到音频。
+    // 测试方法：按 0、2、1 的顺序追加三帧，再 drain buffer。
+    // 预期结果：sink 收到的 seq 是 0、1、2，且快照记录一次乱序。
+    let sink = RecordingSpeakerSink()
+    let buffer = SpeakerPlaybackBuffer(
+        configuration: PlaybackBuffer(startWatermarkMS: 20),
+        sink: sink
+    )
+    func chunk(seq: Int) -> RealtimeAgentStreamChunk {
+        RealtimeAgentStreamChunk(
+            userID: "user-001",
+            sessionID: "dev-ios-001",
+            streamID: "stream-speaker-out-of-order",
+            streamType: "actuator.speaker",
+            seq: seq,
+            payload: Data("pcm\(seq)".utf8),
+            codec: "pcm16le",
+            sampleRate: 24000,
+            channels: 1,
+            durationMS: 20
+        )
+    }
+
+    _ = try await buffer.append(chunk(seq: 0))
+    _ = try await buffer.append(chunk(seq: 2))
+    _ = try await buffer.append(chunk(seq: 1))
+    let snapshot = await buffer.snapshot()
+    _ = try await buffer.drainAvailable()
+
+    #expect(snapshot.outOfOrderChunks == 1)
+    #expect(sink.chunks.map(\.seq) == [0, 1, 2])
 }
 
 @Test func streamReceiveLoopReconnectsAndKeepsSpeakerOutputAlive() async throws {
@@ -1030,7 +1083,8 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
 @Test func speakerBufferSendsPauseAndResumeByWatermark() async throws {
     let transport = MockRealtimeAgentTransport()
     let buffer = PlaybackBuffer(startWatermarkMS: 20, lowWatermarkMS: 20, highWatermarkMS: 40, maxBufferMS: 80)
-    let client = makeClient(transport: transport, speaker: .enabled(buffer: buffer))
+    let sink = DelayedWriteSpeakerSink()
+    let client = makeClient(transport: transport, speaker: .enabled(buffer: buffer, sink: sink))
     let chunk1 = RealtimeAgentStreamChunk(
         userID: "user-001",
         sessionID: "dev-ios-001",

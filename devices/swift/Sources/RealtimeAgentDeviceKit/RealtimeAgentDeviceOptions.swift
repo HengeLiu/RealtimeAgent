@@ -143,6 +143,13 @@ public protocol RealtimeAgentSpeakerSink: Sendable {
     func cancel() async
 }
 
+/// speaker sink 可选诊断接口。
+///
+/// 主要功能：让真实音频适配器把系统音频会话、播放器和最近一次准备耗时暴露给 SDK 调试日志。
+public protocol RealtimeAgentSpeakerSinkDiagnostics: Sendable {
+    func diagnosticSummary() async -> String
+}
+
 /// speaker 输出格式。
 public struct RealtimeAgentSpeakerFormat: Sendable, Equatable {
     public var codec: String

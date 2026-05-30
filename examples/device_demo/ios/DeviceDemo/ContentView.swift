@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Device Demo 主页面。
 ///
@@ -8,7 +9,7 @@ struct ContentView: View {
     @State private var showingDebug = false
 
     var body: some View {
-        ZStack(alignment: .topTrailing) {
+        ZStack {
             if runtime.phase == .conversation {
                 ConversationView()
                     .environmentObject(runtime)
@@ -18,26 +19,37 @@ struct ContentView: View {
                     .environmentObject(runtime)
                     .transition(.opacity)
             }
-
-            Button {
+        }
+        .overlay(alignment: .topTrailing) {
+            DebugInfoButton {
                 showingDebug = true
-            } label: {
-                Image(systemName: "info")
-                    .font(.title3.weight(.medium))
-                    .frame(width: 46, height: 46)
-                    .background(.thinMaterial, in: Circle())
-                    .overlay(Circle().stroke(.primary.opacity(0.4), lineWidth: 1))
-                    .accessibilityLabel("打开调试信息")
             }
-            .buttonStyle(.plain)
-            .padding(.top, 18)
+            .padding(.top, 10)
             .padding(.trailing, 18)
+            .zIndex(100)
         }
         .animation(.easeInOut(duration: 0.25), value: runtime.phase)
         .sheet(isPresented: $showingDebug) {
             DebugSheet()
                 .environmentObject(runtime)
         }
+    }
+}
+
+private struct DebugInfoButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "info")
+                .font(.title3.weight(.medium))
+                .frame(width: 52, height: 52)
+                .background(.thinMaterial, in: Circle())
+                .overlay(Circle().stroke(.primary.opacity(0.4), lineWidth: 1))
+        }
+        .buttonStyle(.plain)
+        .contentShape(Circle())
+        .accessibilityLabel("打开调试信息")
     }
 }
 
@@ -164,6 +176,20 @@ private struct DebugSheet: View {
                     labeled("Log file", runtime.logFilePath)
                 }
 
+                Section("操作") {
+                    Button("复制日志") {
+                        UIPasteboard.general.string = runtime.logs.reversed().joined(separator: "\n")
+                    }
+                    .disabled(runtime.logs.isEmpty)
+
+                    Button("清空日志") {
+                        runtime.clearLogs()
+                    }
+                    Button("停止对话", role: .destructive) {
+                        Task { await runtime.stopConversation() }
+                    }
+                }
+
                 Section("日志") {
                     if runtime.logs.isEmpty {
                         Text("暂无日志").foregroundStyle(.secondary)
@@ -173,15 +199,6 @@ private struct DebugSheet: View {
                                 .font(.footnote.monospaced())
                                 .textSelection(.enabled)
                         }
-                    }
-                }
-
-                Section("操作") {
-                    Button("清空日志") {
-                        runtime.clearLogs()
-                    }
-                    Button("停止对话", role: .destructive) {
-                        Task { await runtime.stopConversation() }
                     }
                 }
             }

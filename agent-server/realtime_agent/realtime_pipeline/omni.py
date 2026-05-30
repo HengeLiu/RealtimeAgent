@@ -55,7 +55,9 @@ class OmniInputBoundary:
             if event == "omni.input_audio_buffer.speech_started":
                 active_stream_id = output_controller.active_output_stream_id(user_id=user_id, session_id=session_id)
                 state = getattr(core, "_state_by_session", {}).get(session_id, "")
-                will_cancel = True
+                has_active_output = active_stream_id is not None
+                interruptible_state = state in {"thinking", "speaking", "tool_running"}
+                interruptible = has_active_output or interruptible_state
                 setattr(core, "_pipeline_event_control_enabled", True)
                 emitter.emit(
                     "speech_started",
@@ -65,17 +67,24 @@ class OmniInputBoundary:
                     reason="provider_speech_started",
                     output_stream_id=active_stream_id,
                     state=state,
-                    will_cancel=will_cancel,
+                    has_active_output=has_active_output,
+                    interruptible_state=interruptible_state,
+                    interruptible=interruptible,
+                    will_cancel=interruptible,
                     provider_event=event,
                 )
-                if will_cancel:
-                    emitter.emit(
-                        "output_cancel_requested",
-                        user_id=user_id,
-                        session_id=session_id,
-                        stream_id=active_stream_id or "",
-                        reason="provider_speech_started",
-                    )
+                emitter.emit(
+                    "output_cancel_requested",
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=active_stream_id or "",
+                    reason="provider_speech_started",
+                    output_stream_id=active_stream_id,
+                    state=state,
+                    has_active_output=has_active_output,
+                    interruptible_state=interruptible_state,
+                    interruptible=interruptible,
+                )
             elif event == "omni.input_audio_buffer.speech_stopped":
                 emitter.emit(
                     "speech_stopped",

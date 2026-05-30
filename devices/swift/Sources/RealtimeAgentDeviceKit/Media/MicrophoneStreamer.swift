@@ -1,14 +1,27 @@
 import Foundation
 
+/// speaker 播放期间的麦克风上行策略。
+///
+/// 主要功能：在允许用户打断和抑制外放回采之间做取舍。
+public enum MicrophoneDuringSpeakerPlayback: String, Sendable, Equatable {
+    /// 播放期间继续上传麦克风，默认用于支持用户边播边说打断。
+    case allowInterruptions
+    /// 播放期间上传静音 PCM，用于临时诊断或强抑制外放回采。
+    case muteDuringSpeakerPlayback
+}
+
 /// 麦克风 stream 配置。
 ///
-/// 主要功能：描述 SDK 发送 `sensor.mic` chunk 时使用的 codec、采样率、通道数和分片时长。
+/// 主要功能：描述 SDK 发送 `sensor.mic` chunk 时使用的 codec、采样率、通道数、分片时长和
+/// speaker 播放期间的麦克风上行策略。
 public struct RealtimeAgentMicrophoneConfiguration: Sendable, Equatable {
     public var codec: String
     public var sampleRate: Int
     public var channels: Int
     public var chunkMS: Int
     public var streamType: String
+    public var microphoneDuringSpeakerPlayback: MicrophoneDuringSpeakerPlayback
+    public var speakerPlaybackWarmupMuteMS: Int
 
     /// 创建麦克风 stream 配置。
     public init(
@@ -16,13 +29,17 @@ public struct RealtimeAgentMicrophoneConfiguration: Sendable, Equatable {
         sampleRate: Int = 16_000,
         channels: Int = 1,
         chunkMS: Int = 20,
-        streamType: String = "sensor.mic"
+        streamType: String = "sensor.mic",
+        microphoneDuringSpeakerPlayback: MicrophoneDuringSpeakerPlayback = .allowInterruptions,
+        speakerPlaybackWarmupMuteMS: Int = 500
     ) {
         self.codec = codec
         self.sampleRate = sampleRate
         self.channels = channels
         self.chunkMS = chunkMS
         self.streamType = streamType
+        self.microphoneDuringSpeakerPlayback = microphoneDuringSpeakerPlayback
+        self.speakerPlaybackWarmupMuteMS = max(0, speakerPlaybackWarmupMuteMS)
     }
 }
 

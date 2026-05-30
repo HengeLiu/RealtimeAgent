@@ -103,19 +103,28 @@ def test_device_demo_declares_required_ios_permissions() -> None:
     assert "NSLocalNetworkUsageDescription" in plist
 
 
-def test_swift_default_audio_adapter_enables_voice_processing() -> None:
-    """测试目标：确认 Swift 默认音频适配器启用系统语音处理，降低外放回声再次触发模型。
+def test_swift_default_audio_adapter_enables_voice_processing_and_interruptions() -> None:
+    """测试目标：确认 Swift 默认音频适配器启用系统语音处理，并默认允许播放期间用户打断。
 
-    测试方法：静态检查 AVFoundation 默认适配器里的音频会话模式和输入节点 voice processing。
-    预期结果：默认麦克风和 speaker 共用 `.voiceChat` 会话和同一个 voice-processing engine。
+    测试方法：静态检查 AVFoundation 默认适配器里的音频会话模式、输入节点 voice processing 和麦克风策略。
+    预期结果：默认麦克风和 speaker 共用 `.voiceChat` 会话，并默认继续上传麦克风以支持打断。
     """
 
     adapter = (ROOT / "devices/swift/Sources/RealtimeAgentDeviceKit/Media/AVFoundationAdapters.swift").read_text(
         encoding="utf-8"
     )
+    microphone = (ROOT / "devices/swift/Sources/RealtimeAgentDeviceKit/Media/MicrophoneStreamer.swift").read_text(
+        encoding="utf-8"
+    )
 
     assert "mode: .voiceChat" in adapter
     assert "setVoiceProcessingEnabled(true)" in adapter
+    assert "microphoneDuringSpeakerPlayback: MicrophoneDuringSpeakerPlayback = .allowInterruptions" in microphone
+    assert "speakerPlaybackWarmupMuteMS: Int = 500" in microphone
+    assert "microphoneDuringSpeakerPlayback == .muteDuringSpeakerPlayback" in adapter
+    assert "isBuiltInSpeakerRoute()" in adapter
+    assert "shouldMuteMicrophoneForSpeakerPlayback" in adapter
+    assert "Data(repeating: 0" in adapter
     assert "RealtimeAgentVoiceConversationEngine.shared" in adapter
     assert "final class RealtimeAgentVoiceConversationEngine" in adapter
     assert "private let voiceEngine = RealtimeAgentVoiceConversationEngine.shared" in adapter

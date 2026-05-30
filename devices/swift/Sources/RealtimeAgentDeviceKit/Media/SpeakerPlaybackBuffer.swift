@@ -2,17 +2,21 @@ import Foundation
 
 /// SDK 内置 speaker 播放 buffer。
 ///
-/// 主要功能：按音频时长维护下行缓冲，触发播放启动、高水位暂停和低水位恢复。
+/// 主要功能：按音频时长维护下行缓冲，并按 chunk seq 连续写出到播放器。
 public actor SpeakerPlaybackBuffer {
     public private(set) var bufferedMS = 0
     public private(set) var bufferedBytes = 0
     public private(set) var isPaused = false
     public private(set) var hasStarted = false
+    public private(set) var outOfOrderChunks = 0
+    public private(set) var duplicateChunks = 0
 
     private let configuration: PlaybackBuffer
     private let sink: RealtimeAgentSpeakerSink
-    private var queue: [RealtimeAgentStreamChunk] = []
-    private var queueStartIndex = 0
+    private var pendingChunks: [Int: RealtimeAgentStreamChunk] = [:]
+    private var nextDrainSeq: Int?
+    private var previousAppendSeq: Int?
+    private var hasDrainedAnyChunk = false
 
     public init(configuration: PlaybackBuffer = .default, sink: RealtimeAgentSpeakerSink = RealtimeAgentNoopSpeakerSink()) {
         self.configuration = configuration
@@ -27,6 +31,11 @@ public actor SpeakerPlaybackBuffer {
             bufferedMS: bufferedMS,
             bufferedBytes: bufferedBytes,
             queuedChunks: queuedChunkCount,
+            nextDrainSeq: nextDrainSeq,
+            pendingMinSeq: pendingChunks.keys.min(),
+            pendingMaxSeq: pendingChunks.keys.max(),
+            outOfOrderChunks: outOfOrderChunks,
+            duplicateChunks: duplicateChunks,
             isPaused: isPaused,
             hasStarted: hasStarted
         )
@@ -34,9 +43,34 @@ public actor SpeakerPlaybackBuffer {
 
     /// 追加一帧 speaker chunk。
     ///
+    /// 主要逻辑：control 和 stream 任务可能并发处理同一条输出流，actor 只能保证状态串行，
+    /// 不能保证不同任务进入 actor 的顺序等于网络 chunk seq 顺序，因此这里先按 seq 暂存。
+    ///
     /// 返回值：本次追加触发的协议动作，调用方据此发送 started / pause / resume。
     public func append(_ chunk: RealtimeAgentStreamChunk) async throws -> [SpeakerPlaybackAction] {
-        queue.append(chunk)
+        if let previousAppendSeq, chunk.seq < previousAppendSeq {
+            outOfOrderChunks += 1
+        }
+        previousAppendSeq = chunk.seq
+
+        if let nextDrainSeq, chunk.seq < nextDrainSeq {
+            duplicateChunks += 1
+            return []
+        }
+        if pendingChunks[chunk.seq] != nil {
+            duplicateChunks += 1
+            return []
+        }
+
+        pendingChunks[chunk.seq] = chunk
+        if let nextDrainSeq {
+            if !hasDrainedAnyChunk, chunk.seq < nextDrainSeq {
+                self.nextDrainSeq = chunk.seq
+            }
+        } else {
+            nextDrainSeq = chunk.seq
+        }
+
         bufferedMS += max(chunk.durationMS, 0)
         bufferedBytes += chunk.payload.count
         var actions: [SpeakerPlaybackAction] = []
@@ -57,19 +91,20 @@ public actor SpeakerPlaybackBuffer {
 
     /// 写出下一帧到 speaker sink。
     ///
-    /// 说明：由 SDK drain loop 调用，用来模拟“播放侧持续消费 SDK buffer”的过程。
+    /// 说明：由 SDK drain loop 调用。只有下一帧 seq 已经到齐时才写出，避免句首乱序 chunk
+    /// 被直接送进播放器造成短暂破音或卡顿。
     public func drainNext() async throws -> [SpeakerPlaybackAction] {
-        guard queueStartIndex < queue.count else {
+        guard let seq = nextDrainSeq ?? pendingChunks.keys.min(),
+              let chunk = pendingChunks.removeValue(forKey: seq) else {
             return []
         }
-        let chunk = queue[queueStartIndex]
-        queueStartIndex += 1
+        nextDrainSeq = seq + 1
+        hasDrainedAnyChunk = true
 
         try await sink.write(chunk)
 
         bufferedMS = max(0, bufferedMS - max(chunk.durationMS, 0))
         bufferedBytes = max(0, bufferedBytes - chunk.payload.count)
-        compactQueueIfNeeded()
         if isPaused && bufferedMS <= configuration.lowWatermarkMS {
             isPaused = false
             return [.resume(bufferedMS: bufferedMS, lowWatermarkMS: configuration.lowWatermarkMS)]
@@ -80,7 +115,7 @@ public actor SpeakerPlaybackBuffer {
     /// 写出当前队列到 speaker sink。
     public func drainAvailable() async throws -> [SpeakerPlaybackAction] {
         var actions: [SpeakerPlaybackAction] = []
-        while queueStartIndex < queue.count {
+        while hasDrainableChunk {
             actions.append(contentsOf: try await drainNext())
         }
         return actions
@@ -93,30 +128,33 @@ public actor SpeakerPlaybackBuffer {
     }
 
     public var isEmpty: Bool {
-        queueStartIndex >= queue.count
+        !hasDrainableChunk
     }
 
     /// 取消播放并清空 buffer。
     public func cancel() async {
-        queue.removeAll()
-        queueStartIndex = 0
+        pendingChunks.removeAll()
+        nextDrainSeq = nil
+        previousAppendSeq = nil
+        hasDrainedAnyChunk = false
         bufferedMS = 0
         bufferedBytes = 0
         isPaused = false
         hasStarted = false
+        outOfOrderChunks = 0
+        duplicateChunks = 0
         await sink.cancel()
     }
 
     private var queuedChunkCount: Int {
-        max(0, queue.count - queueStartIndex)
+        pendingChunks.count
     }
 
-    private func compactQueueIfNeeded() {
-        guard queueStartIndex > 64, queueStartIndex * 2 >= queue.count else {
-            return
+    private var hasDrainableChunk: Bool {
+        guard let seq = nextDrainSeq ?? pendingChunks.keys.min() else {
+            return false
         }
-        queue.removeFirst(queueStartIndex)
-        queueStartIndex = 0
+        return pendingChunks[seq] != nil
     }
 }
 
@@ -125,6 +163,11 @@ public struct SpeakerPlaybackBufferSnapshot: Equatable, Sendable {
     public let bufferedMS: Int
     public let bufferedBytes: Int
     public let queuedChunks: Int
+    public let nextDrainSeq: Int?
+    public let pendingMinSeq: Int?
+    public let pendingMaxSeq: Int?
+    public let outOfOrderChunks: Int
+    public let duplicateChunks: Int
     public let isPaused: Bool
     public let hasStarted: Bool
 }
