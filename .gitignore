@@ -67,6 +67,8 @@ devices/swift/.swiftpm/
 examples/device_demo/ios/DeviceDemo.xcodeproj/project.xcworkspace/
 examples/device_demo/ios/**/xcuserdata/
 examples/device_demo/ios/**/*.xcuserstate
+examples/playback_chain_experiment/ios/**/xcuserdata/
+examples/playback_chain_experiment/ios/**/*.xcuserstate
 openaiglass-sdk/phone-ios/build*
 openaiglass-sdk/phone-ios/DerivedData/
 openaiglass-sdk/phone-ios/**/*.xcresult
