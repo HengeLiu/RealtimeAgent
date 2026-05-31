@@ -1,8 +1,16 @@
 idf_component_register(
     SRCS
-        "audio_chat_reference_main.c"
-        "../../../../../../audio-device/c/src/audio_chat_device.c"
-        "../../../../../../audio-device/c/src/audio_chat_stream.c"
-    INCLUDE_DIRS "." "../../../../../../audio-device/c/include"
-    REQUIRES esp_event esp_netif esp_timer esp_wifi esp_websocket_client json nvs_flash
+        "app/main.c"
+        "app/device.c"
+        "drivers/audio.c"
+        "drivers/camera.c"
+        "drivers/imu.c"
+        "connectivity/wifi_manager.c"
+        "connectivity/ws_control.c"
+        "connectivity/ws_stream.c"
+        "protocol/protocol_adapter.c"
+        "protocol/audio_chat_stream.c"
+        "utils/wake_word.c"
+    INCLUDE_DIRS "."
+    REQUIRES esp_event esp_netif esp_timer esp_wifi esp_websocket_client nvs_flash driver fatfs esp-sr esp32-camera json
 )
