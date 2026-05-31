@@ -364,6 +364,7 @@ struct PlaybackExperimentResult: Sendable {
     let runID: String
     let runDirectoryURL: URL
     let wavURL: URL
+    let vadUploadURL: URL?
     let timelineURL: URL
     let routeSummary: String
     let vadSummary: String
@@ -438,6 +439,7 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
         let runID = "run_\(Self.timestampForFile())_\(scenario.rawValue)"
         let runDirectory = try makeRunDirectory(runID: runID)
         let wavURL = runDirectory.appendingPathComponent("mic.wav")
+        let vadUploadURL = runDirectory.appendingPathComponent("vad_upload.wav")
         let timelineURL = runDirectory.appendingPathComponent("timeline.json")
         let timeline = ExperimentTimeline()
         timeline.set("run_id", runID)
@@ -657,6 +659,21 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
         try WAVWriter.write(capture: capture, to: wavURL)
         timeline.mark("wav_written", fields: ["path": wavURL.path])
         onWAVReady(wavURL)
+        let savedVADUploadURL: URL?
+        if let realtimeVAD {
+            if try realtimeVAD.writeUploadedAudio(to: vadUploadURL) {
+                savedVADUploadURL = vadUploadURL
+                progress("VAD 上传 WAV 已写入 \(vadUploadURL.path)")
+                timeline.mark("vad_upload_wav_written", fields: ["path": vadUploadURL.path])
+            } else {
+                savedVADUploadURL = nil
+                progress("VAD 上传 WAV 未生成：没有已上传音频")
+                timeline.mark("vad_upload_wav_skipped", fields: ["reason": "empty_upload_audio"])
+            }
+        } else {
+            savedVADUploadURL = nil
+            timeline.mark("vad_upload_wav_skipped", fields: ["reason": "realtime_vad_disabled"])
+        }
         let vadSummary = scenario.usesRealtimeVADInterrupt
             ? "实时 VAD 已用于打断；未执行离线 VAD"
             : "未执行离线 VAD"
@@ -688,6 +705,7 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
             runID: runID,
             runDirectoryURL: runDirectory,
             wavURL: wavURL,
+            vadUploadURL: savedVADUploadURL,
             timelineURL: timelineURL,
             routeSummary: route,
             vadSummary: vadSummary,
@@ -977,6 +995,7 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
     private var inputSampleRate: Double = 48_000
     private var lastEventSeq = -1
     private var sentChunkCount = 0
+    private var uploadedPCM = Data()
     private let chunkMS = 100
 
     init(
@@ -1092,6 +1111,9 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
         do {
             let pcm = WAVWriter.makePCM(samples: segment, inputSampleRate: sampleRate, outputSampleRate: 16_000)
             let level = Self.audioLevel(samples: segment)
+            lock.lock()
+            uploadedPCM.append(pcm)
+            lock.unlock()
             let sendStarted = DispatchTime.now().uptimeNanoseconds
             let response = try await client.append(sessionID: currentSession, pcm: pcm, afterSeq: afterSeq)
             let elapsedMS = Int((DispatchTime.now().uptimeNanoseconds - sendStarted) / 1_000_000)
@@ -1110,6 +1132,23 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
             progress("实时 VAD chunk 发送失败：\(error.localizedDescription)")
         }
         markSendCompleted()
+    }
+
+    /// 写出实时 VAD 实际上传音频。
+    ///
+    /// 主要逻辑：复制已经提交给 VAD 服务端的 PCM16/16k 单声道数据，写成 WAV 文件，便于和 `mic.wav` 对照。
+    /// 参数：`url` 为目标 WAV 文件路径。
+    /// 返回值：有上传音频并成功写出时返回 `true`，没有上传音频时返回 `false`。
+    /// 异常情况：文件系统写入失败时抛出。
+    func writeUploadedAudio(to url: URL) throws -> Bool {
+        lock.lock()
+        let pcm = uploadedPCM
+        lock.unlock()
+        guard !pcm.isEmpty else {
+            return false
+        }
+        try WAVWriter.writePCM(pcm: pcm, sampleRate: 16_000, channels: 1, to: url)
+        return true
     }
 
     private func handle(events: [RealtimeVADEvent]) {
@@ -1290,6 +1329,10 @@ enum WAVWriter {
 
     static func makePCM(samples: [Float], inputSampleRate: Double, outputSampleRate: Int) -> Data {
         makePCMData(samples: samples, inputSampleRate: inputSampleRate, outputSampleRate: outputSampleRate)
+    }
+
+    static func writePCM(pcm: Data, sampleRate: Int, channels: Int, to url: URL) throws {
+        try writeWAV(pcm: pcm, sampleRate: sampleRate, channels: channels, to: url)
     }
 
     private static func makeMono16kPCM(_ capture: CapturedAudio) -> Data {

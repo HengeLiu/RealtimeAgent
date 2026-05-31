@@ -43,7 +43,7 @@ final class ExperimentLogStore: @unchecked Sendable {
 /// 主要功能：保存服务地址、场景、运行状态、结果路径和日志，并把耗时音频实验放入后台任务。
 @MainActor
 final class ExperimentViewModel: ObservableObject {
-    private static let appBuildMarker = "playback-chain-exp-20260531-vad-error-detail"
+    private static let appBuildMarker = "playback-chain-exp-20260601-vad-upload-wav"
     @Published var audioServerURL: String {
         didSet { UserDefaults.standard.set(audioServerURL, forKey: Self.audioURLKey) }
     }
@@ -55,6 +55,7 @@ final class ExperimentViewModel: ObservableObject {
     @Published private(set) var status = "未运行"
     @Published private(set) var route = "-"
     @Published private(set) var wavPath = "-"
+    @Published private(set) var vadUploadWAVPath = "-"
     @Published private(set) var timelinePath = "-"
     @Published private(set) var runDirectoryPath = "-"
     @Published private(set) var vadSummary = "-"
@@ -99,6 +100,7 @@ final class ExperimentViewModel: ObservableObject {
         status = "运行中：\(selectedScenario.title)"
         route = "-"
         wavPath = "-"
+        vadUploadWAVPath = "-"
         timelinePath = "-"
         runDirectoryPath = "-"
         vadSummary = "-"
@@ -135,11 +137,15 @@ final class ExperimentViewModel: ObservableObject {
 		                    self?.status = result.vadTriggered ? "完成：实时 VAD 已触发" : "完成：录音已保存"
 		                    self?.route = result.routeSummary
 		                    self?.wavPath = result.wavURL.path
+		                    self?.vadUploadWAVPath = result.vadUploadURL?.path ?? "-"
 		                    self?.timelinePath = result.timelineURL.path
                     self?.runDirectoryPath = result.runDirectoryURL.path
                     self?.vadSummary = result.vadSummary
                     self?.appendLog("完成 run=\(result.runID)")
                     self?.appendLog("WAV \(result.wavURL.path)")
+                    if let vadUploadURL = result.vadUploadURL {
+                        self?.appendLog("VADUploadWAV \(vadUploadURL.path)")
+                    }
                     self?.appendLog("Timeline \(result.timelineURL.path)")
                     self?.appendLog("VAD \(result.vadSummary)")
                 }
@@ -176,11 +182,20 @@ final class ExperimentViewModel: ObservableObject {
 
     /// 播放最近一次实验生成的麦克风录音 WAV。
     func playLastWAV() {
-        guard wavPath != "-" else {
-            appendLog("没有可播放的 WAV")
+        playWAV(path: wavPath, missingMessage: "没有可播放的 WAV")
+    }
+
+    /// 播放最近一次实验上传给 VAD 服务的音频 WAV。
+    func playLastVADUploadWAV() {
+        playWAV(path: vadUploadWAVPath, missingMessage: "没有可播放的 VAD 上传 WAV")
+    }
+
+    private func playWAV(path: String, missingMessage: String) {
+        guard path != "-" else {
+            appendLog(missingMessage)
             return
         }
-        let url = URL(fileURLWithPath: wavPath)
+        let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: url.path) else {
             appendLog("WAV 文件不存在：\(url.path)")
             return
@@ -222,6 +237,7 @@ final class ExperimentViewModel: ObservableObject {
             "vad_url=\(vadURL)",
             "route=\(route)",
             "wav=\(wavPath)",
+            "vad_upload_wav=\(vadUploadWAVPath)",
             "timeline=\(timelinePath)",
             "vad=\(vadSummary)",
         ].joined(separator: "\n")

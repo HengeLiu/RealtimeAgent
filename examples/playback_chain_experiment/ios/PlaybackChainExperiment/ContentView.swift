@@ -56,6 +56,7 @@ struct ContentView: View {
                     labeled("运行目录", model.runDirectoryPath)
                     labeled("路由", model.route)
                     labeled("WAV", model.wavPath)
+                    labeled("VAD上传WAV", model.vadUploadWAVPath)
                     labeled("Timeline", model.timelinePath)
                     labeled("VAD", model.vadSummary)
                 }
@@ -65,6 +66,11 @@ struct ContentView: View {
                         model.playLastWAV()
                     }
                     .disabled(model.wavPath == "-" || model.isRunning)
+
+                    Button("播放 VAD 上传 WAV") {
+                        model.playLastVADUploadWAV()
+                    }
+                    .disabled(model.vadUploadWAVPath == "-" || model.isRunning)
 
                     Button("复制日志") {
                         model.copyLogs()
