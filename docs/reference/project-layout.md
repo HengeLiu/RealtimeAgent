@@ -56,16 +56,6 @@ devices/
 应用样例目录。新应用可以参考：
 
 ```text
-examples/for-blind-app/
-  agent-server/
-    server.yaml
-    capabilities/
-      __init__.py
-      tools.py
-      tasks.py
-  devices/
-    native-esp32-glass/
-
 examples/device_demo/
   agent-server/
     server.yaml
@@ -74,7 +64,7 @@ examples/device_demo/
     DeviceDemo/
 ```
 
-业务能力应该放在应用目录下，而不是写进 SDK 核心包。
+`examples/device_demo` 是当前推荐的最小端侧 App 验证入口。业务能力应该放在应用目录下，而不是写进 SDK 核心包；新的业务应用可以按 `examples/<your-app>/agent-server/capabilities/` 组织 Tool 和 Task。
 
 ## examples/dev-support 和 examples/*/devices
 
@@ -94,10 +84,12 @@ examples/dev-support/devices/python-phone/
 应用目录下的真实端侧参考工程：
 
 ```text
-examples/for-blind-app/devices/native-esp32-glass/
+examples/device_demo/ios/
 ```
 
-Swift Device SDK 的最小真机验证 App 独立放在：
+ESP32 / 嵌入式参考实现位于对应的设备 SDK 或历史示例目录中；当前 README 推荐入口以 `device_demo` 和 `devices/` 为准。
+
+Swift Device SDK 的最小真机验证 App 放在：
 
 ```text
 examples/device_demo/ios/
@@ -126,7 +118,7 @@ agent-server/docs/
 
 ```bash
 uv run python -m pytest
-uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
 ## testdata

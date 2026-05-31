@@ -36,7 +36,8 @@ L3 应用能力通过，自动化产品功能具备运行前提
 | 协议资产 | `protocol/unit-tests/` | `protocol/protocol-tests/` |
 | Server SDK | `agent-server/unit-tests/` | `agent-server/protocol-tests/`、`agent-server/model-provider-tests/` |
 | Python Device SDK | `devices/python/unit-tests/` | `devices/python/protocol-tests/` |
-| for-blind-app | `examples/for-blind-app/unit-tests/` | `examples/for-blind-app/app-tests/`、`replay-tests/`、`hardware-tests/` |
+| device_demo | 无 | `examples/device_demo/app-tests/` |
+| 历史业务示例 | 对应示例目录下的 `unit-tests/` | 如仍保留，可按需运行对应 `app-tests`、`replay-tests`、`hardware-tests` |
 | dev-support | `examples/dev-support/unit-tests/` | `examples/dev-support/app-tests/`、`replay-tests/`、`hardware-tests/` |
 
 协议资产位于：
@@ -66,7 +67,7 @@ protocol/
 | P0 协议资产检查 | 检查协议文档、schema、fixture、错误码、行为规范引用和版本号。 | `protocol/protocol-tests/` |
 | L1 事件行为一致性 | 检查 Server SDK / Device SDK 面对协议事件时是否按事件处理规范执行动作。 | `agent-server/protocol-tests/`、`devices/python/protocol-tests/` |
 | L2 大模型能力 | 检查真实 ASR、TTS、Vision/Text、Realtime provider 的能力、稳定性、延迟和错误诊断。 | `agent-server/model-provider-tests/` |
-| L3 应用能力 | 检查 for-blind-app、dev-support、真实样例回放和端侧参考工程。 | `examples/for-blind-app/app-tests/`、`examples/for-blind-app/replay-tests/`、`examples/dev-support/app-tests/` |
+| L3 应用能力 | 检查 device_demo、dev-support、真实样例回放和端侧参考工程。 | `examples/device_demo/app-tests/`、`examples/dev-support/app-tests/` |
 
 ## 5. 常用回归命令
 
@@ -105,8 +106,7 @@ REALTIME_AGENT_TEST_REPORT_DIR=runs/regression-reports/l2-nonrealtime \
 L3 应用能力：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/app-tests -q
-uv run python -m pytest examples/for-blind-app/replay-tests -q
+uv run python -m pytest examples/device_demo/app-tests -q
 uv run python -m pytest examples/dev-support/app-tests examples/dev-support/unit-tests -q
 uv run python -m pytest -m app -q
 uv run python -m pytest -m replay -q
@@ -128,7 +128,8 @@ uv run python -m pytest
 | Device SDK | `devices/python/protocol-tests` 或 `-m device_sdk` | `-m interop`。 |
 | Server/Device WebSocket 互操作 | `-m interop` | `-m sdk`、`-m device_sdk`。 |
 | ASR / TTS / Vision / Realtime provider adapter | `agent-server/model-provider-tests` 或 `-m model_provider` | 相关 L1 SDK 测试。 |
-| for-blind-app 业务能力 | `examples/for-blind-app/app-tests` | `examples/for-blind-app/replay-tests`。 |
+| Device Demo / Swift Device SDK 入口 | `examples/device_demo/app-tests` | 相关 Swift SDK 测试。 |
+| 历史业务示例能力 | 对应示例目录下的 `app-tests` | 对应示例目录下的 `replay-tests`。 |
 | dev-support 端侧参考工程 | `examples/dev-support/unit-tests`、`examples/dev-support/app-tests` | 相关 L1 interop 或 L3 replay。 |
 
 ## 7. 新增测试用例规则

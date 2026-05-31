@@ -17,13 +17,13 @@ uv pip install -e .
 启动示例应用：
 
 ```bash
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
-按配置启动：
+其他应用也推荐按配置启动：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/<your-app>/agent-server/server.yaml
 ```
 
 ## 设备能力
@@ -75,12 +75,6 @@ Python phone mock，用于简单协议、RGB 上传和振动 mock 验证：
 uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
 ```
 
-Python glass playback，人工播放参考组件：
-
-```bash
-uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
-```
-
 Python playback glass 系统回放端：
 
 ```bash
@@ -128,7 +122,7 @@ uv run realtime-agent.esp32.monitor --port /dev/tty.usbmodemXXXX
 预检：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/device_demo/agent-server/server.yaml
 ```
 
 发布包检查：
@@ -150,10 +144,10 @@ cmake --build devices/c/build
 ctest --test-dir devices/c/build --output-on-failure
 ```
 
-无头回放测试：
+Device Demo 契约测试：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
 全部测试：
