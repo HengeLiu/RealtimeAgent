@@ -1,32 +1,37 @@
 # realtime-agent examples
 
-`examples/for-blind-app` 是当前唯一推荐给业务开发者启动和扩展的完整示例应用。它把找物、红绿灯、导航、搜索、计时器，以及 SDK 级抓拍、设备状态、连续视觉 stream、Task、MCP wrapper、Vision Agent 和 Realtime Agent 验收入口都放在同一个 app-root 中。
+`examples/device_demo` 是当前推荐的最小端侧 App 验证入口。它面向 Device SDK 和真实设备联调，使用独立 server 配置验证设备注册、控制事件、音频上行、相机帧上传和 speaker 下行播放链路。
+
+`examples/dev-support` 提供浏览器和 Python 端侧开发支持组件，用于本地联调、协议验证和回放测试。历史业务示例如果仍在仓库中，只作为参考材料，不再作为 README 推荐入口。
 
 | 目录 | 当前定位 |
 | --- | --- |
-| `for-blind-app` | 唯一应用示例。用于真实 server 启动、Tool / Task 自动发现、SDK 基础能力和设备级回放。 |
+| `device_demo` | 当前推荐的 Device SDK 真机验证示例。包含专用 `agent-server/server.yaml` 和 Swift Device Demo App。 |
 | `dev-support` | 浏览器眼镜模拟、Python 手机模拟、Python playback glass 等开发/测试支持组件与契约测试辅助实现。它们以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。 |
 
 推荐启动方式：
 
 ```bash
 # 在项目根目录执行
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
-`--app-name for-blind-app` 会自动解析 `examples/for-blind-app/agent-server`，加载其中的 `server.yaml`，并把同级 `capabilities` 目录加入 Tool / Task 自动发现。所有 app 的 `server.yaml` 都必须放在 app 的 `agent-server` 根目录；如果 YAML 没有显式配置 `app_name`，SDK 会使用应用目录名。
+`device_demo` 的配置只用于验证端侧 SDK 链路，不加载历史业务应用能力。真机联调时可以再打开 Swift demo：
+
+```bash
+uv run realtime-agent.ios.open
+```
 
 推荐验收：
 
 ```bash
 # 在项目根目录执行
 uv run realtime-agent.dev.preflight \
-  --config examples/for-blind-app/agent-server/server.yaml \
+  --config examples/device_demo/agent-server/server.yaml \
   --report runs/acceptance/preflight.json
 
 uv run python -m pytest \
-  examples/for-blind-app/app-tests \
-  examples/for-blind-app/replay-tests \
+  examples/device_demo/app-tests \
   examples/dev-support/unit-tests \
   examples/dev-support/app-tests \
   -q

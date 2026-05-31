@@ -1,37 +1,83 @@
-# realtime-agent
+<p align="center">
+  <img src="docs/assets/realtime-agent-brand.svg" alt="realtime-agent brand logo" width="420" />
+  <br />
+  <a href="docs/getting-started/developer-overview.md">开发者总览</a> ·
+  <a href="examples/README.md">示例</a> ·
+  <a href="devices">Device SDK</a> ·
+  <a href="protocol/README.md">协议</a> ·
+  <a href="CONTRIBUTING.md">贡献指南</a>
+</p>
 
-`realtime-agent` 是面向语音交互、多设备协作和实时 stream 的 server-side Python SDK。当前仓库已经升级为以新 SDK 为主的组织方式：
+大模型已经在 coding、chat 和专业领域展现出很强的能力，但如何稳定、自然地融入人类社会生活中的更多场景，仍然是一个困难且充满想象空间的问题。`realtime-agent` 希望降低拟人化对话和多端设备协作的开发门槛，为开发者提供一个可以快速试验、快速搭建应用的工具平台，让更多人把大模型接入真实设备、真实场景和真实生活。
 
-- `agent-server/realtime_agent/`：Python server SDK 源码目录，发布包名为 `realtime-agent`，导入名为 `realtime_agent`。
-- `devices/`：多语言端侧通讯 SDK，覆盖 Python、TypeScript、Swift、Kotlin/Java 和 C。
-- `protocol/`：server 和 device 共同依赖的协议文档、fixture 和协议资产检查。
-- `examples/`：示例项目、真实端侧参考工程和开发/测试支持组件。`examples/dev-support/`
-  下的 browser-glass、python-phone、python-playback-glass 以 Device 形态接入协议，
-  但定位是帮助开发者联调和验证 SDK，不是 SDK 预设的正式设备类型。
-- `docs/`：架构设计、联调和排障文档。
-- `testdata/`：跨示例复用的音频样例。
-- `*/unit-tests/`、`*/protocol-tests/`、`*/app-tests/`、`*/replay-tests/`：按模块拆分的自动化测试。
+`realtime-agent` 是一个面向实时语音、视觉输入和多设备协作的 Agent 开发框架。它把大模型对话、工具调用、后台任务、设备能力和运行排障组织成一套可扩展的 Server SDK、Device SDK 和通讯协议。如果你想做的不只是一个网页聊天机器人，而是一个可以听、说、看、调用设备、调度长流程任务的 AI 应用，这个项目可以作为基础框架。它适合智能眼镜、手机 App、浏览器摄像头 / 麦克风、嵌入式设备、机器人和其他需要稳定设备输入输出的实时多模态 Agent 应用。
 
-server 不负责录音、播放、唤醒词、端侧 AEC 或硬件驱动。设备注册时声明 `user_id`、`device_id` 和 `supports` 能力；业务 Tool / Task 通过 Context 表达设备使用意图。当前可用开发方式以 [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md) 为准；完整 Context API 目标设计见 [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)。
+![realtime-agent 架构总览](docs/assets/realtime-agent-overview.svg)
+
+## 可以构建什么
+
+- **智能眼镜和可穿戴助手**：让设备通过语音和视觉理解用户眼前环境，完成问答、找物、导航提醒、信息播报和设备控制。
+- **手机或浏览器里的实时多模态助手**：把麦克风、摄像头、屏幕提示和 speaker 输出接入同一个 Agent，用于视觉问答、远程协作、现场辅助或产品原型验证。
+- **面向业务系统的语音操作入口**：让用户用自然语言查询业务数据、触发工作流、调用内部 API，并在对话中获得实时反馈。
+- **持续运行的环境观察和提醒应用**：把导航、巡检、看护、计时、状态监测等长流程做成后台任务，让 Agent 不只回答一次问题，也能持续跟进。
+- **多设备协作的 AI 应用**：让眼镜、手机、浏览器、嵌入式设备或自定义硬件在同一个用户会话下协作输入、输出和消费事件。
+- **可排查、可迭代的实时 Agent 产品**：通过运行产物复盘模型请求、工具调用、stream、输出和播放决策，把效果、延迟和稳定性问题定位到具体链路。
+
+## 当前能力
+
+当前项目已经围绕 Protocol、Server SDK、Device SDK 和开发支持工具打通了实时 Agent 应用的基础闭环。
+
+**Protocol**
+
+- 实时音视频对话：定义设备注册、音频上行、视觉输入、speaker 下行、stream chunk 和输出生命周期。
+- 跨端事件消费：支持 server 向设备下发控制事件、自定义命令和输出事件，设备通过回执、进度和结果事件反馈执行状态。
+
+**Server SDK**
+
+- Omni + VL：已支持 Omni / Realtime 链路；VL 链路已具备 ASR、视觉模型、工具调用和 TTS 组合能力，后续还需要继续完善效果、延迟和稳定性。
+- Tool + Task：支持把一次性业务动作建模为 `Tool`，把持续运行、维护状态或消费 stream 的流程建模为后台 `Task`。
+
+**Device SDK**
+
+- Swift + JS + ESP32：当前重点覆盖 Swift Device SDK、浏览器 / JavaScript 端侧 SDK，以及 ESP32 / 嵌入式设备接入方向。
+- SDK + App：提供 Device SDK 和可运行的端侧 App / demo，开发者可以从示例验证注册、音视频链路和控制事件，再接入自己的硬件。
+- 音视频采集 + 端侧回声抑制：支持端侧麦克风、相机和 speaker 链路接入，并在端侧音频会话中处理语音采集、播放和回声抑制边界。
+
+**开发支持**
+
+- 运行产物：记录模型请求、Agent 事件、工具事件、stream 事件、输出决策和播放决策，便于复盘一次真实对话。
+- 测试工具：提供协议测试、SDK 测试、示例 App 契约测试，以及浏览器和 Python 端侧开发支持组件。
+- 端侧语音唤醒：实现端侧基础的语音唤醒能力，使端侧开发测试更易入手。
+
+## 后续计划
+
+- 增强已有模块的运行稳定性。
+- 优化 VL 链路的效果。
+- 增加对大模型提示词开发的支持。
+- 支持更多端侧设备。
 
 ## 快速开始
 
-准备环境：
+准备本地 Python 环境：
 
 ```bash
 uv sync --python 3.11
 uv pip install -e .
 ```
 
-如果 `uv run realtime-agent.*` 找不到命令，重新执行 editable 安装。
-
-启动统一示例应用 server：
+启动示例 Agent server：
 
 ```bash
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
-常用调试接口：
+默认服务地址：
+
+```text
+http://127.0.0.1:8765
+```
+
+检查服务状态：
 
 ```bash
 curl http://127.0.0.1:8765/api/health
@@ -39,363 +85,180 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-如果需要后台管理 server，可使用：
-
-```bash
-uv run realtime-agent.server.start --config examples/for-blind-app/agent-server/server.yaml
-uv run realtime-agent.server.logs
-uv run realtime-agent.server.stop
-```
-
-## 启动开发支持组件
-
-最新推荐联调顺序：
-
-```bash
-# 1. 校验端侧能力文件，确认设备能力声明有效
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
-
-# 2. 启动应用 server
-uv run realtime-agent.server.run --app-name for-blind-app
-
-# 3. 打开浏览器眼镜模拟组件，连接并注册后开始语音或视觉测试
-uv run realtime-agent.web.open --serve
-
-# 4. 可选：启动 Python 手机视频/视觉模拟组件，验证同一 user_id 下多端协作
-uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-```
-
-这些组件在代码和协议上会注册成普通 Device，所以可以真实覆盖注册、控制事件、
-stream、speaker 输出和 peer video。但它们属于 RealtimeAgent SDK 的开发/测试支持组件；
-开发者的正式眼镜、手机、嵌入式设备可以在自己的工程里实现，只需要遵守同一协议。
-
-浏览器眼镜模拟组件：
+在另一个终端打开浏览器眼镜模拟组件：
 
 ```bash
 uv run realtime-agent.web.open --serve
 ```
 
-Python 手机视频/视觉模拟组件：
+浏览器组件会作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
+
+运行一个最小契约测试：
 
 ```bash
-uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
-Python 手机简单 mock 组件：
+更多启动、扩展和排障说明见 [开发者总览](docs/getting-started/developer-overview.md)。
 
-```bash
-uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-```
+## 选择开发路径
 
-`phone.preview.yaml` 会打开 PySide6 视频窗口，注册到 server，并订阅同一 `user_id` 下的
-`sensor.rgb` 输入流。普通 realtime 视觉采样中的单资产帧带有 `request_id`，
-只进入模型/资产链路，不会在 Task 前转发给 phone；只有普通连续 RGB stream 或
-`peer.video.sender.start` 建立的视频任务流会显示在窗口里。最近一帧写入
-`runs/realtime-agent/python-phone/latest-rgb.png`，YOLO 标注帧写入
-`runs/realtime-agent/python-phone/latest-yolo.jpg`。
+### 构建 Agent 能力
 
-Python glass playback：
+如果你想让 Agent 执行新的业务动作，从这条路径开始。
 
-```bash
-uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
-```
-
-发布候选版本当前为 `0.1.0rc1`。发布前优先使用 `realtime-agent.sdk.package-check`、
-`realtime-agent.dev.preflight` 和关键 pytest 子集确认包边界、示例应用和设备入口仍然一致。
-
-使用录制音频驱动 playback：
-
-```bash
-uv run realtime-agent.playback.glass \
-  --server-url http://127.0.0.1:8765 \
-  --audio-wav testdata/audio-sample/看一下我前面有什么.wav
-```
-
-Vision 路线的无头验收可以直接复用 `testdata/audio-sample/` 下的 AudioSample。mock ASR 会把 WAV 文件名作为转写文本，mock vision model 会按文本意图触发真实 ToolGateway，因此这条链路能覆盖 `sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker`：
-
-```bash
-uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
-```
-
-## 更换模型和模态
-
-应用运行配置在 `examples/for-blind-app/agent-server/server.yaml`。`agent-server/config/server.example.yaml` 是带完整中文注释的模板，可以用来对照每个字段的作用；真正启动时仍然加载 app 根目录下名为 `server.yaml` 的文件。
-
-如果要从 Omni Realtime 切到 Vision 模态测试，把 `agent.mode` 改成 `vision`，然后配置 `agent.vision` 三段 provider：
-
-```yaml
-agent:
-  mode: "vision"
-  vision:
-    provider: "dashscope-compatible"
-    model: "qwen-plus"
-    asr_provider: "dashscope"
-    asr_model: "fun-asr-realtime"
-    tts_provider: "dashscope"
-    tts_model: "cosyvoice-v3-flash"
-    tts_voice: "longanhuan"
-    streaming_tts: true
-    allow_mock_fallback: true
-```
-
-这条链路是 `sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker`。当前 `asr_provider: "dashscope"` 走 `dashscope.audio.asr.Recognition` 实时接口，ASR 模型应使用 `fun-asr-realtime`；`qwen3-asr-flash` 是非实时录音文件识别/HTTP 调用模型，不适配这条实时麦克风路径。使用 DashScope 真实 provider 前需要设置：
-
-```bash
-export DASHSCOPE_API_KEY="你的 DashScope Key"
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
-uv run realtime-agent.server.run --app-name for-blind-app
-```
-
-如果只是先验证 Vision 链路形状，可以把 `provider/asr_provider/tts_provider` 都设成 `mock`。mock ASR 在 playback 测试里会用 WAV 文件名作为转写文本，mock TTS 会生成诊断音，不需要任何 API Key。
-
-如果要接 OpenAI-compatible 或本地模型服务，只替换 Vision 模型段：
-
-```yaml
-agent:
-  mode: "vision"
-  vision:
-    provider: "openai-compatible"
-    model: "你的模型名"
-```
-
-并设置：
-
-```bash
-export OPENAI_API_KEY="你的 Key"
-export OPENAI_BASE_URL="https://你的模型服务/v1"
-```
-
-ASR 和 TTS 目前可运行的真实实现主要是 DashScope；本地模型服务只替换 Vision 模型时，建议先保留 `asr_provider: "mock"`、`tts_provider: "mock"` 或继续使用 DashScope。
-
-如果要切回 Omni Realtime，把 `agent.mode` 改成 `omni`，并配置 `agent.omni`：
-
-```yaml
-agent:
-  mode: "omni"
-  realtime:
-    provider: "qwen"
-    model: "qwen3.5-omni-plus-realtime"
-    voice: "Tina"
-    turn_detection: "provider"
-    max_concurrent_sessions: 10
-```
-
-Omni Realtime 同样使用 `DASHSCOPE_API_KEY`。SDK 默认最多同时建立 10 条同一 provider / model / endpoint 的 Realtime 连接，达到上限时会拒绝新会话，避免继续冲击供应商限流。它的主链路是 `sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker`，不经过 VisionRealtimeAgentCore 的 ASR 和 TTS。
-
-iOS 参考端：
-
-```bash
-uv run realtime-agent.ios.open
-```
-
-ESP32-S3 参考端：
-
-```bash
-uv run realtime-agent.esp32.config
-uv run realtime-agent.esp32.build --dry-run
-```
-
-## 开发者工作模型
-
-当前可执行的设备注册、Tool / Task 开发、调试和验收入口统一整理在 [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md)。完整 Context API、selector 规则、AssetRef 边界和设备能力结构整理在 [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)。
-
-当前开发口径：
-
-- Tool 使用 `ToolContext`，只做短生命周期动作。
-- Tool 默认执行超时为 10 秒，单个 Tool 可以更短但不能更长；超过 10 秒或需要持续状态的能力应实现为 Task。
-- Task 使用 `TaskContext`，可以做持续数据流和异步状态维护。
-- Task 启动 Tool 默认只等待 3 秒启动阶段结果，不继承后台 Task 的生命周期超时。
-- Tool 使用已落地的 typed facade，例如 `context.devices.sensors.rgb.one()`、`context.devices.commands.call()`、`context.output.say()` 和 `context.assets.get()`。
-- Task 在 Tool 能力基础上额外开放持续 stream 和长命令接口，例如 `context.devices.sensors.rgb.stream()`、`context.devices.commands.start()` 和 `context.devices.commands.subscribe_result()`。
-- 麦克风和喇叭是系统音频通道，不作为普通设备能力开放。
-- 设备能力文件当前只接受结构化 `supports.sensors[].type` 和 `supports.actuators[].type`；注册 payload 不允许手写 `routes`。
-- `selector` 已可用于 typed sensor、actuator 和 command API 的设备筛选。
-
-默认应用目录结构如下：
+大多数应用自己的能力放在：
 
 ```text
-examples/<your-app>/agent-server/
-  server.yaml
-  capabilities/
-    __init__.py
-    tools.py       # 继承 BaseTool，会被自动发现
-    tasks.py       # 继承 BaseTask，会被自动发现
-  skills/
-  config/
+examples/<your-app>/agent-server/capabilities/
+  tools.py
+  tasks.py
 ```
 
-常用公开基类可从 `realtime_agent` 顶层导入：
+一次性、短生命周期的动作适合写成 `Tool`。需要持续运行、维护状态、消费 stream 或多次输出的流程适合写成 `Task`。
 
-```python
-from realtime_agent import BaseTask, BaseTool, ToolContext, ToolResult
-```
+常见修改包括：
 
-`server.yaml` 中配置自动发现包后，开发者只需要把 `BaseTool` / `BaseTask` 子类放进对应 package。SDK 启动时会扫描这些类，把 Tool schema 注册给 Agent Core，把 Task 类型注册给 Task Engine。业务代码不需要在 `app.py` 里手写注册逻辑。
+- 在 `capabilities/tools.py` 中增加业务工具。
+- 在 `capabilities/tasks.py` 中增加后台任务。
+- 在应用配置中暴露新能力。
+- 查看应用 `runs/` 目录里的运行产物。
 
-新增一个能力时，推荐按这个顺序设计：
+建议从 [第一个 Tool 和 Task](docs/tutorials/build-first-capability.md) 开始。
 
-1. 先判断能力是一次性动作还是长流程：一次性动作写 Tool，长流程写 Task。
-2. 列出它需要哪些端侧能力：设备文件用 `supports.sensors` / `supports.actuators` 声明；业务代码使用 `context.devices.sensors.rgb`、`context.devices.sensors.imu`、`context.devices.sensors.tof`、`context.devices.actuators.vibrator` 这类 typed facade。
-3. 确认端侧设备能力文件中已经声明对应能力，例如 `type: rgb`、`type: imu`、`type: tof` 或 `type: vibrator`。
-4. 在 Tool / Task 中通过 Context API 表达能力调用，不直接操作 WebSocket 或硬编码 `device_id`。
-5. 用 `<runs_root>/...` 中的运行产物验证链路。for-blind-app 默认写入 `examples/for-blind-app/agent-server/runs/`。
+### 接入设备
 
-业务样例：
+如果你想接入眼镜、手机 App、浏览器 UI、ESP32、机器人、Linux 网关或其他客户端，从这条路径开始。
 
-- `examples/for-blind-app`：盲人眼镜业务样例，包含找物、红绿灯、导航、搜索和计时器。
-- `examples/for-blind-app/agent-server/capabilities`：业务能力样例。
+设备侧代码负责：
 
-关键约束：
+- 注册到 server。
+- 启用自己支持的 sensor、actuator、stream 和 command。
+- 上传音频、图片、视频或传感器数据。
+- 处理 server 下发的控制事件。
+- 消费 speaker 输出或自定义设备命令。
 
-- Tool / Task 只能通过 Context 公开 API 访问设备通讯能力。
-- Tool 不持有 `tasks`、`memory`、`skills`、`mcp` 服务入口；这些能力通过独立 Tool 暴露给模型。
-- 不直接把图片、音频、视频或文件字节放进控制信令，大字节数据必须走 stream。
-- 设备开发者只实现注册能力、控制信令处理和 stream 读写，不需要理解 Agent Core 或业务 Tool。
+当前 SDK 入口：
 
-## 设备开发
+| SDK | 入口 |
+| --- | --- |
+| Python | [devices/python](devices/python/README.md) |
+| TypeScript | [devices/typescript](devices/typescript/README.md) |
+| Swift | [devices/swift](devices/swift/README.md) |
+| Kotlin / Java | [devices/kotlin](devices/kotlin/README.md) |
+| C | [devices/c](devices/c/README.md) |
 
-端侧开发者优先维护设备能力文件。浏览器示例：
+设备接入模型见 [端侧 App 接入指南](docs/reference/device-app-integration.md)。
 
-```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
-```
+### 优化模型链路
 
-设备能力文件当前用于声明结构化 `supports.sensors`、`supports.actuators`、运行环境和调试属性。`selector` 是 Tool / Task 调用设备时的运行期筛选条件，不写进设备能力文件；`external` 可用于端侧私有调试元数据。
+如果你想提升回复质量、延迟、稳定性或 provider 行为，从这条路径开始。
 
-端侧实现入口：
+`realtime-agent` 支持两类主要模型链路：
 
-- `examples/dev-support/devices/browser-glass`
-- `examples/dev-support/devices/python-glass`
-- `examples/dev-support/devices/python-playback-glass`
-- `examples/dev-support/devices/python-phone`
-- `examples/device_demo/ios`
-- `examples/for-blind-app/devices/native-esp32-glass`
+| 链路 | 适合场景 | 代价 |
+| --- | --- | --- |
+| Omni / Realtime | 更快跑通实时语音体验，组件更少 | 对 ASR、视觉、LLM、TTS 等单独阶段的控制更少 |
+| VL | 更细控制 ASR、视觉模型、工具、上下文、提示词和 streaming TTS | 组件更多，延迟风险更高，调试成本更高 |
 
-iOS SDK Demo / ESP32 目录目前是参考端和契约入口，不代表真实 iOS 模型或 ESP32 真机效果已经完成。
+常见修改包括：
 
-## 配置同步与检查
+- 调整 system prompt、工具描述和任务描述。
+- 调整上下文组装和视觉资产进入模型的方式。
+- 替换 ASR、TTS、视觉模型或 realtime 模型 provider。
+- 配置 OpenAI-compatible 或 DashScope-compatible 模型服务。
+- 查看 `model-request.json`、`agent-events.jsonl` 以及 stream / playback 日志。
 
-生成本地联调配置：
+更完整的链路说明见 [开发者总览](docs/getting-started/developer-overview.md)。
 
-```bash
-uv run realtime-agent.config.sync --app-root examples/for-blind-app/agent-server
-```
+## 核心概念
 
-如果要让 iOS、ESP32 或其他局域网设备连接到这台 Mac，把 `server_url` 同步成
-Mac 当前局域网 IP，而不是 `127.0.0.1`：
+| 概念 | 含义 |
+| --- | --- |
+| Server SDK | Python 运行时，负责 session、agent loop、工具、任务、上下文、模型 provider 和运行产物。 |
+| Device SDK | 端侧 SDK，用于把真实设备或模拟设备接入 server 协议。 |
+| Device | 注册到 server 的客户端，声明自己的输入、输出、stream、command 或自定义硬件能力。 |
+| Tool | Agent 可以在对话中调用的短生命周期动作。 |
+| Task | Agent 可以启动、观测、发送信号和取消的长流程任务。 |
+| Context API | Tool 和 Task 用来请求设备能力、资产、输出和运行时数据的 SDK 接口。 |
+| Model Lane | 模型执行链路，例如 Omni / Realtime 或 VL。 |
+| Run Artifacts | 记录模型请求、工具事件、stream 事件、输出决策和播放决策的调试产物。 |
 
-```bash
-uv run realtime-agent.config.sync \
-  --app-root examples/for-blind-app/agent-server \
-  --server-url "http://$(ipconfig getifaddr en0):8765"
-```
-
-如果 Mac 当前使用的是有线网卡或其他网络接口，先用 `ifconfig` 确认实际 IP，
-再把 `--server-url` 改成对应地址，例如 `http://192.168.1.23:8765`。
-
-预检：
-
-```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
-```
-
-发布包检查：
-
-```bash
-uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
-```
-
-建议验收：
-
-```bash
-uv run realtime-agent.dev.preflight \
-  --config examples/for-blind-app/agent-server/server.yaml \
-  --report runs/acceptance/preflight.json
-
-uv run realtime-agent.sdk.package-check \
-  --report runs/acceptance/package-check.json
-
-uv run python -m pytest \
-  protocol/protocol-tests \
-  agent-server/unit-tests \
-  agent-server/protocol-tests \
-  devices/python/unit-tests \
-  devices/python/protocol-tests \
-  examples/for-blind-app/app-tests \
-  examples/for-blind-app/replay-tests \
-  examples/dev-support/unit-tests \
-  examples/dev-support/app-tests \
-  -q
-```
-
-## 运行产物与日志索引
-
-服务启动时，`realtime_agent.runs` 会打印一次 `运行产物目录索引`。其中 `runs_root` 是当前应用的运行产物根目录，排查时按启动索引定位文件。
-
-根目录文件：
+## 仓库结构
 
 ```text
-control-events.jsonl      # 全局控制事件流水
-control-routes.jsonl      # 控制事件订阅匹配和投递结果
-system-events.jsonl       # 系统错误、降级和恢复事件
-capability-events.jsonl   # 跨会话能力调用轨迹
-command-events.jsonl      # 跨会话设备命令轨迹
-debug/playback.json       # 当前播放仲裁快照，对应 /api/debug/playback
-tasks/                    # 长流程 Task 运行产物
+agent-server/   Python server SDK 和服务端运行时
+devices/        Python、TypeScript、Swift、Kotlin/Java、C 的 Device SDK
+protocol/       共享协议文档、fixture 和协议测试
+examples/       示例应用、设备模拟器、回放测试和硬件参考工程
+docs/           入门文档、参考文档、how-to 文档和设计说明
+testdata/       共享测试资产，例如录制音频样例
+tools/          开发和校验工具
 ```
 
-设备会话目录位于 `<runs_root>/<user_id>/<device_id>/`：
+项目边界可以按这个原则理解：
+
+> 业务能力放应用目录，设备能力放端侧，通用框架能力才放 SDK 核心。
+
+## 示例
+
+主要示例应用是：
 
 ```text
-events.jsonl              # 当前设备会话控制事件
-messages.jsonl            # 用户、助手和工具消息历史
-model-request.json        # 最近一次发给模型的请求快照
-agent-events.jsonl        # Agent Core、模型 provider 和 delta 摘要事件
-model-events.jsonl        # 模型相关事件镜像，便于按模型视角排查
-tool-events.jsonl         # 工具调用参数、结果、耗时和错误
-stream-events.jsonl       # 数据流打开、关闭、失败和分片摘要
-assets.jsonl              # 图片等资产写入和请求记录
-task-signals.jsonl        # Task Engine 信号记录
-output-decisions.jsonl    # 服务端输出仲裁决策
-playback-decisions.jsonl  # 端侧播放仲裁决策
-actuators.jsonl           # 端侧执行器播放和回执记录
-audio/                    # 麦克风输入 PCM 和扬声器输出 WAV
-photos/                   # RGB 图片或抓拍资产
-imu/                      # IMU 数据
-depth/                    # 深度或 ToF 数据
-assets/                   # 其他资产
+examples/device_demo/
 ```
 
-用户级文件位于 `<runs_root>/<user_id>/`，其中 `memory.json` 保存用户长期记忆。
+它是面向端侧 App 开发者的最小 Swift 真机 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
 
-## 测试
+开发支持设备包括：
 
-项目测试按 P0 协议资产检查、L1 事件行为一致性、L2 大模型能力、L3 应用能力组织。完整说明见 [测试体系说明](docs/testing.md)。
+- 浏览器眼镜模拟组件：`uv run realtime-agent.web.open --serve`
+- Swift 真机 demo：`examples/device_demo/ios/`
+- Python 手机视觉模拟组件：`examples/dev-support/devices/python-phone/`
+- Python playback glass：`examples/dev-support/devices/python-playback-glass/`
 
-```bash
-uv run python -m pytest
+当前示例清单见 [示例](examples/README.md)。
+
+## 排查运行问题
+
+示例应用的运行产物默认写到：
+
+```text
+examples/device_demo/agent-server/runs
 ```
 
-常用分层回归：
+最常用的文件：
 
-```bash
-uv run python -m pytest -m protocol -q
-uv run python -m pytest -m sdk -q
-uv run python -m pytest -m device_sdk -q
-uv run python -m pytest -m model_provider -q
-uv run python -m pytest -m replay -q
-```
+| 文件 | 用途 |
+| --- | --- |
+| `model-request.json` | 查看模型实际收到的消息、工具和上下文。 |
+| `agent-events.jsonl` | 查看服务端 Agent 和 provider 的关键事件。 |
+| `tool-events.jsonl` | 查看工具调用参数、结果、耗时和错误。 |
+| `stream-events.jsonl` | 查看音频、图片、视频和传感器 stream 生命周期。 |
+| `output-decisions.jsonl` | 查看服务端输出仲裁决策。 |
+| `playback-decisions.jsonl` | 查看端侧播放仲裁决策。 |
 
-真实 provider 集成测试需要配置对应 API Key：
-
-```bash
-uv run python -m pytest agent-server/model-provider-tests/test_dashscope_providers.py -q
-```
+这些产物是项目模型的一部分：实时 Agent 不应该只是能跑，还应该能在一次对话之后被排查和复盘。
 
 ## 文档
 
-- [文档目录](docs/README.md)
-- [设备注册与功能开发说明](agent-server/docs/how-to/设备能力开发说明.md)
-- [Context 与设备 API 设计说明](agent-server/docs/reference/上下文设备接口设计.md)
-- [运行产物说明](agent-server/docs/how-to/运行产物排查说明.md)
-- [内部设计文档](agent-server/docs/README.md)
+- [开发者总览](docs/getting-started/developer-overview.md)
+- [项目结构](docs/reference/project-layout.md)
+- [端侧 App 接入指南](docs/reference/device-app-integration.md)
+- [CLI 参考](docs/reference/cli.md)
+- [测试说明](docs/testing.md)
+- [协议](protocol/README.md)
+
+## 贡献
+
+欢迎贡献。先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和仓库开发说明 [AGENTS.md](AGENTS.md)。
+
+提交变更前，运行和改动范围最相关的测试。对于 Device Demo 和 Swift Device SDK 入口改动，下面的契约测试可以作为一个轻量 smoke test：
+
+```bash
+uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+```
+
+## License
+
+在生产环境使用或重新分发本项目之前，请先确认仓库的 license 信息。

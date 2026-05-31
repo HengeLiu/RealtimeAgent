@@ -2,7 +2,7 @@
 
 多设备应用的排障重点不是单个进程能否启动，而是确认 server、设备注册、事件路由、stream、资产、Tool、Task 和输出播放是否形成闭环。
 
-本页给出推荐联调顺序。
+本页给出当前推荐的本地联调顺序。默认 server 使用 `examples/device_demo/agent-server/server.yaml`，用于验证 Device SDK 注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
 
 ## 1. 准备环境
 
@@ -31,7 +31,7 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 ## 3. 启动 server
 
 ```bash
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
 确认 server 健康：
@@ -64,7 +64,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 
 ## 5. 可选：连接 Python 手机模拟组件
 
-当前找物 / 红绿灯联调优先使用 preview 配置：
+Python phone preview 可用于视频回显、peer video 和端侧视觉调试：
 
 ```bash
 uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
@@ -81,16 +81,7 @@ Python phone 同样是开发/测试支持组件。它在协议层注册为普通
 
 preview 配置通过 properties 声明 `device_role=phone`、`endpoint.role.visual_display`、
 `endpoint.compute.vision`、`actuator.display.rgb` 和 `peer.video.receiver`。它作为
-显示与视觉计算组件运行，RGB 画面来自 browser-glass 或 peer video sender。当前有两类
-RGB 流需要区分：
-
-1. realtime visual sampler 的单资产请求：server 在语音 `speech_started` 到
-   `speech_stopped` 之间向 browser-glass 请求 `sensor.rgb`，该输入流带 `request_id`，
-   只进入模型/资产链路，不会转发到 Python phone。
-2. 任务视频流：模型明确调用 `start_find_object_task` 或 `start_traffic_light_task`
-   后，server 先下发 `peer.video.receiver.start` 给 phone，再下发
-   `peer.video.sender.start` 给 browser-glass；这时眼镜才会把 JPEG 视频帧直连发送到
-   phone。
+显示与视觉计算组件运行，RGB 画面来自 browser-glass 或 peer video sender。业务任务是否会启动 peer video，取决于当前 server 配置中是否加载了对应 Tool / Task。
 
 观察点：
 
@@ -101,13 +92,13 @@ RGB 流需要区分：
    `peer.video.sender.start`。
 5. server `stream-events.jsonl` 中带 `request_id` 的资产采样流不应包含 phone consumer。
 
-## 6. 可选：运行 iOS 参考端
+## 6. 可选：运行 Swift Device Demo
 
 ```bash
 uv run realtime-agent.ios.open
 ```
 
-iOS 参考端适合验证手机端注册、日志、直连相机接收和 Swift 端协议实现。真机联调时需要同时看 iOS app 日志和 server runs 产物。
+Swift Device Demo 适合验证真机注册、日志、麦克风上行、相机帧上传、speaker 下行播放和 Swift Device SDK 协议实现。真机联调时需要同时看 iOS app 日志和 server runs 产物。
 
 ## 7. 可选：运行 ESP32-S3 参考端检查
 

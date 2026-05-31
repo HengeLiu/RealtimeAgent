@@ -275,7 +275,7 @@ uv pip install -e .
 ### 启动示例 server
 
 ```bash
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
 默认地址：
@@ -320,20 +320,20 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
-### 跑一个最小回放测试
+### 跑一个最小契约测试
 
 ```bash
-uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
-这条测试使用录制音频样例和 mock ASR，适合快速确认基础链路是否还能跑通。
+这条测试静态检查 Device Demo、Swift Device SDK 本地依赖、端侧硬件 enable 配置和独立 server 配置，适合快速确认当前推荐示例入口没有退化。
 
 ### 查看运行产物
 
 示例应用的运行产物默认写到：
 
 ```text
-examples/for-blind-app/agent-server/runs
+examples/device_demo/agent-server/runs
 ```
 
 排查时优先看：
@@ -348,8 +348,6 @@ examples/for-blind-app/agent-server/runs
 这套产物是项目对开发者很重要的能力：你不只能启动一个 demo，还能知道模型听到了什么、调用了什么、设备有没有收到事件、音频有没有真正下发。
 
 ### 下一步
-
-如果你只是想快速体验，先读 [快速开始](quickstart.md)。
 
 如果你想写自己的业务能力，继续读 [第一个 Tool 和 Task](../tutorials/build-first-capability.md)。
 
