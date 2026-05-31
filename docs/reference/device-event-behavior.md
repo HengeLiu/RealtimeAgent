@@ -120,12 +120,12 @@ sdk.start()
 9. 如果实时对话需要视觉输入，server 下发一次 `stream.control.open.requested`，声明 `stream_type=sensor.rgb`、`mode=single`、`sample_count=1`、`request_id` 和格式参数。
 10. device 打开或复用 SDK 默认相机 adapter，或 App 覆盖的摄像头、视频文件、图片样例 source，建立或复用视觉上行链路，发送 `stream.input.opened`，采集一帧后通过视觉上行链路上传一个 `sensor.rgb` 图片 chunk，且该 chunk 必须 `final=true`。
 11. 一次视觉请求只产生一张图片。device 发送该图片后立即发送 `stream.input.closed`；采集失败时发送 `stream.input.failed`。当前阶段不定义端侧主动后台推送，也不定义周期性采集画面。
-12. 当 server 需要播放模型回复音频时，下发 `stream.output.open.requested (actuator.speaker)`；这个事件不要求重新建立 `/ws/stream/audio/output`，也不要求每轮重建播放器，而是在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，例如 `stream_id`、seq 计数、start/close/cancel 标记、上轮残留 buffer 和水位线状态。如果本轮音频格式和当前 speaker sink 格式不同，SDK 才需要重新配置 sink。端侧完成本轮逻辑状态重置后发送 `stream.output.ready`。
+12. 当 server 需要播放模型回复音频时，下发 `stream.output.start.requested (actuator.speaker)`；这个事件不要求重新建立 `/ws/stream/audio/output`，也不要求每轮重建播放器，而是在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，例如 `stream_id`、seq 计数、start/finish/cancel 标记、上轮残留 buffer 和水位线状态。如果本轮音频格式和当前 speaker sink 格式不同，SDK 才需要重新配置 sink。端侧完成本轮逻辑状态重置后发送 `stream.output.ready`。
 13. server 必须等待 `stream.output.ready` 后，才向音频下行链路写入本轮 `actuator.speaker` chunk。`stream.output.started` 只表示端侧达到起播水位并开始本地播放，不表示 speaker runtime 准备完成。
 14. SDK 负责维护内置的 speaker 播放 buffer，并按配置的播放启动水位线、高水位线和低水位线决定何时开始播放、何时暂停或恢复 server 下行写出。App 开发者只配置 SDK 的播放 buffer 参数，不在业务 App 中实现这套 buffer。
 15. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
-16. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.closed` 或 `stream.output.cancelled`。
-17. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.close.requested` 或 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.closed`。
+16. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.cancelled`。
+17. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.finished`。
 18. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和未完成的视觉采集，等待下行播放 drain 后，发送 `control.audio_session.closed`。
 
 系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立音频上行链路并发送 `control.audio_session.opened`，再持续发二进制 chunk；server 应等待 `control.audio_session.opened` 后再按本轮会话处理麦克风音频。不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
@@ -134,9 +134,9 @@ sdk.start()
 
 视觉输入使用独立的视觉上行链路上传 `sensor.rgb`，不能和麦克风上行或 speaker 下行共用一条物理 WebSocket。当前阶段视觉链路是请求驱动的单帧采集：server 每次需要画面上下文时下发一次 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)`，端侧只采集并上传一张图片，然后关闭该逻辑输入流。如果已经选择图片或视频样例，端侧只从样例中取一帧；没有样例时再打开摄像头采集一帧。图片字节不能放进 control event，也不能在没有 server 请求时无节制后台上传。
 
-系统音频下行使用独立的 `actuator.speaker` output 链路。音频下行物理 WebSocket 和 session 级 speaker runtime 已经在 `control.audio_session.opened` 之前建立或准备完成；`stream.output.open.requested` 只表示 server 希望在这条已建立的链路上开始一轮逻辑 speaker 输出。device 必须在本轮逻辑 output stream 状态重置完成后发送 `stream.output.ready`，server 收到该回执后才能向音频下行链路写 speaker chunk。`stream.output.close.requested` / `stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.closed`。由于控制事件和音频下行 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和关闭回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.closed` 或 `stream.output.cancelled`。
+系统音频下行使用独立的 `actuator.speaker` output 链路。音频下行物理 WebSocket 和 session 级 speaker runtime 已经在 `control.audio_session.opened` 之前建立或准备完成；`stream.output.start.requested` 只表示 server 希望在这条已建立的链路上开始一轮逻辑 speaker 输出。device 必须在本轮逻辑 output stream 状态重置完成后发送 `stream.output.ready`，server 收到该回执后才能向音频下行链路写 speaker chunk。`stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.finished`。由于控制事件和音频下行 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和完成回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.cancelled`。
 
-喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain`、`cancel`、`close` 能力。`stream.output.closed` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 close 时立即发送。
+喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain` 和 `cancel` 能力。`stream.output.finished` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 finish 时立即发送。
 
 端侧 speaker 播放 buffer 由 SDK 实现，而不是由业务 App 或 speaker sink 实现。App 开发者只需要在 SDK 初始化时配置 buffer 大小和水位线，用来在播放流畅度和内存占用之间取舍：
 
@@ -170,7 +170,7 @@ opt visual input requested
   Device -> Server: stream.input.closed (sensor.rgb)
 end
 opt assistant audio output
-  Server -> Device: stream.output.open.requested (actuator.speaker)
+  Server -> Device: stream.output.start.requested (actuator.speaker)
   Device -> Device: reset per-output playback state
   Device -> Device: reuse session speaker sink
   Device -> Server: stream.output.ready
@@ -180,11 +180,11 @@ opt assistant audio output
   alt output cancel requested
     Server -> Device: stream.output.cancel.requested
     Device -> Device: stop speaker and clear SDK playback buffer
-    Device -> Server: stream.output.closed or stream.output.cancelled
+    Device -> Server: stream.output.cancelled
   else response audio completed
-    Server -> Device: stream.output.close.requested
+    Server -> Device: stream.output.finish.requested
     Device -> Device: drain SDK playback buffer and speaker sink
-    Device -> Server: stream.output.closed
+    Device -> Server: stream.output.finished
   end
 end
 Server -> Device: control.audio_session.close.requested
@@ -195,7 +195,7 @@ Device -> Server: control.audio_session.closed
 
 ### 3.1 音频下行播放与水位线流控
 
-音频下行播放单独作为一条子链路维护。`stream.output.open.requested` 只表示 server 准备在已建立的音频下行 WebSocket 和 session 级 speaker runtime 上开始一轮逻辑 speaker 输出；真正的播放节奏由端侧 SDK 的播放 buffer 和本地 speaker sink 共同决定。server 必须等 `stream.output.ready` 后再写出第一包 speaker 音频。
+音频下行播放单独作为一条子链路维护。`stream.output.start.requested` 只表示 server 准备在已建立的音频下行 WebSocket 和 session 级 speaker runtime 上开始一轮逻辑 speaker 输出；真正的播放节奏由端侧 SDK 的播放 buffer 和本地 speaker sink 共同决定。server 必须等 `stream.output.ready` 后再写出第一包 speaker 音频。
 
 SDK 内置播放 buffer，App 不需要自己实现接收队列、水位线判断或 `downstream.pause/resume` 事件。App 只在初始化 SDK 时配置 buffer 参数，例如启动播放水位线、低水位线、高水位线和最大 buffer 时长；SDK 根据这些参数向 server 反馈暂停或恢复下行写出。
 
@@ -204,7 +204,7 @@ SDK 内置播放 buffer，App 不需要自己实现接收队列、水位线判�
 participant Device
 participant Server
 
-Server -> Device: stream.output.open.requested (actuator.speaker)
+Server -> Device: stream.output.start.requested (actuator.speaker)
 Device -> Device: reset per-output playback state
 Device -> Device: reuse session speaker sink
 Device -> Server: stream.output.ready
@@ -227,11 +227,11 @@ end
 alt output cancel requested
   Server -> Device: stream.output.cancel.requested
   Device -> Device: stop speaker sink and clear SDK playback buffer
-  Device -> Server: stream.output.closed or stream.output.cancelled
+  Device -> Server: stream.output.cancelled
 else response audio completed
-  Server -> Device: stream.output.close.requested or stream.output.finish.requested
+  Server -> Device: stream.output.finish.requested
   Device -> Device: drain SDK playback buffer and speaker sink
-  Device -> Server: stream.output.closed
+  Device -> Server: stream.output.finished
 end
 @enduml
 ```
@@ -240,7 +240,7 @@ end
 
 本节只定义注册、实时对话主链路之外的 server 事件。device 只消费自己通过注册路由订阅到的事件。标准事件按标准生命周期回执；`custom.*` 事件不强制标准回执，App 如需回报业务结果，应发送另一个 `custom.*` 事件。
 
-严格按“前三章没有讲过的新 server -> device 事件名”计算，标准协议事件不应该在本节继续扩展含义。`command.requested` 属于标准命令事件族；`stream.output.open.requested` / `stream.output.close.requested` / `stream.output.cancel.requested` 属于标准 output stream 生命周期，已经在第 3 节作为 `actuator.speaker` 下行播放生命周期讲过。为了避免和这些内置事件族冲突，业务扩展必须使用 `custom.*` 事件名。
+严格按“前三章没有讲过的新 server -> device 事件名”计算，标准协议事件不应该在本节继续扩展含义。`command.requested` 属于标准命令事件族；`stream.output.start.requested` / `stream.output.finish.requested` / `stream.output.cancel.requested` 属于标准 output stream 生命周期，已经在第 3 节作为 `actuator.speaker` 下行播放生命周期讲过。为了避免和这些内置事件族冲突，业务扩展必须使用 `custom.*` 事件名。
 
 端侧 SDK 的事件分发必须使用明确的命名空间隔离，不能只靠“未命中内置 handler 再兜底”这种隐式约定。标准事件继续使用 `control.*`、`stream.*`、`command.*`、`system.*` 等命名空间；所有业务扩展或 App 自定义事件必须使用 `custom.*` 命名空间。
 
@@ -248,7 +248,7 @@ SDK 路由规则：
 
 1. `event_name` 以 `custom.` 开头：SDK 不进入任何标准内置状态机，只进入自定义事件分发器。
 2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、视觉单帧采集、speaker 播放、标准命令等内置状态机。
-3. 标准事件不能再投递给自定义 `on_event`。比如 `stream.output.open.requested (actuator.speaker)` 只能进入第 3 节的 speaker 播放链路，不应再触发自定义事件处理。
+3. 标准事件不能再投递给自定义 `on_event`。比如 `stream.output.start.requested (actuator.speaker)` 只能进入第 3 节的 speaker 播放链路，不应再触发自定义事件处理。
 
 未来端侧 SDK 应提供的额外消费入口如下：
 
@@ -371,4 +371,4 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_device_even
 
 本次 speaker 下行时序调整后，需要补齐的回归点：
 
-- speaker 下行物理 WebSocket 和 session 级 speaker runtime 已经在音频会话打开阶段建立或准备；每轮回复必须先收到 `stream.output.open.requested`，端侧重置本轮逻辑 output stream 状态后回 `stream.output.ready`，server 再下发 `actuator.speaker` chunk；`stream.output.started` 只表示端侧已经开始本地播放。
+- speaker 下行物理 WebSocket 和 session 级 speaker runtime 已经在音频会话打开阶段建立或准备；每轮回复必须先收到 `stream.output.start.requested`，端侧重置本轮逻辑 output stream 状态后回 `stream.output.ready`，server 再下发 `actuator.speaker` chunk；`stream.output.started` 只表示端侧已经开始本地播放，正常播完后端侧回 `stream.output.finished`。

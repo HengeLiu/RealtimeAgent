@@ -168,7 +168,7 @@ ra_device_client_start(client);
 
 `custom.command.*` 不强制标准回执。App 可以用 `ctx.emit(...)` 发任意自定义事件表达业务结果，例如 `custom.haptic.vibrate.done` 或 `custom.navigation.route.failed`。
 
-App 开发者不应使用标准 `command.*` 或 `stream.output.*` 做业务扩展。标准 `stream.output.*` 只给 SDK 内置 speaker 播放链路使用。
+App 开发者不应使用标准 `command.*` 或 `stream.output.*` 做业务扩展。标准 `stream.output.*` 只给 SDK 内置 speaker 播放链路使用，其中 `stream.output.start.requested` 表示开始一轮逻辑 speaker 输出，`stream.output.finished` 表示端侧确认本轮已播放完成。
 
 App 不需要手写事件 routes。只要在 `connect/register` 前调用 `on_custom_command(...)` 或 `on_event(...)`，Device SDK 会在设备注册时自动声明对应的 `custom.*` 消费能力，server 会按声明路由下发事件。
 
@@ -197,6 +197,18 @@ speaker = Speaker.enabled(
 ```
 
 App 只配置 buffer 参数，不实现 buffer 队列，也不直接发送 `downstream.pause.requested` / `downstream.resume.requested`。下行背压只作用在音频下行链路，不能阻塞麦克风或视觉上行。
+
+播放 buffer 只用于正常播放链路中的抗抖和水位线控制，不能改变打断语义。收到
+`stream.output.cancel.requested` 时，SDK 必须把当前 output stream 标记为已取消，
+立即丢弃尚未播放的 SDK playback buffer，停止本轮 drain loop，并调用 speaker sink 的
+`cancel()` 清理播放器内部队列、ring buffer 或平台播放节点。正常的 `finish` 才需要等待
+buffer 和本地播放器 drain，然后由 SDK 发送 `stream.output.finished`；`cancel` 不允许等待已缓存音频播放完成。
+
+因此，较大的 buffer 设置虽然能降低网络抖动导致的断音，但会增加实现风险：如果 SDK
+只清理自己的队列，却没有穿透清理已经写入播放器、ring buffer 或系统音频队列的音频，
+用户插话后仍可能听到旧回复残留。各语言 SDK 的默认 speaker adapter 必须把 cancel
+作为最高优先级路径处理，并在测试中覆盖“finish 等待中收到 cancel”“大 buffer 中收到
+cancel”“cancel 后迟到 chunk 被忽略”等场景。
 
 ## 7. 只消费自定义事件的设备
 

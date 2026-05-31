@@ -87,7 +87,7 @@ SDK 必须提供“默认禁用、显式启用、可覆盖 adapter”的硬件�
 | --- | --- | --- | --- |
 | `sensor.mic` source | SDK/App -> SDK -> Server | 显式启用后，SDK 从默认或覆盖 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入音频上行链路 | `format`、`readChunk()` 或 async chunk producer、`close()` |
 | `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 只在收到 server 单帧采集请求时读取一帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame()`、`close()` |
-| `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()`、`close()` |
+| `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()` |
 | 自定义业务动作 | Server -> SDK -> App | SDK 通过 `custom.command.*` 或其他 `custom.*` 调用 App 注册的 handler | `on_custom_command(...)` 或 `on_event(...)` |
 
 目标 API 形态示例：
@@ -250,7 +250,7 @@ opt visual input requested
 end
 
 opt assistant audio output
-  Server -> SDK: stream.output.open.requested (actuator.speaker)
+  Server -> SDK: stream.output.start.requested (actuator.speaker)
   SDK -> SDK: reset per-output playback state
   SDK -> App: reuse session speaker sink
   SDK -> Server: stream.output.ready
@@ -262,12 +262,12 @@ opt assistant audio output
     Server -> SDK: stream.output.cancel.requested
     SDK -> SDK: clear SDK playback buffer
     SDK -> App: stop speaker sink
-    SDK -> Server: stream.output.closed or stream.output.cancelled
+    SDK -> Server: stream.output.cancelled
   else response audio completed
-    Server -> SDK: stream.output.close.requested
+    Server -> SDK: stream.output.finish.requested
     SDK -> SDK: drain SDK playback buffer
     SDK -> App: drain speaker sink
-    SDK -> Server: stream.output.closed
+    SDK -> Server: stream.output.finished
   end
 end
 
@@ -281,7 +281,7 @@ SDK -> Server: control.audio_session.closed
 
 音频下行播放从主实时对话图中拆出来单独说明。这里的 buffer 是端侧 SDK 的内置播放 buffer，不是 App 或 speaker sink 的自定义队列。App 只提供 `actuator.speaker` sink，并配置 SDK buffer 的启动水位线、低水位线、高水位线和最大容量。
 
-音频下行物理 WebSocket 和 session 级 speaker sink/runtime 已经在 `control.audio_session.opened` 之前建立或准备完成。`stream.output.open.requested` 不表示重新打开 `/ws/stream/audio/output`，也不要求每轮重建播放器；它只要求端侧在这条已建立的音频下行链路上重置本轮逻辑 output stream 状态，例如 `stream_id`、seq 计数、start/close/cancel 标记、上轮残留 buffer 和水位线状态。这个 open/requested 和 ready 握手的粒度是每轮 assistant 回复一次，不是每个音频 chunk 一次。server 下发 `stream.output.open.requested` 后必须等待端侧回 `stream.output.ready`，确认本轮逻辑状态已经干净可写，再向音频下行链路写入第一包 `actuator.speaker` chunk；同一轮回复的后续 chunk 直接走已建立的音频下行链路，不再重复 open/requested 和 ready。`stream.output.started` 只表示端侧达到起播水位并开始向 speaker sink 写出，不表示准备完成。
+音频下行物理 WebSocket 和 session 级 speaker sink/runtime 已经在 `control.audio_session.opened` 之前建立或准备完成。`stream.output.start.requested` 不表示重新打开 `/ws/stream/audio/output`，也不要求每轮重建播放器；它只表示 server 请求在已建立的音频下行链路上开始一轮逻辑 speaker 输出，并要求端侧重置本轮逻辑 output stream 状态，例如 `stream_id`、seq 计数、start/finish/cancel 标记、上轮残留 buffer 和水位线状态。这个 start/requested 和 ready 握手的粒度是每轮 assistant 回复一次，不是每个音频 chunk 一次。server 下发 `stream.output.start.requested` 后必须等待端侧回 `stream.output.ready`，确认本轮逻辑状态已经干净可写，再向音频下行链路写入第一包 `actuator.speaker` chunk；同一轮回复的后续 chunk 直接走已建立的音频下行链路，不再重复 start/requested 和 ready。`stream.output.started` 只表示端侧达到起播水位并开始向 speaker sink 写出，不表示准备完成。
 
 ```plantuml
 @startuml
@@ -289,7 +289,7 @@ participant "Device App" as App
 participant "Device SDK" as SDK
 participant Server
 
-Server -> SDK: stream.output.open.requested (actuator.speaker)
+Server -> SDK: stream.output.start.requested (actuator.speaker)
 SDK -> SDK: reset per-output playback state
 SDK -> App: reuse session speaker sink
 SDK -> Server: stream.output.ready
@@ -314,13 +314,13 @@ alt output cancel requested
   Server -> SDK: stream.output.cancel.requested
   SDK -> SDK: clear SDK playback buffer
   SDK -> App: stop speaker sink
-  SDK -> Server: stream.output.closed or stream.output.cancelled
+  SDK -> Server: stream.output.cancelled
 else response audio completed
-  Server -> SDK: stream.output.close.requested or stream.output.finish.requested
+  Server -> SDK: stream.output.finish.requested
   SDK -> SDK: wait output_last_seq chunk if provided
   SDK -> SDK: drain SDK playback buffer
   SDK -> App: drain speaker sink
-  SDK -> Server: stream.output.closed
+  SDK -> Server: stream.output.finished
 end
 @enduml
 ```
@@ -510,11 +510,11 @@ FUNCTION handleVisualCloseRequested(event):
     realtime.visual_state = "closed"
     realtime.visual_stream_id = null
 
-FUNCTION handleSpeakerOutputOpenRequested(event):
+FUNCTION handleSpeakerOutputStartRequested(event):
   REQUIRE event.stream_type == "actuator.speaker"
   REQUIRE adapters.output["actuator.speaker"] exists
   speakerSink = adapters.output["actuator.speaker"]
-  output = outputRegistry.open(event.stream_id, event.stream_type)
+  output = outputRegistry.start(event.stream_id, event.stream_type)
   playbackBuffer = playbackBuffers.resetOrCreate(
     stream_id = event.stream_id,
     config = sdkConfig.playback_buffer["actuator.speaker"]
@@ -523,7 +523,7 @@ FUNCTION handleSpeakerOutputOpenRequested(event):
     speakerSink.reconfigure(event.payload.format)
   output.playback_buffer_id = playbackBuffer.id
   output.pause_sent = false
-  output.state = "opened"
+  output.state = "ready"
 
   control.send(Event(
     event_name = "stream.output.ready",
@@ -612,20 +612,19 @@ FUNCTION onPlaybackBufferDrained(stream_id):
       }
     ))
 
-FUNCTION handleSpeakerOutputCloseRequested(event):
+FUNCTION handleSpeakerOutputFinishRequested(event):
   output = outputRegistry.get(event.stream_id)
   playbackBuffer = playbackBuffers.get(output.playback_buffer_id)
   speakerSink = adapters.output["actuator.speaker"]
-  output.state = "closing"
+  output.state = "finishing"
   playbackBuffer.markFinal()
   playbackBuffer.waitFinalDrained()
   speakerSink.drain(event.stream_id)
-  speakerSink.close(event.stream_id)
   playbackBuffers.remove(event.stream_id)
   outputRegistry.remove(event.stream_id)
 
   control.send(Event(
-    event_name = "stream.output.closed",
+    event_name = "stream.output.finished",
     user_id = profile.user_id,
     producer_id = profile.device_id,
     session_id = event.session_id,
@@ -633,7 +632,7 @@ FUNCTION handleSpeakerOutputCloseRequested(event):
     stream_type = event.stream_type,
     payload = {
       stream_type = event.stream_type,
-      reason = "speaker_output_closed"
+      reason = "speaker_output_finished"
     }
   ))
 
@@ -648,7 +647,7 @@ FUNCTION handleSpeakerOutputCancelRequested(event):
   outputRegistry.remove(event.stream_id)
 
   control.send(Event(
-    event_name = "stream.output.closed",
+    event_name = "stream.output.cancelled",
     user_id = profile.user_id,
     producer_id = profile.device_id,
     session_id = event.session_id,
@@ -679,7 +678,7 @@ FUNCTION handleAudioSessionCloseRequested(event):
 
 ## 4. 设备消费其他 Server 事件
 
-本节只覆盖注册、实时对话主链路之外的事件。标准协议事件不应该在本节继续扩展含义。`command.requested` 属于标准命令事件族；`stream.output.open.requested` / `stream.output.close.requested` / `stream.output.cancel.requested` 属于标准 output stream 生命周期，已经在第 3 节作为 `actuator.speaker` 下行播放生命周期讲过。为了避免和这些内置事件族冲突，业务扩展必须使用 `custom.*` 事件名。图中 `SDK -> App` 的箭头表示 SDK 调用宿主应用的本地回调，不是控制面协议事件。
+本节只覆盖注册、实时对话主链路之外的事件。标准协议事件不应该在本节继续扩展含义。`command.requested` 属于标准命令事件族；`stream.output.start.requested` / `stream.output.finish.requested` / `stream.output.cancel.requested` 属于标准 output stream 生命周期，已经在第 3 节作为 `actuator.speaker` 下行播放生命周期讲过。为了避免和这些内置事件族冲突，业务扩展必须使用 `custom.*` 事件名。图中 `SDK -> App` 的箭头表示 SDK 调用宿主应用的本地回调，不是控制面协议事件。
 
 SDK 事件路由必须用事件命名空间隔离标准事件和自定义事件，而不是只靠“未命中内置 handler 再兜底”的隐式约定。标准事件继续使用 `control.*`、`stream.*`、`command.*`、`system.*` 等命名空间；所有业务扩展或 App 自定义事件必须使用 `custom.*` 命名空间。
 
@@ -687,7 +686,7 @@ SDK 事件路由必须用事件命名空间隔离标准事件和自定义事件�
 
 1. `event_name` 以 `custom.` 开头：SDK 不进入任何标准内置状态机，只进入自定义事件分发器。
 2. `event_name` 不以 `custom.` 开头：SDK 按标准协议处理，只能进入注册、音频会话、视觉单帧采集、speaker 播放、标准命令等内置状态机。
-3. 标准事件不能再投递给自定义 `on_event`。因此 `stream.output.open.requested (actuator.speaker)` 只会进入 speaker 播放状态机，不会同时触发自定义事件回调。
+3. 标准事件不能再投递给自定义 `on_event`。因此 `stream.output.start.requested (actuator.speaker)` 只会进入 speaker 播放状态机，不会同时触发自定义事件回调。
 
 未来 SDK 应支持的其他消费入口：
 
@@ -771,12 +770,12 @@ FUNCTION dispatchServerEvent(event):
         handleInputCloseRequested(event)
       RETURN
 
-    CASE "stream.output.open.requested":
-      handleStandardOutputOpenRequested(event)
+    CASE "stream.output.start.requested":
+      handleStandardOutputStartRequested(event)
       RETURN
 
-    CASE "stream.output.close.requested":
-      handleStandardOutputCloseRequested(event)
+    CASE "stream.output.finish.requested":
+      handleStandardOutputFinishRequested(event)
       RETURN
 
     CASE "stream.output.cancel.requested":
@@ -963,6 +962,6 @@ STATE DialogClosing:
 3. 实时音频打开：收到 `control.audio_session.open.requested` 后，SDK 建立或复用音频上行和音频下行两条物理链路，确认 `sensor.mic` 可读后回 `control.audio_session.opened`，并在 payload 中声明 `sensor.mic` 上行 stream。
 4. 麦克风连续上传：SDK 在 `control.audio_session.opened` 后持续发送 `sensor.mic` chunk，且 `final=True` 不代表端侧 VAD 语音结束。
 5. 视觉单帧采集：收到 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，上传一个 `final=true` 的 RGB chunk，然后回 `stream.input.closed`。
-6. 输出播放：收到标准 `stream.output.open.requested (actuator.speaker)` 后，SDK 在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，并先回 `stream.output.ready`；server 收到该回执后才能下发音频 chunk。SDK 达到起播水位并开始写 speaker sink 时回 `stream.output.started`；收到 `stream.output.close.requested` 后，等待本地 drain，再回 `stream.output.closed`。
+6. 输出播放：收到标准 `stream.output.start.requested (actuator.speaker)` 后，SDK 在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，并先回 `stream.output.ready`；server 收到该回执后才能下发音频 chunk。SDK 达到起播水位并开始写 speaker sink 时回 `stream.output.started`；收到 `stream.output.finish.requested` 后，等待本地 drain，再回 `stream.output.finished`。
 7. 自定义命令执行：收到 `custom.command.requested` 后，SDK 调用 App 通过 `on_custom_command(...)` 注册的回调；如需回报业务结果，handler 使用 `ctx.emit("custom.<domain>.<event>", payload)`。
 8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、等待播放 drain、回 `control.audio_session.closed`。
