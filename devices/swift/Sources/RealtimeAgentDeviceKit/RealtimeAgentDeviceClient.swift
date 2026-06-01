@@ -666,14 +666,24 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private func handleAudioSessionClose(_ event: RealtimeAgentEvent) async throws -> Bool {
         microphoneTask?.cancel()
         microphoneTask = nil
-        let inputTasks = withStateLock {
+        let closeState = withStateLock {
             let tasks = Array(inputStreamTasks.values)
+            var streamIDs = Set(speakerBuffers.keys)
+            streamIDs.formUnion(speakerPreparationTasks.keys)
+            streamIDs.formUnion(speakerDrainTasks.keys)
+            streamIDs.formUnion(speakerFinishTasks.keys)
             inputStreamTasks = [:]
-            return tasks
+            let speakerCleanups = streamIDs.map { streamID in
+                removeSpeakerPlaybackState(streamID: streamID, markCompleted: true)
+            }
+            return (tasks, speakerCleanups)
         }
-        inputTasks.forEach { $0.cancel() }
-        for streamID in Array(speakerBuffers.keys) {
-            try await drainSpeakerIfNeeded(streamID: streamID)
+        closeState.0.forEach { $0.cancel() }
+        for cleanup in closeState.1 {
+            cleanup.finishTask?.cancel()
+            cleanup.drainTask?.cancel()
+            cleanup.preparationTask?.cancel()
+            await cleanup.buffer?.cancel()
         }
         try await sendEvent(
             name: "control.audio_session.closed",

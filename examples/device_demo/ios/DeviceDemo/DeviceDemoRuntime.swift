@@ -16,6 +16,32 @@ enum DeviceDemoPhase: String {
     case failed = "失败"
 }
 
+/// Device Demo 的失败阶段。
+///
+/// 主要功能：记录失败发生在哪个用户可重试步骤，让 UI 能显示明确的重试按钮。
+enum DeviceDemoFailureStage {
+    case launch
+    case permission
+    case registration
+    case startConversation
+    case closeConversation
+
+    var retryTitle: String {
+        switch self {
+        case .launch:
+            return "启动失败\n重试"
+        case .permission:
+            return "申请权限失败\n重试"
+        case .registration:
+            return "注册失败\n重试"
+        case .startConversation:
+            return "开始失败\n重试"
+        case .closeConversation:
+            return "结束失败\n重试"
+        }
+    }
+}
+
 /// Device Demo 运行时。
 ///
 /// 主要功能：
@@ -29,6 +55,7 @@ final class DeviceDemoRuntime: ObservableObject {
     }
 
     @Published private(set) var phase: DeviceDemoPhase = .launching
+    @Published private(set) var failureStage: DeviceDemoFailureStage?
     @Published private(set) var diagnostics = RealtimeAgentDiagnostics()
     @Published private(set) var logs: [String] = []
 
@@ -44,6 +71,30 @@ final class DeviceDemoRuntime: ObservableObject {
 
     private static let serverURLKey = "DeviceDemo.serverURL"
     private static let defaultServerURL = "http://192.168.10.10:8765"
+
+    /// 主按钮标题。
+    ///
+    /// 主要逻辑：等待态显示开始对话；失败态优先显示具体失败阶段；其他阶段显示当前阶段。
+    /// 参数：无。
+    /// 返回值：用于主按钮展示的多行文字。
+    /// 异常情况：无。
+    var primaryButtonTitle: String {
+        switch phase {
+        case .waiting:
+            return "开始\n音视频对话"
+        case .failed:
+            return failureStage?.retryTitle ?? "失败\n重试"
+        default:
+            return phase.rawValue
+        }
+    }
+
+    /// 主按钮是否可点击。
+    ///
+    /// 主要逻辑：等待态用于开始通话，失败态用于重试；其他中间态禁止重复点击。
+    var isPrimaryButtonEnabled: Bool {
+        phase == .waiting || phase == .failed
+    }
 
     init() {
         serverURL = UserDefaults.standard.string(forKey: Self.serverURLKey) ?? Self.defaultServerURL
@@ -62,6 +113,26 @@ final class DeviceDemoRuntime: ObservableObject {
         guard bootstrapTask == nil else { return }
         bootstrapTask = Task { [weak self] in
             await self?.bootstrapSDK()
+            await MainActor.run {
+                self?.bootstrapTask = nil
+            }
+        }
+    }
+
+    /// 处理主按钮点击。
+    ///
+    /// 主要逻辑：等待态开始通话；失败态根据失败阶段重新执行初始化或开始通话。
+    /// 参数：无。
+    /// 返回值：无。
+    /// 异常情况：具体错误由对应流程写入日志并进入失败状态。
+    func handlePrimaryButtonTap() async {
+        switch phase {
+        case .waiting:
+            await startConversation()
+        case .failed:
+            await retryFailedStep()
+        default:
+            break
         }
     }
 
@@ -74,6 +145,7 @@ final class DeviceDemoRuntime: ObservableObject {
     /// 异常情况：权限被拒绝、server 地址错误或 WebSocket 连接失败时进入失败状态并写入日志。
     func startConversation() async {
         guard phase == .waiting, let client else { return }
+        failureStage = nil
         phase = .startingConversation
         appendLog("start conversation")
 
@@ -83,8 +155,7 @@ final class DeviceDemoRuntime: ObservableObject {
             diagnostics = client.diagnosticsSnapshot()
             appendLog("sdk startConversation sent")
         } catch {
-            phase = .failed
-            appendLog("start failed: \(error.localizedDescription)")
+            fail(stage: .startConversation, error: error, prefix: "start failed")
             cameraPreview.stop()
         }
     }
@@ -100,14 +171,14 @@ final class DeviceDemoRuntime: ObservableObject {
             phase = .waiting
             return
         }
+        failureStage = nil
         phase = .closing
         do {
             try await client.requestConversationClose(reason: "user_tapped_end")
             diagnostics = client.diagnosticsSnapshot()
             appendLog("sdk requestConversationClose sent")
         } catch {
-            phase = .failed
-            appendLog("close request failed: \(error.localizedDescription)")
+            fail(stage: .closeConversation, error: error, prefix: "close request failed")
             return
         }
     }
@@ -155,33 +226,62 @@ final class DeviceDemoRuntime: ObservableObject {
     }
 
     private func bootstrapSDK() async {
+        failureStage = nil
         phase = .launching
         appendLog("bootstrap sdk")
 
+        var currentStage = DeviceDemoFailureStage.launch
         do {
             let client = try makeClient()
             configureCustomEvents(client)
             self.client = client
 
+            currentStage = .permission
             phase = .requestingPermissions
             let permissions = try await client.requestPermissions()
             guard permissions.isAuthorized else {
                 throw DeviceDemoError.permissionDenied("硬件权限未授权：mic=\(permissions.microphone.rawValue) camera=\(permissions.camera.rawValue)")
             }
 
+            currentStage = .registration
             phase = .registering
             _ = try await client.register()
             diagnostics = client.diagnosticsSnapshot()
             startDiagnosticsLoop(client)
+            failureStage = nil
             phase = .waiting
             appendLog("device registered and permissions granted")
         } catch {
-            phase = .failed
-            appendLog("bootstrap failed: \(error.localizedDescription)")
+            fail(stage: currentStage, error: error, prefix: "bootstrap failed")
             await client?.close()
             client = nil
             cameraPreview.stop()
         }
+    }
+
+    private func retryFailedStep() async {
+        let stage = failureStage
+        appendLog("retry failed step: \(String(describing: stage))")
+        switch stage {
+        case .startConversation:
+            if client == nil {
+                bootstrap()
+            } else {
+                phase = .waiting
+                await startConversation()
+            }
+        case .closeConversation:
+            await stopConversation()
+        case .launch, .permission, .registration, .none:
+            bootstrap()
+        }
+    }
+
+    private func fail(stage: DeviceDemoFailureStage, error: Error, prefix: String) {
+        failureStage = stage
+        phase = .failed
+        diagnostics = client?.diagnosticsSnapshot() ?? diagnostics
+        appendLog("\(prefix): \(error.localizedDescription)")
     }
 
     private func configureCustomEvents(_ client: DeviceClient) {

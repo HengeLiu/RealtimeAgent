@@ -64,20 +64,20 @@ private struct StartConversationView: View {
             Spacer()
 
             Button {
-                Task { await runtime.startConversation() }
+                Task { await runtime.handlePrimaryButtonTap() }
             } label: {
                 ZStack {
                     Circle()
                         .stroke(.primary, lineWidth: 2)
                         .frame(width: 230, height: 230)
-                    Text(buttonTitle)
+                    Text(runtime.primaryButtonTitle)
                         .font(.title2.weight(.medium))
                         .multilineTextAlignment(.center)
                         .foregroundStyle(.primary)
                 }
             }
             .buttonStyle(.plain)
-            .disabled(runtime.phase != .waiting)
+            .disabled(!runtime.isPrimaryButtonEnabled)
             .accessibilityLabel("开始音视频对话")
 
             Spacer()
@@ -86,16 +86,6 @@ private struct StartConversationView: View {
         .background(Color(.systemBackground))
     }
 
-    private var buttonTitle: String {
-        switch runtime.phase {
-        case .waiting:
-            return "开始\n音视频对话"
-        case .failed:
-            return "启动失败"
-        default:
-            return runtime.phase.rawValue
-        }
-    }
 }
 
 private struct ConversationView: View {

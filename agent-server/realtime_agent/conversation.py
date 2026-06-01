@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from realtime_agent.agent_core.context import PromptRegistry
-from realtime_agent.observability import LogContext, get_logger, log_error
+from realtime_agent.observability import LogContext, get_logger, log_error, log_info
 
 
 @dataclass(frozen=True)
@@ -305,12 +305,10 @@ class ConversationMemoryService:
         history_rel = str(history_path.relative_to(device_dir))
         previous_summary = self.load_latest_summary(user_id=user_id, device_id=device_id)
         if self.summarizer is None:
-            self._log_summary_failed(
+            self._log_summary_skipped(
                 user_id=user_id,
                 device_id=device_id,
                 reason="message_summarizer_not_configured",
-                error_type="ConversationSummaryError",
-                error_message="message summarizer is not configured",
             )
             return None
         try:
@@ -343,6 +341,36 @@ class ConversationMemoryService:
         self._write_jsonl(messages_path, kept_full)
         self._active_messages[(user_id, device_id)] = kept
         return summary
+
+    def _log_summary_skipped(
+        self,
+        *,
+        user_id: str,
+        device_id: str,
+        reason: str,
+    ) -> None:
+        """记录未配置摘要器时跳过压缩。
+
+        主要逻辑：未配置摘要器是允许的运行模式，只影响历史消息压缩，不影响
+        会话关闭和下一轮对话，因此使用 INFO 级别记录可观测事件。
+        参数：`user_id` 为用户标识，`device_id` 为设备会话标识，`reason` 为跳过原因。
+        返回值：无。
+        异常情况：无。
+        """
+
+        log_info(
+            self.logger,
+            "会话消息摘要未配置，跳过本次压缩",
+            LogContext(
+                user_id=user_id,
+                session_id=device_id,
+                event="conversation.summary.skipped",
+                fields={
+                    "reason": reason,
+                    "detail_path": str(self._device_dir(user_id, device_id) / self.SUMMARY_FILE),
+                },
+            ),
+        )
 
     def _log_summary_failed(
         self,

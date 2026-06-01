@@ -1128,6 +1128,67 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(sink.cancelCalled)
 }
 
+@Test func audioSessionCloseCancelsSpeakerDrainAndReturnsWaiting() async throws {
+    // 测试目标：确认结束对话时不会等待本地 speaker 自然 drain，避免 App 长时间停在“结束中”。
+    // 测试方法：注入永不自然 drain 完成的 speaker sink，先触发 output finish，再触发 audio session close。
+    // 预期结果：SDK 取消 speaker、发送 control.audio_session.closed，并回调 waiting 状态。
+    let transport = MockRealtimeAgentTransport()
+    let sink = BlockingDrainSpeakerSink()
+    let recorder = ConversationStateRecorder()
+    let client = makeClient(
+        transport: transport,
+        speaker: .enabled(buffer: PlaybackBuffer(startWatermarkMS: 20), sink: sink)
+    )
+    client.onConversationStateChange { state in
+        await recorder.append(state)
+    }
+    let chunk = RealtimeAgentStreamChunk(
+        userID: "user-001",
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-close-finish",
+        streamType: "actuator.speaker",
+        seq: 0,
+        payload: Data("pcm0".utf8),
+        codec: "pcm16le",
+        sampleRate: 24000,
+        channels: 1,
+        durationMS: 20
+    )
+    let finish = RealtimeAgentEvent(
+        eventName: "stream.output.finish.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [
+            "stream_type": "actuator.speaker",
+            "output_chunk_count": 1,
+            "output_last_seq": 0,
+        ],
+        sessionID: "dev-ios-001",
+        streamID: "stream-speaker-close-finish",
+        streamType: "actuator.speaker"
+    )
+    let close = RealtimeAgentEvent(
+        eventName: "control.audio_session.close.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [:],
+        sessionID: "dev-ios-001"
+    )
+
+    #expect(try await client.dispatchStreamChunk(chunk))
+    #expect(try await client.dispatchEvent(finish))
+    try await Task.sleep(nanoseconds: 40_000_000)
+    #expect(sink.drainStarted)
+    #expect(try await client.dispatchEvent(close))
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(names.contains("control.audio_session.closed"))
+    #expect(!names.contains("stream.output.finished"))
+    #expect(sink.cancelCalled)
+    #expect(await recorder.snapshot().contains(.waiting))
+}
+
 @Test func speakerPlaybackDoesNotPauseMicrophoneUpload() async throws {
     // 测试目标：确认播放 speaker 下行期间，SDK 仍持续上传 sensor.mic。
     // 测试方法：打开音频会话后立即分发一帧 speaker chunk，同时让麦克风 source 延迟产出三帧 PCM。

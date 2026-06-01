@@ -114,6 +114,36 @@ def test_conversation_memory_service_skips_compaction_when_summarizer_fails(tmp_
     assert any(getattr(record, "error_message", "") == "llm unavailable" for record in caplog.records)
 
 
+def test_conversation_memory_service_logs_info_when_summarizer_not_configured(tmp_path, caplog) -> None:
+    """测试目标：验证未配置摘要器时跳过压缩但不记录错误。
+
+    测试方法：不注入摘要器，写入超过阈值的消息后触发压缩。
+    预期结果：不生成 history 和 summary；active 原文保持不变；终端只记录 INFO 级别跳过事件。
+    """
+
+    service = ConversationMemoryService(tmp_path / "runs", summarizer=None)
+    user_id = "user-a"
+    device_id = "dev-a"
+    for index in range(7):
+        service.append_message(
+            user_id=user_id,
+            device_id=device_id,
+            message={"session_id": device_id, "role": "user", "content": f"第 {index} 条对话"},
+        )
+
+    with caplog.at_level(logging.INFO, logger="realtime_agent.runs"):
+        summary = service.compact_if_needed(user_id=user_id, device_id=device_id, threshold=6, keep_latest=2)
+
+    device_dir = tmp_path / "runs" / user_id / device_id
+    assert summary is None
+    assert len(service.load_active_messages(user_id=user_id, device_id=device_id, limit=10)) == 7
+    assert len(_read_jsonl(device_dir / "messages.jsonl")) == 7
+    assert not (device_dir / "history").exists()
+    assert not (device_dir / "message-summaries.jsonl").exists()
+    assert any("会话消息摘要未配置" in record.getMessage() for record in caplog.records)
+    assert not any(record.levelno >= logging.ERROR for record in caplog.records)
+
+
 def test_conversation_memory_service_restores_active_messages_from_full_messages(tmp_path) -> None:
     """测试目标：验证重启后可从完整 messages.jsonl 恢复内存 active messages。
 
