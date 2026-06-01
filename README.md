@@ -2,9 +2,8 @@
   <img src="docs/assets/realtime-agent-brand.svg" alt="realtime-agent brand logo" width="420" />
   <br />
   <a href="docs/getting-started/developer-overview.md">开发者总览</a> ·
-  <a href="examples/README.md">示例</a> ·
-  <a href="devices">Device SDK</a> ·
   <a href="protocol/README.md">协议</a> ·
+  <a href="examples/README.md">示例</a> ·
   <a href="CONTRIBUTING.md">贡献指南</a>
 </p>
 
@@ -140,13 +139,13 @@ examples/<your-app>/agent-server/capabilities/
 
 当前 SDK 入口：
 
-| SDK | 入口 |
-| --- | --- |
-| Python | [devices/python](devices/python/README.md) |
-| TypeScript | [devices/typescript](devices/typescript/README.md) |
-| Swift | [devices/swift](devices/swift/README.md) |
-| Kotlin / Java | [devices/kotlin](devices/kotlin/README.md) |
-| C | [devices/c](devices/c/README.md) |
+| SDK           | 入口                                            |
+| ------------- | ----------------------------------------------- |
+| Python        | [devices/python](devices/python/README.md)         |
+| TypeScript    | [devices/typescript](devices/typescript/README.md) |
+| Swift         | [devices/swift](devices/swift/README.md)           |
+| Kotlin / Java | [devices/kotlin](devices/kotlin/README.md)         |
+| C             | [devices/c](devices/c/README.md)                   |
 
 设备接入模型见 [端侧 App 接入指南](docs/reference/device-app-integration.md)。
 
@@ -156,10 +155,10 @@ examples/<your-app>/agent-server/capabilities/
 
 `realtime-agent` 支持两类主要模型链路：
 
-| 链路 | 适合场景 | 代价 |
-| --- | --- | --- |
-| Omni / Realtime | 更快跑通实时语音体验，组件更少 | 对 ASR、视觉、LLM、TTS 等单独阶段的控制更少 |
-| VL | 更细控制 ASR、视觉模型、工具、上下文、提示词和 streaming TTS | 组件更多，延迟风险更高，调试成本更高 |
+| 链路            | 适合场景                                                     | 代价                                        |
+| --------------- | ------------------------------------------------------------ | ------------------------------------------- |
+| Omni / Realtime | 更快跑通实时语音体验，组件更少                               | 对 ASR、视觉、LLM、TTS 等单独阶段的控制更少 |
+| VL              | 更细控制 ASR、视觉模型、工具、上下文、提示词和 streaming TTS | 组件更多，延迟风险更高，调试成本更高        |
 
 常见修改包括：
 
@@ -173,16 +172,16 @@ examples/<your-app>/agent-server/capabilities/
 
 ## 核心概念
 
-| 概念 | 含义 |
-| --- | --- |
-| Server SDK | Python 运行时，负责 session、agent loop、工具、任务、上下文、模型 provider 和运行产物。 |
-| Device SDK | 端侧 SDK，用于把真实设备或模拟设备接入 server 协议。 |
-| Device | 注册到 server 的客户端，声明自己的输入、输出、stream、command 或自定义硬件能力。 |
-| Tool | Agent 可以在对话中调用的短生命周期动作。 |
-| Task | Agent 可以启动、观测、发送信号和取消的长流程任务。 |
-| Context API | Tool 和 Task 用来请求设备能力、资产、输出和运行时数据的 SDK 接口。 |
-| Model Lane | 模型执行链路，例如 Omni / Realtime 或 VL。 |
-| Run Artifacts | 记录模型请求、工具事件、stream 事件、输出决策和播放决策的调试产物。 |
+| 概念          | 含义                                                                                    |
+| ------------- | --------------------------------------------------------------------------------------- |
+| Server SDK    | Python 运行时，负责 session、agent loop、工具、任务、上下文、模型 provider 和运行产物。 |
+| Device SDK    | 端侧 SDK，用于把真实设备或模拟设备接入 server 协议。                                    |
+| Device        | 注册到 server 的客户端，声明自己的输入、输出、stream、command 或自定义硬件能力。        |
+| Tool          | Agent 可以在对话中调用的短生命周期动作。                                                |
+| Task          | Agent 可以启动、观测、发送信号和取消的长流程任务。                                      |
+| Context API   | Tool 和 Task 用来请求设备能力、资产、输出和运行时数据的 SDK 接口。                      |
+| Model Lane    | 模型执行链路，例如 Omni / Realtime 或 VL。                                              |
+| Run Artifacts | 记录模型请求、工具事件、stream 事件、输出决策和播放决策的调试产物。                     |
 
 ## 仓库结构
 
@@ -229,14 +228,14 @@ examples/device_demo/agent-server/runs
 
 最常用的文件：
 
-| 文件 | 用途 |
-| --- | --- |
-| `model-request.json` | 查看模型实际收到的消息、工具和上下文。 |
-| `agent-events.jsonl` | 查看服务端 Agent 和 provider 的关键事件。 |
-| `tool-events.jsonl` | 查看工具调用参数、结果、耗时和错误。 |
-| `stream-events.jsonl` | 查看音频、图片、视频和传感器 stream 生命周期。 |
-| `output-decisions.jsonl` | 查看服务端输出仲裁决策。 |
-| `playback-decisions.jsonl` | 查看端侧播放仲裁决策。 |
+| 文件                         | 用途                                           |
+| ---------------------------- | ---------------------------------------------- |
+| `model-request.json`       | 查看模型实际收到的消息、工具和上下文。         |
+| `agent-events.jsonl`       | 查看服务端 Agent 和 provider 的关键事件。      |
+| `tool-events.jsonl`        | 查看工具调用参数、结果、耗时和错误。           |
+| `stream-events.jsonl`      | 查看音频、图片、视频和传感器 stream 生命周期。 |
+| `output-decisions.jsonl`   | 查看服务端输出仲裁决策。                       |
+| `playback-decisions.jsonl` | 查看端侧播放仲裁决策。                         |
 
 这些产物是项目模型的一部分：实时 Agent 不应该只是能跑，还应该能在一次对话之后被排查和复盘。
 

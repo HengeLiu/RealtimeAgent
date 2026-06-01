@@ -1,9 +1,5 @@
 # 开发者总览
 
-<p align="center">
-  <img src="../assets/realtime-agent-logo.svg" alt="realtime-agent logo" width="120" />
-</p>
-
 `realtime-agent` 是一个面向实时语音、视觉输入和多设备协作的 Agent 开发框架。它把大模型对话、工具调用、后台任务、设备能力和运行排障组织成一套可扩展的 Server SDK、Device SDK 和通讯协议。
 
 如果你想做的不只是一个网页聊天机器人，而是一个可以听、说、看、调用设备、调度长流程任务的实时 AI 应用，这个项目可以作为基础框架。
