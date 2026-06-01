@@ -35,7 +35,7 @@ examples/device_demo/
 
 ## 真机运行
 
-先启动 SDK Demo 专用 server。这个配置只用于验证端侧 SDK 的注册、控制事件、音频上行、单帧相机采集和喇叭下行播放链路，不加载 `for-blind-app` 的业务能力：
+先启动 SDK Demo 专用 server。这个配置只用于验证端侧 SDK 的注册、控制事件、音频上行、单帧相机采集和喇叭下行播放链路，不加载外部业务能力：
 
 ```bash
 uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
@@ -60,4 +60,4 @@ examples/device_demo/ios/DeviceDemo.xcodeproj
   -> ../../../devices/swift
 ```
 
-首次启动后，在右上角调试面板里修改 server 地址，然后点击“开始音视频对话”。不要使用 for-blind-app 的旧 iOS 业务 App 或其他业务 App 工程来验证 Swift Device SDK。
+首次启动后，在右上角调试面板里修改 server 地址，然后点击“开始音视频对话”。不要使用外部业务 App 工程来验证 Swift Device SDK。

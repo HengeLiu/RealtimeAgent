@@ -6,7 +6,7 @@
 
 ## 1. 背景
 
-当前仓库已经有较多测试，覆盖协议、Server SDK、Device SDK、开发支持组件和 `for-blind-app` 应用场景。但这些测试尚未形成清晰分层，导致每次修改代码后容易出现几个问题：
+当前仓库已经有较多测试，覆盖协议、Server SDK、Device SDK、开发支持组件和 `external-business-app` 应用场景。但这些测试尚未形成清晰分层，导致每次修改代码后容易出现几个问题：
 
 1. 底层协议变更需要依赖应用场景测试暴露问题，定位成本高。
 2. SDK 能力和应用业务能力混在一起测试，失败后难以判断是 SDK 回归还是 app 回归。
@@ -51,7 +51,7 @@ L3 应用层测试
 skinparam componentStyle rectangle
 
 package "L3 应用层测试" {
-  [for-blind-app Tool/Task]
+  [external-business-app Tool/Task]
   [browser-glass]
   [python-phone]
   [iOS/ESP32 参考端]
@@ -79,7 +79,7 @@ package "P0 协议资产检查" {
   [事件处理规范]
 }
 
-[for-blind-app Tool/Task] --> [Server SDK]
+[external-business-app Tool/Task] --> [Server SDK]
 [browser-glass] --> [Device SDK]
 [python-phone] --> [Device SDK]
 [iOS/ESP32 参考端] --> [Device SDK]
@@ -581,9 +581,9 @@ uv run realtime-agent.test.model.latency
 
 当前已有基础：
 
-- `examples/for-blind-app/tests/`
+- `examples/device_demo/tests/`
 - `examples/dev-support/tests/`
-- `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`
+- `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
 
 ### 6.3 测试档位
 
@@ -615,15 +615,15 @@ iOS、ESP32、真实摄像头、真实麦克风、真实模型。
 建议命令：
 
 ```bash
-uv run python -m pytest examples/for-blind-app/tests -q
+uv run python -m pytest examples/device_demo/tests -q
 uv run python -m pytest examples/dev-support/tests -q
-uv run python -m pytest examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/device_demo/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 后续拆分为：
 
 ```bash
-uv run realtime-agent.test.app.for-blind
+uv run realtime-agent.test.app.external-business
 uv run realtime-agent.test.app.dev-support
 uv run realtime-agent.test.app.replay
 ```
@@ -659,7 +659,7 @@ uv run realtime-agent.test.app.replay
 | 修改 provider adapter | L1 provider contract + L2 对应真实 provider。 |
 | 修改 ASR / TTS / Realtime | L2 对应 provider smoke + L3 关键应用场景。 |
 | 修改 Tool / Task 基础类型 | L1 Tool/Task 协议驱动 runtime + L3 app capabilities。 |
-| 修改 for-blind-app 业务能力 | L3 app 组件集成 + L3 replay。 |
+| 修改 external-business-app 业务能力 | L3 app 组件集成 + L3 replay。 |
 | 修改 browser / phone / iOS / ESP32 端侧参考工程 | P0 相关 fixture 检查 + L1 device contract + L3 端侧联调。 |
 | 修改 runs 产物 | L1 runs contract + L3 场景产物验收。 |
 
@@ -682,7 +682,7 @@ devices/
   kotlin/device/src/test/
   c/tests/
 
-examples/for-blind-app/tests/
+examples/device_demo/tests/
   component/
   integration/
   replay/
@@ -1068,7 +1068,7 @@ uv run python -m pytest \
 
 完成标准：
 
-1. SDK 互操作失败时，不需要启动 for-blind-app 就能定位协议或 SDK 问题。
+1. SDK 互操作失败时，不需要启动 external-business-app 就能定位协议或 SDK 问题。
 2. server 请求 RGB，device 上传 RGB，server 写入资产或 stream 产物。
 3. server 下发 command，device 使用 helper 回执 completed / failed。
 4. output stream 至少覆盖打开、写入、完成或取消中的主路径。
@@ -1117,7 +1117,7 @@ uv run python -m pytest -m model_provider -q
 
 目标：
 
-1. `for-blind-app` 测试只验证应用能力，不承担协议和 SDK 基础能力验证。
+1. `external-business-app` 测试只验证应用能力，不承担协议和 SDK 基础能力验证。
 2. browser-glass、python-phone、python-glass、iOS、ESP32 测试明确区分端侧参考工程和 SDK contract。
 3. 回放测试优先使用 `testdata/audio-sample`、`image-sample`、`video-sample`。
 4. 真机/人工测试有 checklist 和观察点。
@@ -1126,10 +1126,10 @@ uv run python -m pytest -m model_provider -q
 主要产物：
 
 ```text
-examples/for-blind-app/tests/component/
-examples/for-blind-app/tests/integration/
-examples/for-blind-app/replay-tests/
-examples/for-blind-app/app-tests/acceptance/
+examples/device_demo/tests/component/
+examples/device_demo/tests/integration/
+examples/device_demo/replay-tests/
+examples/device_demo/app-tests/acceptance/
 examples/dev-support/tests/
 docs/how-to/cross-device-local-debug.md
 runs/regression-reports/latest/l3-app-report.json
@@ -1161,7 +1161,7 @@ uv run python -m pytest -m replay -q
 4. L1 互操作层已通过真实 WebSocket 验证 Server SDK 与 Python Device SDK 的注册、RGB stream、command 和 output stream 闭环。
 5. L2 大模型接入层已有真实 DashScope ASR、TTS、Vision、Vision tool calling 和 Qwen Omni Realtime smoke，并输出 `runs/provider-tests/latest/` 产物；Realtime 当前仍可能受外部 provider 容量限流影响。
 6. Realtime provider 连接入口已增加 SDK 内部并发限流，默认 `max_concurrent_sessions=10`，避免同一 provider / model / endpoint 在单进程内无限制建立 WebSocket 连接。
-7. L3 应用层已收敛到 for-blind-app 业务能力、真实 WAV 回放和端侧参考工程自动化测试；真机、浏览器摄像头权限和真实硬件音频效果仍需要人工 checklist。
+7. L3 应用层已收敛到 external-business-app 业务能力、真实 WAV 回放和端侧参考工程自动化测试；真机、浏览器摄像头权限和真实硬件音频效果仍需要人工 checklist。
 8. pytest markers 和轻量 JSON 测试报告已经落地，分层命令会写入 `runs/regression-reports/latest/`。
 
 剩余优先级建议：
@@ -1217,7 +1217,7 @@ uv run python -m pytest -m replay -q
   - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
   - `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
   - `agent-server/model-provider-tests/test_dashscope_providers.py`
-  - `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`
+  - `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
 - 验证：
   - `uv run python -m pytest -m protocol_spec -q`，结果：`3 passed`。
   - `uv run python -m pytest -m protocol -q`，结果：`14 passed`。
@@ -1404,8 +1404,8 @@ uv run python -m pytest -m replay -q
 
 ### Phase 7：L3 应用层测试收敛
 
-- 状态：已完成第三轮收敛，dev-support 与 for-blind-app 自动化入口均已通过
-- 目标：让应用层测试只表达 for-blind-app 业务能力、真实样例回放和端侧参考工程可用性，不再承担 P0/L1/L2 的协议资产、SDK 行为和模型接入验证职责。
+- 状态：已完成第三轮收敛，dev-support 与 external-business-app 自动化入口均已通过
+- 目标：让应用层测试只表达 external-business-app 业务能力、真实样例回放和端侧参考工程可用性，不再承担 P0/L1/L2 的协议资产、SDK 行为和模型接入验证职责。
 - 实现：
   - 给 `test_vision_route_audio_samples.py` 中三个真实 WAV 回放测试加 `replay` marker，使 `uv run python -m pytest -m replay -q` 不再是空集合。
   - 将 Python glass 进程内回放端点从兼容占位实现为真正的协议驱动端点：注册设备、发布唤醒和音频会话事件、按 WAV `chunk_ms` 切分 `sensor.mic` chunk，并响应 `sensor.rgb` 单帧请求。
@@ -1414,27 +1414,27 @@ uv run python -m pytest -m replay -q
   - 修复网络回放中的跨 WebSocket 发送节奏：音频 chunk 发送过程中让出事件循环，并在发送 `stream.input.closed` 前给 stream 通道短暂 drain 窗口，避免 control close 先被 server 处理导致 mic chunk 被误判为 late chunk。
   - 将 browser-glass 静态测试对齐当前设计：页面只选择音频 / 图片 / 视频采样资源，不再断言旧的手动 `uploadImageNow` 按钮；RGB 上传必须由 server 请求、CLI 或业务 Task 触发。
   - 将 Python phone mock 旧视觉任务测试对齐当前边界：默认不内置 `find_object_phone_task` / `traffic_light_phone_task` 业务 handler；旧 `phone.task.start` 在未显式注册 handler 时必须通过 `command.failed` 暴露，而不是在参考端里伪造业务能力。
-  - 收敛 for-blind-app acceptance：旧 `find_object_phone_task` / `traffic_light_phone_task` 断言改为验证这些旧任务未注册，主线任务为 `find_object_task` / `traffic_light_task`。
+  - 收敛 external-business-app acceptance：旧 `find_object_phone_task` / `traffic_light_phone_task` 断言改为验证这些旧任务未注册，主线任务为 `find_object_task` / `traffic_light_task`。
   - 补齐 Python playback 参考端的 `register()` 测试夹具入口和 `sensor_profiles` 回放能力；这是测试端点兼容，不是把业务逻辑塞回 SDK。
-  - 修复 for-blind-app 测试夹具中未 await 的 `context.output.say()`，让 Output Service 真实写出播放产物。
+  - 修复 external-business-app 测试夹具中未 await 的 `context.output.say()`，让 Output Service 真实写出播放产物。
   - 将 config sync / iOS / ESP32 静态契约测试对齐结构化 `supports` 和 `properties`，不再断言旧 `routes` 字段或旧 Swift `FindObjectPhoneTaskHandler` token。
   - 修复 ESP32-S3 网络 smoke：注册 payload 声明 `realtime_agent.audio_input/output`，网络端点等待 server 的 audio session open 后再上传 `sensor.mic`，并在播放完成后上报 session closed。
-  - L3 报告输入摘要增加 for-blind-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
+  - L3 报告输入摘要增加 external-business-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。
 - 文件：
-  - `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`
+  - `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
   - `examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`
   - `examples/dev-support/app-tests/network/test_network_server_playback.py`
   - `examples/dev-support/unit-tests/browser/test_browser_device_example.py`
   - `examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py`
-  - `examples/for-blind-app/app-tests/acceptance/test_capability_template_playback.py`
-  - `examples/for-blind-app/app-tests/acceptance/test_for_blind_capabilities_playback.py`
-  - `examples/for-blind-app/app-tests/acceptance/test_phone_visual_task_playback.py`
-  - `examples/for-blind-app/app-tests/config/test_app_name_launch.py`
-  - `examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py`
-  - `examples/for-blind-app/app-tests/endpoints/test_esp32_s3_endpoint_contract.py`
+  - `examples/device_demo/app-tests/acceptance/test_capability_template_playback.py`
+  - `examples/device_demo/app-tests/acceptance/test_example_capabilities_playback.py`
+  - `examples/device_demo/app-tests/acceptance/test_phone_visual_task_playback.py`
+  - `examples/device_demo/app-tests/config/test_app_name_launch.py`
+  - `examples/device_demo/app-tests/config/test_endpoint_config_sync.py`
+  - `examples/device_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py`
   - `examples/device_demo/app-tests/test_ios_device_demo_contract.py`
-  - `examples/for-blind-app/devices/native-esp32-glass/realtime_agent_esp32_s3/esp32_aec.py`
+  - `external-device-repo/esp32-s3/realtime_agent_esp32_s3/esp32_aec.py`
   - `conftest.py`
 - 验证：
   - `uv run python -m pytest -m app -q`，结果：`1 passed`。
@@ -1442,18 +1442,18 @@ uv run python -m pytest -m replay -q
   - `uv run python -m pytest examples/dev-support/unit-tests/playback/test_python_playback.py examples/dev-support/app-tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
   - `uv run python -m pytest examples/dev-support/unit-tests/browser/test_browser_device_example.py examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
   - `uv run python -m pytest examples/dev-support/tests -q`，结果：`62 passed`。
-  - `uv run python -m pytest examples/for-blind-app/app-tests/acceptance/test_phone_visual_task_playback.py examples/for-blind-app/app-tests/config/test_app_name_launch.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py examples/for-blind-app/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_demo/app-tests -q`，结果：`23 passed`。
-  - `uv run python -m pytest examples/for-blind-app/tests -q`，结果：`61 passed`。
+  - `uv run python -m pytest examples/device_demo/app-tests/acceptance/test_phone_visual_task_playback.py examples/device_demo/app-tests/config/test_app_name_launch.py examples/device_demo/app-tests/config/test_endpoint_config_sync.py examples/device_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_demo/app-tests -q`，结果：`23 passed`。
+  - `uv run python -m pytest examples/device_demo/tests -q`，结果：`61 passed`。
 - 运行证据：
   - `runs/regression-reports/latest/l3-app-report.json`
   - `runs/regression-reports/latest/l3-replay-report.json`
   - `runs/regression-reports/latest/summary.md`
 - 当前暴露的问题：
-  - 自动化层面，dev-support 与 for-blind-app 的 L3 测试已收敛到当前协议和应用边界。
+  - 自动化层面，dev-support 与 external-business-app 的 L3 测试已收敛到当前协议和应用边界。
   - 旧视觉任务名仍作为“不能回退”的负向契约保留：旧 `find_object_phone_task` / `traffic_light_phone_task` 不应重新注册。
   - L3 自动化仍不等价于真机验收；browser 摄像头权限、iOS 真机、ESP32 真机和真实 peer video 视觉效果仍需要人工 checklist。
 - 风险：
-  - 当前 L3 自动化已覆盖 for-blind-app 真实 WAV 回放，但浏览器摄像头权限、iOS 真机和 ESP32 真机仍需要人工 checklist。
+  - 当前 L3 自动化已覆盖 external-business-app 真实 WAV 回放，但浏览器摄像头权限、iOS 真机和 ESP32 真机仍需要人工 checklist。
   - 当前 ESP32-S3 network smoke 使用 Vision/mock provider，验证协议闭环和端侧 AEC 计数，不代表真实硬件音频效果。
 
 ### 后续阶段

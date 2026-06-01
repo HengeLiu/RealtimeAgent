@@ -124,8 +124,8 @@ def _inputs_for_layer(layer: str) -> dict[str, Any]:
         }
     if layer in {"app", "replay", "hardware"}:
         inputs["app"] = {
-            "name": "for-blind-app",
-            "root": str(root / "examples/for-blind-app"),
+            "name": "device_demo",
+            "root": str(root / "examples/device_demo"),
             "audio_samples": sorted(str(path) for path in (root / "testdata/audio-sample").glob("*.wav")),
             "image_samples": sorted(str(path) for path in (root / "testdata/image-sample").glob("*")),
             "video_samples": sorted(str(path) for path in (root / "testdata/video-sample").glob("*")),
@@ -133,8 +133,7 @@ def _inputs_for_layer(layer: str) -> dict[str, Any]:
                 "examples/dev-support/devices/browser-glass",
                 "examples/dev-support/devices/python-glass",
                 "examples/dev-support/devices/python-phone",
-                "examples/for-blind-app/devices/native-ios-phone",
-                "examples/for-blind-app/devices/native-esp32-glass",
+                "examples/device_demo/ios",
             ],
             "manual_acceptance_gap": "iOS/ESP32 真机和浏览器摄像头权限需要人工联调确认",
         }

@@ -56,7 +56,7 @@ async def _run_contract() -> None:
                 )
         return ws
 
-    async def stream_ws(request: web.Request) -> web.WebSocketResponse:
+    async def visual_input_ws(request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         async for message in ws:
@@ -65,7 +65,7 @@ async def _run_contract() -> None:
 
     app = web.Application()
     app.router.add_get("/ws/control", control_ws)
-    app.router.add_get("/ws/stream", stream_ws)
+    app.router.add_get("/ws/stream/visual/input", visual_input_ws)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", 0)
@@ -102,7 +102,7 @@ async def _run_contract() -> None:
 def test_python_device_client_registers_and_uploads_stream_over_real_websocket() -> None:
     """测试目标：验证 Python Device SDK 能通过真实 WebSocket 完成注册和 RGB 上传。
 
-    测试方法：启动最小 aiohttp server，SDK 连接 `/ws/control` 和 `/ws/stream`，
+    测试方法：启动最小 aiohttp server，SDK 连接 `/ws/control` 和 `/ws/stream/visual/input`，
     收到 `stream.control.open.requested` 后上传一帧 JPEG payload。
     预期结果：server 收到注册、stream opened/closed 回执和二进制 chunk。
     """

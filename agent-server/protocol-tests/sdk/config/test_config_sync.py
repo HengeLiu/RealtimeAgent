@@ -20,7 +20,7 @@ def test_config_sync_generates_developer_files(tmp_path) -> None:
     预期结果：生成 server、phone mock、glass playback 三类配置和 sync-result.json。
     """
 
-    app_root = tmp_path / "for-blind-app"
+    app_root = tmp_path / "device_demo"
     output_dir = tmp_path / "generated"
     completed = subprocess.run(
         [

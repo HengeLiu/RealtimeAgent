@@ -130,7 +130,6 @@ class StreamRequest:
     ) -> None:
         """写入一帧 stream chunk。"""
 
-        await self.client.ensure_stream()
         chunk = StreamChunk(
             user_id=self.client.user_id,
             session_id=self.client.device_id,
@@ -188,7 +187,7 @@ class RealtimeAgentDeviceClient:
         self.device_id = str(self.device_payload["device_id"])
         self.diagnostics = DeviceDiagnostics()
         self.control_ws: Any = None
-        self.stream_ws: Any = None
+        self.stream_ws_by_type: dict[str, Any] = {}
         self.session: ClientSession | None = None
         self.owns_session = False
         self.heartbeat_task: asyncio.Task[None] | None = None
@@ -306,27 +305,48 @@ class RealtimeAgentDeviceClient:
             return True
         return False
 
-    async def ensure_stream(self) -> None:
-        """确保 stream WebSocket 已连接。"""
+    def _stream_path(self, stream_type: str) -> str:
+        """根据 stream 类型选择正式媒体 WebSocket 路径。
+
+        参数：`stream_type` 是协议中的 stream 类型。
+        返回值：对应的 WebSocket path。
+        异常情况：未知类型抛出 `ProtocolError`，避免落回旧的混合 stream 链路。
+        """
+
+        if stream_type == "sensor.mic":
+            return "/ws/stream/audio/input"
+        if stream_type == "actuator.speaker":
+            return "/ws/stream/audio/output"
+        if stream_type == "sensor.rgb":
+            return "/ws/stream/visual/input"
+        raise ProtocolError(f"unsupported stream_type for media websocket: {stream_type}")
+
+    async def ensure_stream(self, stream_type: str = "sensor.rgb") -> Any:
+        """确保指定类型的媒体 WebSocket 已连接。"""
 
         if self.session is None:
             self.session = ClientSession()
             self.owns_session = True
-        if self.stream_ws is None or self.stream_ws.closed:
-            self.stream_ws = await self.session.ws_connect(ws_url(self.server_url, "/ws/stream", {"device_id": self.device_id}))
-            self.diagnostics.stream_state = "connected"
+        stream_ws = self.stream_ws_by_type.get(stream_type)
+        if stream_ws is None or stream_ws.closed:
+            stream_ws = await self.session.ws_connect(
+                ws_url(self.server_url, self._stream_path(stream_type), {"device_id": self.device_id})
+            )
+            self.stream_ws_by_type[stream_type] = stream_ws
+        self.diagnostics.stream_state = "connected"
+        return stream_ws
 
     async def send_stream_chunk(self, chunk: StreamChunk) -> None:
         """发送一帧 stream chunk。"""
 
-        await self.ensure_stream()
-        await self.stream_ws.send_bytes(StreamChunkCodec.encode(chunk))
+        stream_ws = await self.ensure_stream(chunk.stream_type)
+        await stream_ws.send_bytes(StreamChunkCodec.encode(chunk))
 
-    async def receive_stream_chunk(self, *, timeout: float | None = None) -> StreamChunk:
+    async def receive_stream_chunk(self, *, stream_type: str = "actuator.speaker", timeout: float | None = None) -> StreamChunk:
         """读取一帧下行 stream chunk。"""
 
-        await self.ensure_stream()
-        receive = self.stream_ws.receive()
+        stream_ws = await self.ensure_stream(stream_type)
+        receive = stream_ws.receive()
         message = await asyncio.wait_for(receive, timeout=timeout) if timeout is not None else await receive
         if message.type != WSMsgType.BINARY:
             raise ProtocolError(f"unexpected stream ws message: {message.type}")
@@ -340,8 +360,9 @@ class RealtimeAgentDeviceClient:
 
         if self.heartbeat_task is not None:
             self.heartbeat_task.cancel()
-        if self.stream_ws is not None:
-            await self.stream_ws.close()
+        for stream_ws in self.stream_ws_by_type.values():
+            await stream_ws.close()
+        self.stream_ws_by_type.clear()
         if self.control_ws is not None:
             await self.control_ws.close()
         if self.session is not None and self.owns_session:

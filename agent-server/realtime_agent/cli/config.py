@@ -23,8 +23,8 @@ def sync(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="realtime-agent.config.sync", description="同步 realtime-agent 本地开发配置")
-    parser.add_argument("--app-root", default="examples/for-blind-app/agent-server", help="业务应用根目录")
-    parser.add_argument("--server-config", default="examples/for-blind-app/agent-server/server.yaml", help="源 server YAML")
+    parser.add_argument("--app-root", default="examples/device_demo/agent-server", help="业务应用根目录")
+    parser.add_argument("--server-config", default="examples/device_demo/agent-server/server.yaml", help="源 server YAML")
     parser.add_argument("--playback-config", default="", help="可选源 playback YAML；为空时生成最小 playback 配置")
     parser.add_argument("--server-url", default="http://127.0.0.1:8765", help="各参考端侧使用的 server URL")
     parser.add_argument("--user-id", default="user-playback-001", help="各参考端侧使用的 user_id")

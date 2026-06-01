@@ -17,7 +17,9 @@ server 通讯，不包含业务 Tool / Task、不包含硬件驱动、不依赖 
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
 | Control WebSocket | `/ws/control` | 注册、心跳、命令、stream 生命周期事件。 |
-| Stream WebSocket | `/ws/stream?device_id=<device_id>` | 音频、图片、传感器和播放数据的二进制传输。 |
+| Audio Input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧上传 `sensor.mic` PCM chunk。 |
+| Audio Output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | 端侧接收 server 下发的 `actuator.speaker` chunk。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | server 请求后，端侧上传一帧 `sensor.rgb` 图片。 |
 
 控制事件使用统一信封：
 
@@ -81,7 +83,7 @@ device = (
 
 ### `StreamChunk` / `StreamChunkCodec`
 
-用于 `/ws/stream` 二进制消息编解码：
+用于媒体 WebSocket 二进制消息编解码：
 
 - `StreamChunkCodec.encode(chunk)`
 - `StreamChunkCodec.decode(raw)`
@@ -96,7 +98,7 @@ device = (
 - 发送注册事件。
 - 启动心跳。
 - 发送和接收控制事件。
-- 连接 `/ws/stream`。
+- 按 `stream_type` 连接 `/ws/stream/audio/input`、`/ws/stream/audio/output` 或 `/ws/stream/visual/input`。
 - 发送和接收 stream chunk。
 - 分发 `command.requested` 和 `stream.control.open.requested`。
 

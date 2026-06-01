@@ -1,7 +1,9 @@
 <p align="center">
   <img src="docs/assets/realtime-agent-brand.svg" alt="realtime-agent brand logo" width="420" />
   <br />
-  <a href="docs/getting-started/developer-overview.md">开发者总览</a> ·
+  <a href="docs/tutorials/developer-overview.md">开发者总览</a> ·
+  <a href="agent-server/README.md">Server SDK</a> ·
+  <a href="devices/README.md">Device SDK</a> ·
   <a href="protocol/README.md">协议</a> ·
   <a href="examples/README.md">示例</a> ·
   <a href="CONTRIBUTING.md">贡献指南</a>
@@ -84,13 +86,43 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-在另一个终端打开浏览器眼镜模拟组件：
+本地联调按这个顺序启动：
+
+1. 启动 server：
+
+   ```bash
+   uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+   ```
+
+2. 打开浏览器眼镜模拟组件：
+
+   ```bash
+   uv run realtime-agent.web.open --serve
+   ```
+
+   浏览器组件会作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
+
+3. 可选打开 Swift 真机 demo：
+
+   ```bash
+   uv run realtime-agent.ios.open
+   ```
+
+   真机运行时，在 iOS App 调试面板里把 server 地址改成 Mac 在同一局域网下可访问的地址，例如 `http://192.168.x.x:8765`。
+
+4. 观察设备、播放和运行产物：
+
+   ```bash
+   curl http://127.0.0.1:8765/api/debug/devices
+   curl http://127.0.0.1:8765/api/debug/playback
+   find examples/device_demo/agent-server/runs -maxdepth 3 -type f | sort
+   ```
+
+如果只想快速打开浏览器模拟端，可以直接运行：
 
 ```bash
 uv run realtime-agent.web.open --serve
 ```
-
-浏览器组件会作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
 
 运行一个最小契约测试：
 
@@ -98,7 +130,7 @@ uv run realtime-agent.web.open --serve
 uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
-更多启动、扩展和排障说明见 [开发者总览](docs/getting-started/developer-overview.md)。
+更多启动、扩展和排障说明见 [开发者总览](docs/tutorials/developer-overview.md)。
 
 ## 选择开发路径
 
@@ -147,7 +179,7 @@ examples/<your-app>/agent-server/capabilities/
 | Kotlin / Java | [devices/kotlin](devices/kotlin/README.md)         |
 | C             | [devices/c](devices/c/README.md)                   |
 
-设备接入模型见 [端侧 App 接入指南](docs/reference/device-app-integration.md)。
+设备接入模型见 [端侧 App 接入指南](devices/docs/device-app-integration.md)。
 
 ### 优化模型链路
 
@@ -168,7 +200,7 @@ examples/<your-app>/agent-server/capabilities/
 - 配置 OpenAI-compatible 或 DashScope-compatible 模型服务。
 - 查看 `model-request.json`、`agent-events.jsonl` 以及 stream / playback 日志。
 
-更完整的链路说明见 [开发者总览](docs/getting-started/developer-overview.md)。
+更完整的链路说明见 [开发者总览](docs/tutorials/developer-overview.md)。
 
 ## 核心概念
 
@@ -186,8 +218,8 @@ examples/<your-app>/agent-server/capabilities/
 ## 仓库结构
 
 ```text
-agent-server/   Python server SDK 和服务端运行时
-devices/        Python、TypeScript、Swift、Kotlin/Java、C 的 Device SDK
+agent-server/   Python server SDK 和服务端运行时，见 agent-server/README.md
+devices/        Python、TypeScript、Swift、Kotlin/Java、C 的 Device SDK，见 devices/README.md
 protocol/       共享协议文档、fixture 和协议测试
 examples/       示例应用、设备模拟器、回放测试和硬件参考工程
 docs/           入门文档、参考文档、how-to 文档和设计说明
@@ -241,10 +273,13 @@ examples/device_demo/agent-server/runs
 
 ## 文档
 
-- [开发者总览](docs/getting-started/developer-overview.md)
-- [项目结构](docs/reference/project-layout.md)
-- [端侧 App 接入指南](docs/reference/device-app-integration.md)
-- [CLI 参考](docs/reference/cli.md)
+- [开发者总览](docs/tutorials/developer-overview.md)
+- [第一个 Tool 和 Task](docs/tutorials/build-first-capability.md)
+- [Server SDK](agent-server/README.md)
+- [Device SDK](devices/README.md)
+- [端侧 App 接入指南](devices/docs/device-app-integration.md)
+- [设备事件行为标准](devices/docs/device-event-behavior.md)
+- [CLI 参考](docs/internal/cli.md)
 - [测试说明](docs/testing.md)
 - [协议](protocol/README.md)
 

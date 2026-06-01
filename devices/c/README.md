@@ -13,7 +13,9 @@ ESP-IDF、libwebsockets、Mongoose、POSIX socket 或自己的网络层。
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
 | Control WebSocket | `/ws/control` | 注册、心跳、命令、stream 生命周期事件。 |
-| Stream WebSocket | `/ws/stream?device_id=<device_id>` | 音频、图片、传感器和播放数据。 |
+| Audio Input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧上传 `sensor.mic` PCM chunk。 |
+| Audio Output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | 端侧接收 server 下发的 `actuator.speaker` chunk。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | server 请求后，端侧上传一帧 `sensor.rgb` 图片。 |
 
 控制事件仍然是 JSON。C SDK 当前只帮助构造注册 payload，不直接实现完整 JSON 事件
 序列化。推荐设备端用项目已有 JSON 库组合事件信封：
@@ -170,7 +172,7 @@ idf_component_register(
 4. 构造 `control.device.register.requested` JSON 并发送。
 5. 收到 `control.device.registered` 后定期发送心跳。
 6. 收到 `stream.control.open.requested` 后打开硬件。
-7. 用 `realtime_agent_stream_encode()` 上传二进制帧到 `/ws/stream`。
+7. 按 `stream_type` 用 `realtime_agent_stream_encode()` 上传二进制帧到对应媒体 WebSocket。
 8. 收到关闭或断线后释放硬件资源。
 
 ## 测试

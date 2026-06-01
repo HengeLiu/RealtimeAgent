@@ -10,9 +10,6 @@ from realtime_agent.tasks import BaseTask, TaskAutoDiscovery
 from realtime_agent.tools import BaseTool, ToolAutoDiscovery, ToolError
 
 
-FIXTURE_ROOT = Path(__file__).resolve().parents[3] / "examples" / "for-blind-app" / "app-tests" / "fixtures" / "for_blind_app"
-
-
 def clear_capabilities_modules() -> None:
     """清理测试中复用的 `capabilities` 模块缓存。"""
 
@@ -21,15 +18,32 @@ def clear_capabilities_modules() -> None:
             sys.modules.pop(name, None)
 
 
-def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path) -> None:
+def test_example_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path) -> None:
     """测试目标：确认开发者新增能力后不修改 server 内部代码即可自动注册。
 
-    测试方法：把测试 app-root 加入 sys.path，配置 Tool / Task 递归发现 `capabilities`。
+    测试方法：临时创建 app-root 能力包，配置 Tool / Task 递归发现 `capabilities`。
     预期结果：`capture_photo` Tool 和 `timer` Task 都进入注册表。
     """
 
+    fixture_root = tmp_path / "example_app"
+    capability_root = fixture_root / "capabilities"
+    capability_root.mkdir(parents=True)
+    (capability_root / "__init__.py").write_text("", encoding="utf-8")
+    (capability_root / "tools.py").write_text(
+        "from realtime_agent.tools import BaseTool\n"
+        "class CapturePhotoTool(BaseTool):\n"
+        "    name = 'capture_photo'\n",
+        encoding="utf-8",
+    )
+    (capability_root / "tasks.py").write_text(
+        "from realtime_agent.tasks import BaseTask\n"
+        "class TimerTask(BaseTask):\n"
+        "    task_type = 'timer'\n",
+        encoding="utf-8",
+    )
+
     clear_capabilities_modules()
-    monkeypatch.syspath_prepend(str(FIXTURE_ROOT))
+    monkeypatch.syspath_prepend(str(fixture_root))
     config = RealtimeAgentConfig(
         runs_root=str(tmp_path / "runs"),
         asset_root=str(tmp_path / "runs" / "assets"),
@@ -48,8 +62,8 @@ def test_for_blind_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_
     assert app.discovery_errors == []
 
 
-def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_path, monkeypatch) -> None:
-    """测试目标：冻结 for-blind-app 开发者自动发现契约。
+def test_example_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_path, monkeypatch) -> None:
+    """测试目标：冻结示例应用开发者自动发现契约。
 
     测试方法：临时生成能力包，包含内部类和重复名称。
     预期结果：内部类不注册，重复 Tool / Task 名称 fail fast。
@@ -98,20 +112,20 @@ def test_for_blind_app_discovery_contract_skips_internal_and_fails_duplicates(tm
         TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
 
-def test_example_for_blind_app_files_are_copyable() -> None:
+def test_device_demo_files_are_copyable() -> None:
     """测试目标：确认仓库内提供可复制的最小 app-root 示例。
 
-    测试方法：检查示例 README、配置、Tool、Task 和宿主入口文件存在。
-    预期结果：功能开发者能从 `examples/for-blind-app` 开始复制开发。
+    测试方法：检查 device_demo README、配置和 iOS 宿主入口文件存在。
+    预期结果：端侧开发者能从 `examples/device_demo` 开始复制开发。
     """
 
-    project_root = Path(__file__).resolve().parents[3] / "examples" / "for-blind-app"
+    project_root = Path(__file__).resolve().parents[3] / "examples" / "device_demo"
     root = project_root / "agent-server"
     assert (project_root / "README.md").exists()
     expected = [
         "server.yaml",
-        "capabilities/tools.py",
-        "capabilities/tasks.py",
+        "../ios/DeviceDemo/DeviceDemoRuntime.swift",
+        "../ios/DeviceDemo/ContentView.swift",
     ]
 
     missing = [item for item in expected if not (root / item).exists()]

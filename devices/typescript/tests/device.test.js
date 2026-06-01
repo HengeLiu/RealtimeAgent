@@ -64,5 +64,8 @@ test("RealtimeAgentEvent rejects invalid protocol envelope fixtures", () => {
 
 test("wsUrl converts http URLs to websocket URLs", () => {
   assert.equal(wsUrl("http://127.0.0.1:8765", "/ws/control"), "ws://127.0.0.1:8765/ws/control");
-  assert.equal(wsUrl("https://example.test", "/ws/stream", { device_id: "d1" }), "wss://example.test/ws/stream?device_id=d1");
+  assert.equal(
+    wsUrl("https://example.test", "/ws/stream/visual/input", { device_id: "d1" }),
+    "wss://example.test/ws/stream/visual/input?device_id=d1",
+  );
 });

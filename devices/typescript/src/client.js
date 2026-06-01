@@ -18,7 +18,7 @@ export class RealtimeAgentDeviceClient {
     this.deviceId = this.devicePayload.device_id;
     this.WebSocketImpl = WebSocketImpl;
     this.controlWs = null;
-    this.streamWs = null;
+    this.streamWsByType = new Map();
   }
 
   event(eventName, payload = {}, extra = {}) {
@@ -40,14 +40,23 @@ export class RealtimeAgentDeviceClient {
     this.controlWs.send(event.toJson ? event.toJson() : JSON.stringify(event));
   }
 
-  ensureStream() {
-    if (!this.streamWs || this.streamWs.readyState > 1) {
-      this.streamWs = new this.WebSocketImpl(wsUrl(this.serverUrl, "/ws/stream", { device_id: this.deviceId }));
+  streamPath(streamType) {
+    if (streamType === "sensor.mic") return "/ws/stream/audio/input";
+    if (streamType === "actuator.speaker") return "/ws/stream/audio/output";
+    if (streamType === "sensor.rgb") return "/ws/stream/visual/input";
+    throw new Error(`unsupported stream_type for media websocket: ${streamType}`);
+  }
+
+  ensureStream(streamType = "sensor.rgb") {
+    let streamWs = this.streamWsByType.get(streamType);
+    if (!streamWs || streamWs.readyState > 1) {
+      streamWs = new this.WebSocketImpl(wsUrl(this.serverUrl, this.streamPath(streamType), { device_id: this.deviceId }));
+      this.streamWsByType.set(streamType, streamWs);
     }
-    return this.streamWs;
+    return streamWs;
   }
 
   sendStreamChunk(chunk) {
-    this.ensureStream().send(StreamChunkCodec.encode(chunk));
+    this.ensureStream(chunk.streamType).send(StreamChunkCodec.encode(chunk));
   }
 }

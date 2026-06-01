@@ -6,8 +6,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[3]
 EXAMPLE_ROOTS = [
-    ROOT / "examples" / "for-blind-app" / "agent-server" / "capabilities",
-    ROOT / "examples" / "for-blind-app" / "templates",
+    ROOT / "examples" / "dev-support" / "agent-server" / "capabilities",
 ]
 
 
@@ -21,7 +20,7 @@ def _python_files() -> list[Path]:
 def test_examples_and_migration_templates_use_realtime_agent_top_level_api() -> None:
     """测试目标：冻结示例和迁移样板只能依赖 `realtime_agent` 顶层开发者 API。
 
-    测试方法：AST 扫描 examples/for-blind-app 与 examples/for-blind-app/templates 下的 Python 文件。
+    测试方法：AST 扫描 dev-support 的示例能力包 Python 文件。
     预期结果：不出现 `realtime_agent.tools`、`realtime_agent.tasks`、`realtime_agent.control`、
     `realtime_agent.stream`、`realtime_agent.asset`、`realtime_agent.output` 等内部模块导入。
     """

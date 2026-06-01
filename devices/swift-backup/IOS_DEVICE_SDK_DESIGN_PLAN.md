@@ -6,7 +6,7 @@ Swift 代码完成和 realtime-agent server 的实时音视频协作，并能响
 通过协议下发的端侧事件。
 
 本文以当前 `realtime-agent.v1` 协议为准。SDK 只负责端侧通讯、媒体采集播放适配和协议
-生命周期管理，不内置 for-blind-app 的业务 Task 逻辑，也不依赖 Server SDK 内部对象。
+生命周期管理，不内置 external-business-app 的业务 Task 逻辑，也不依赖 Server SDK 内部对象。
 
 ## 当前状态
 
@@ -76,7 +76,7 @@ try await client.startSpeaker()
 2. 不绕过 server 新增端侧私有 RPC。
 3. 不把音频、图片、视频 bytes 放进 control event。
 4. 不把 `device_id` 当作业务路由 API 暴露给应用层。
-5. 不在 SDK 内部直接依赖 `examples/for-blind-app`。
+5. 不在 SDK 内部直接依赖 `examples/device_demo`。
 6. 不承诺第一版支持 WebRTC；当前协议主路径仍是 control event 加 `/ws/stream`。
 
 ## 协议边界
@@ -109,10 +109,12 @@ SDK 负责发送和接收以下事件：
 
 ### Stream 通道
 
-stream 通道使用：
+媒体 stream 通道按方向和媒体类型拆分：
 
 ```text
-/ws/stream?device_id=<device_id>
+/ws/stream/audio/input?device_id=<device_id>
+/ws/stream/audio/output?device_id=<device_id>
+/ws/stream/visual/input?device_id=<device_id>
 ```
 
 二进制帧格式保持当前实现：
@@ -556,7 +558,7 @@ swift test
 
 ### Phase 3：迁移 iOS 参考端通用运行时
 
-目标：减少 `examples/for-blind-app/devices/native-ios-phone` 中的协议重复实现。
+目标：减少 `examples/device_demo/ios` 中的协议重复实现。
 
 任务：
 
@@ -569,7 +571,7 @@ swift test
 验收：
 
 ```bash
-cd examples/for-blind-app/devices/native-ios-phone
+cd examples/device_demo/ios
 xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
@@ -577,8 +579,8 @@ xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=
 
 ```bash
 uv run python -m pytest \
-  examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py \
-  examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py \
+  examples/device_demo/app-tests/endpoints/test_ios_phone_endpoint_contract.py \
+  examples/device_demo/app-tests/config/test_endpoint_config_sync.py \
   -q
 ```
 
@@ -677,7 +679,7 @@ devices/swift/Tests/RealtimeAgentDeviceKitTests/
 至少保留：
 
 ```bash
-cd examples/for-blind-app/devices/native-ios-phone
+cd examples/device_demo/ios
 xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 16' build
 ```
 
@@ -742,7 +744,8 @@ xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=
   Device SDK。
 - 实现：新增 `RealtimeAgentDeviceClient`、`RealtimeAgentDiagnostics`、
   `RealtimeAgentClientConfiguration` 和 `URLSessionRealtimeAgentTransport`。客户端支持
-  `/ws/control`、`/ws/stream?device_id=...`、注册成功等待、注册失败抛错、自动心跳、诊断快照。
+  `/ws/control`、`/ws/stream/audio/input?device_id=...`、`/ws/stream/audio/output?device_id=...`、
+  `/ws/stream/visual/input?device_id=...`、注册成功等待、注册失败抛错、自动心跳、诊断快照。
 - 文件：
   - `Sources/RealtimeAgentDeviceKit/RealtimeAgentDeviceClient.swift`
   - `Sources/RealtimeAgentDeviceKit/RealtimeAgentDiagnostics.swift`
@@ -772,7 +775,7 @@ xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=
 ### Phase 3：迁移 iOS 参考端通用运行时
 
 - 状态：已完成。
-- 目标：让 `examples/for-blind-app/devices/native-ios-phone` 复用 Swift Package 的事件模型、codec
+- 目标：让 `examples/device_demo/ios` 复用 Swift Package 的事件模型、codec
   和客户端。
 - 实现：为 `RealtimeAgentPhone.xcodeproj` 增加本地 `RealtimeAgentDeviceKit` Swift Package
   依赖；将参考端本地 `RealtimeAgentEvent.swift` 和 `StreamChunkCodec.swift` 从 target Sources
@@ -833,6 +836,6 @@ xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=
   - `IOS_DEVICE_SDK_DESIGN_PLAN.md`
 - 验证：
   - `cd devices/swift && swift test`：通过 17 个用例。
-  - `uv run python -m pytest examples/for-blind-app/app-tests/endpoints/test_ios_phone_endpoint_contract.py examples/for-blind-app/app-tests/config/test_endpoint_config_sync.py -q`：通过 9 个用例。
-  - `cd examples/for-blind-app/devices/native-ios-phone && xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 17' build`：构建通过。
+  - `uv run python -m pytest examples/device_demo/app-tests/endpoints/test_ios_phone_endpoint_contract.py examples/device_demo/app-tests/config/test_endpoint_config_sync.py -q`：通过 9 个用例。
+  - `cd examples/device_demo/ios && xcodebuild -scheme RealtimeAgentPhone -destination 'platform=iOS Simulator,name=iPhone 17' build`：构建通过。
 - 待验收：真实 iPhone 与 server 的注册、语音上传、扬声器播放、RGB 采集和 runs 产物检查仍需真机联调。

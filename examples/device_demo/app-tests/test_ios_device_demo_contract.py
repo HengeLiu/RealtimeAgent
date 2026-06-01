@@ -18,7 +18,7 @@ def test_device_demo_ios_project_uses_local_swift_device_sdk() -> None:
     """测试目标：确认 Swift Device SDK 验证入口只依赖本仓库 SDK。
 
     测试方法：读取 DeviceDemo Xcode 工程，检查本地 Swift Package 引用和 target。
-    预期结果：工程引用 `../../../devices/swift`，不引用 for-blind-app 或其他工作区。
+    预期结果：工程引用 `../../../devices/swift`，不引用外部业务 App 或其他工作区。
     """
 
     project = _read("ios/DeviceDemo.xcodeproj/project.pbxproj")
@@ -27,13 +27,12 @@ def test_device_demo_ios_project_uses_local_swift_device_sdk() -> None:
     assert "RealtimeAgentDeviceKit" in project
     assert "XCLocalSwiftPackageReference \"../../../devices/swift\"" in project
     assert "relativePath = ../../../devices/swift;" in project
-    assert "for-blind-app" not in project
-    assert "AIGlassForBlind" not in project
+    assert "AIGlass" not in project
     assert "OpenAIglassesDemo/devices/swift" not in project
 
 
 def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() -> None:
-    """测试目标：确认 DeviceDemo 是 SDK 验证 App，不承载 for-blind 业务逻辑。
+    """测试目标：确认 DeviceDemo 是 SDK 验证 App，不承载外部业务逻辑。
 
     测试方法：静态检查 Swift 运行时、调试日志和硬件 enable 配置。
     预期结果：App 只通过 `DeviceClient` 启用麦克风、单帧相机和 speaker，并调用 SDK 高层对话 API。
@@ -62,7 +61,7 @@ def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() ->
 
     for forbidden in [
         "import AVFoundation",
-        "for-blind-app",
+        "AIGlass",
         "RealtimeAgentPhone",
         "DirectCameraSinkServer",
         "requestMediaPermissions",
@@ -77,12 +76,12 @@ def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() ->
         assert forbidden not in source
 
 
-def test_device_demo_server_config_is_independent_from_for_blind_app() -> None:
+def test_device_demo_server_config_is_independent_from_external_business_app() -> None:
     """测试目标：确认真机 SDK 验证使用独立 server 配置。
 
     测试方法：读取 `examples/device_demo/agent-server/server.yaml`。
     预期结果：配置名为 `device_demo`，使用真实 provider，禁用 mock fallback，
-    不加载 for-blind 业务能力。
+    不加载外部业务能力。
     """
 
     config = yaml.safe_load(_read("agent-server/server.yaml"))

@@ -2,11 +2,11 @@
 #
 # 使用方式：
 # 1. 业务应用真正加载的文件名必须是 app 根目录下的 server.yaml。
-# 2. 可以把本文件复制到 examples/for-blind-app/agent-server/server.yaml 后按需删减注释。
+# 2. 可以把本文件复制到自己的 app-root/agent-server/server.yaml 后按需删减注释。
 # 3. 密钥不要写进 YAML，统一通过环境变量传入，例如 DASHSCOPE_API_KEY。
 
 # 应用名。未配置时，SDK 会用 server.yaml 所在目录名作为 app_name。
-app-name: "for-blind-app"
+app-name: "example-app"
 
 # paths 控制运行产物的基础路径。
 paths:
@@ -235,7 +235,7 @@ tools:
   discover:
     # true 表示扫描 packages 中继承 BaseTool 的类。
     enabled: true
-    # 业务工具包列表；for-blind-app 会由 app loader 自动加入 capabilities 包。
+    # 业务工具包列表；app loader 会按 app-root 自动加入 capabilities 包。
     packages: []
     # 是否递归扫描子模块。开发者 app 建议 true。
     recursive: true
@@ -258,7 +258,7 @@ tasks:
   discover:
     # true 表示扫描 packages 中继承 BaseTask 的类。
     enabled: true
-    # 业务任务包列表；for-blind-app 会由 app loader 自动加入 capabilities 包。
+    # 业务任务包列表；app loader 会按 app-root 自动加入 capabilities 包。
     packages: []
     # 是否递归扫描子模块。开发者 app 建议 true。
     recursive: true

@@ -2,177 +2,72 @@
 
 ## 项目定位
 
-`realtime-agent` 是一个面向语音交互、多设备协作和实时数据流的服务端 Python SDK，加上可运行的示例应用、真实端侧参考工程和开发/测试支持组件。AI 编程代理进入本仓库时，默认应把它当作“SDK + 示例应用 + 多端协议 + 开发支持组件”仓库处理，而不是单一业务脚本项目。
+`realtime-agent` 是面向语音交互、多设备协作和实时数据流的 Server SDK + 多语言 Device SDK + 示例和开发支持组件仓库。AI 编程代理进入本仓库时，默认按“SDK、协议、端侧参考、开发支持组件、文档体系”共同维护，而不是单一业务脚本项目。
 
-核心目标：
+核心边界：
 
-- 服务端负责设备注册、控制事件、数据流生命周期、Agent Core、工具 / 任务调度、输出播放仲裁和运行产物记录。
-- 端侧负责录音、播放、相机、传感器、震动、视频显示、硬件驱动和控制信令处理。
-- 业务能力通过应用目录下的工具 / 任务暴露给 Agent，不直接写进 SDK 核心包。
-- `legacy/` 只作为旧实现和迁移参考，除非任务明确要求，不要从 `legacy/` 开始改主线功能。
+- Server SDK 负责设备注册、控制事件、数据流生命周期、Agent Core、工具 / 任务调度、输出播放仲裁和运行产物记录。
+- Device SDK / 端侧负责录音、播放、相机、传感器、震动、视频显示、硬件驱动和控制信令处理。
+- 业务能力通过应用目录下的 Tool / Task 暴露给 Agent，不写进 SDK 核心包。
+- `examples/dev-support/` 是开发和测试支持组件，不是正式产品形态。
+- `legacy/` 只作为迁移参考，除非任务明确要求，不要从 `legacy/` 开始改主线功能。
+
+## 权威文档入口
+
+重复信息以这些文档为准，`AGENTS.md` 只保留开发代理需要立刻遵守的规则：
+
+- [README.md](README.md)：项目入口、快速开始、本地多设备启动顺序。
+- [docs/README.md](docs/README.md)：社区向文档导航。
+- [docs/tutorials/developer-overview.md](docs/tutorials/developer-overview.md)：开发者总体导览。
+- [docs/tutorials/build-first-capability.md](docs/tutorials/build-first-capability.md)：第一个 Tool / Task。
+- [docs/internal/cli.md](docs/internal/cli.md)：CLI 命令参考。
+- [docs/testing.md](docs/testing.md)：测试分层、测试命令和验收边界。
+- [agent-server/README.md](agent-server/README.md)：Server SDK 目录和职责。
+- [devices/README.md](devices/README.md)：多语言 Device SDK 目录和协议入口。
+- [agent-server/docs/README.md](agent-server/docs/README.md)：Server SDK 内部设计文档索引。
+- [agent-server/docs/reference/上下文设备接口设计.md](agent-server/docs/reference/上下文设备接口设计.md)：Context 与设备 API 目标设计。
+- [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)：runs 产物和排障入口。
+- [examples/device_demo/README.md](examples/device_demo/README.md)：Swift Device SDK 真机 demo。
+
+修改目录结构、命令行、协议、运行产物或跨设备流程时，必须同步更新上面的对应文档。文档中的命令、测试结果和真实实现必须一致。
 
 ## 主要目录
 
 ```text
-agent-server/realtime_agent/          # SDK 主体，Python 导入名 realtime_agent
+agent-server/realtime_agent/      # Server SDK 主包，Python 导入名 realtime_agent
+agent-server/unit-tests/          # Server SDK 单元测试和 CLI 边界测试
+agent-server/protocol-tests/      # Server SDK 协议行为和系统级契约测试
+agent-server/model-provider-tests/# 真实模型 provider 集成测试
+agent-server/docs/                # Server SDK 内部设计、Context API、运行产物说明
+devices/                          # 多语言 Device SDK
 protocol/                         # 协议说明、协议数据资产和协议资产检查
-agent-server/unit-tests/          # Server SDK 单元测试和 CLI 轻量边界
-agent-server/protocol-tests/      # Server SDK L1 协议行为测试
-agent-server/model-provider-tests/ # L2 大模型接入测试
-devices/python/unit-tests/   # Python Device SDK 单元测试
-devices/python/protocol-tests/ # Python Device SDK L1 协议行为测试
-agent-server/docs/                # SDK 内部设计、上下文 API、运行产物说明
-docs/                             # 社区向文档、快速开始、教程、命令行和项目结构说明
-examples/for-blind-app/           # 当前主要示例应用
-examples/dev-support/             # 浏览器眼镜、Python 手机、Python 眼镜等开发/测试支持组件
+docs/                             # 社区向文档、教程、CLI、测试说明
+examples/device_demo/             # Swift Device SDK 真机验证示例
+examples/dev-support/             # browser-glass、Python phone、Python playback 等开发支持组件
 testdata/                         # 可复用测试和回放样例
-legacy/                           # 旧项目代码，仅迁移参考
-```
-
-SDK 关键模块：
-
-```text
-agent-server/realtime_agent/
-  agent_core/       # 文本 / 实时音频 Agent Core
-  asset/            # 图片、音频等资产服务
-  audio_pipeline/   # 音频输入输出链路
-  cli/              # realtime-agent.* 命令入口
-  control/          # 设备注册、控制事件、事件路由
-  output/           # 输出服务与播放仲裁
-  stream/           # 数据流生命周期和字节传输
-  spec/             # 随包 JSON schema
-  context.py        # ToolContext / TaskContext 等上下文类型
-  tools.py          # BaseTool / ToolResult 等工具基础类型
-  tasks.py          # BaseTask 等任务基础类型
-```
-
-示例应用入口：
-
-```text
-examples/for-blind-app/agent-server/
-  server.yaml
-  capabilities/
-    tools.py
-    tasks.py
-  runs/             # 本地运行产物，不能提交
-```
-
-开发/测试支持组件和真实端侧参考入口：
-
-```text
-examples/dev-support/devices/browser-glass/
-examples/dev-support/devices/python-glass/
-examples/dev-support/devices/python-phone/
-examples/for-blind-app/devices/native-ios-phone/
-examples/for-blind-app/devices/native-esp32-glass/
+legacy/                           # 旧实现和迁移参考
 ```
 
 ## 开发环境
 
-使用 Python 3.11。`pyproject.toml` 限定 `>=3.11,<3.13`，本地优先用 `uv`：
-
-```bash
-uv sync --python 3.11
-uv pip install -e .
-```
-
-如果 `uv run realtime-agent.*` 找不到命令，先重新执行 editable 安装。不要默认使用系统 Python 跑测试；如果必须临时排障，先说明解释器版本和 `PYTHONPATH` 差异。
-
-常用依赖和入口来自 `pyproject.toml`：
-
-- 运行依赖：`aiohttp`、`dashscope`、`openai`、`opencv-python`、`pydantic`、`pyyaml`。
-- 测试依赖：`pytest`。
-- pytest 已配置 `pythonpath`，覆盖 `agent-server`、Python 参考端和 ESP32 参考包路径。
-
-## 常用命令
-
-启动主示例应用：
-
-```bash
-uv run realtime-agent.server.run --app-name for-blind-app
-```
-
-按配置启动：
-
-```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
-```
-
-健康检查和调试接口：
-
-```bash
-curl http://127.0.0.1:8765/api/health
-curl http://127.0.0.1:8765/api/debug/devices
-curl http://127.0.0.1:8765/api/debug/playback
-```
-
-校验设备能力文件：
-
-```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
-```
-
-打开浏览器眼镜模拟组件：
-
-```bash
-uv run realtime-agent.web.open --serve
-```
-
-Python 手机简单 mock 组件：
-
-```bash
-uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-```
-
-Python 手机 RGB 预览端：
-
-```bash
-uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
-```
-
-Python 眼镜播放端：
-
-```bash
-uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
-```
-
-iOS 参考端：
-
-```bash
-uv run realtime-agent.ios.open
-uv run realtime-agent.ios.build-sim
-```
-
-ESP32-S3 参考端：
-
-```bash
-uv run realtime-agent.esp32.config
-uv run realtime-agent.esp32.build --dry-run
-```
-
-预检和发布包检查：
-
-```bash
-uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml
-uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
-```
+- 使用 Python 3.11；`pyproject.toml` 限定 `>=3.11,<3.13`。
+- 本地优先使用 `uv sync --python 3.11` 和 `uv pip install -e .`。
+- 不要默认使用系统 Python 跑测试；如果临时排障必须使用，说明解释器版本和 `PYTHONPATH` 差异。
+- 如果 `uv run realtime-agent.*` 找不到命令，先重新执行 editable 安装。
 
 ## 架构边界
 
-新代码必须优先遵守这些边界：
-
 - SDK 核心包 `realtime_agent` 提供通用能力，不放具体业务逻辑。
-- 示例应用的业务工具 / 任务放在 `examples/<app>/agent-server/capabilities/`。
-- 工具 / 任务只能通过 `ToolContext` / `TaskContext` 访问设备、资产、输出和上下文能力，不直接操作 WebSocket、内部服务对象或硬编码 `device_id`。
-- 麦克风和扬声器属于系统音频主链路，不作为普通设备 `supports` capability 暴露。
+- 应用业务 Tool / Task 放在 `examples/<app>/agent-server/capabilities/` 或外部应用自己的 app-root。
+- Tool / Task 只能通过 `ToolContext` / `TaskContext` 访问设备、资产、输出和上下文能力，不直接操作 WebSocket、内部服务对象或硬编码 `device_id`。
+- 麦克风和扬声器属于系统音频主链路，不作为普通设备 `supports` capability 暴露给业务 Tool / Task。
 - 图片、音频、视频、深度图等大字节数据必须走数据流或资产服务，不放进控制信令 JSON。
 - 设备开发者只需要实现注册、能力声明、控制事件处理和数据流读写，不应该理解或依赖 Agent Core 内部实现。
-- `legacy/` 中的旧路径、旧协议和旧配置名不能直接复制到主线代码；如果借鉴旧逻辑，先确认当前 `realtime_agent` 的公开 API 和文档。
+- `legacy/` 中的旧路径、旧协议和旧配置名不能直接复制到主线代码；借鉴旧逻辑前先确认当前公开 API 和文档。
 
-## 工具和任务开发规则
+## Tool / Task 规则
 
-一次性、短生命周期动作写工具；持续运行、订阅数据流、维护状态或后台流程写任务。
+一次性、短生命周期动作写 Tool；持续运行、订阅数据流、维护状态或后台流程写 Task。
 
 公开导入优先使用：
 
@@ -180,7 +75,7 @@ uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.
 from realtime_agent import BaseTask, BaseTool, TaskContext, ToolContext, ToolResult
 ```
 
-工具常用能力：
+常用能力：
 
 - `context.devices.sensors.rgb.one()`：请求单帧 RGB 资产。
 - `context.devices.actuators.vibrator.one()`：请求震动等执行器。
@@ -188,34 +83,11 @@ from realtime_agent import BaseTask, BaseTool, TaskContext, ToolContext, ToolRes
 - `context.output.say()`：生成用户可听输出。
 - `context.assets.get()`：读取资产。
 
-任务在工具能力基础上可以使用持续数据流和命令订阅能力，例如 `.stream()`、`commands.start()`、`commands.subscribe_result()`。
+新增能力时先判断 Tool 还是 Task，再写清端侧能力需求，确认设备能力文件，补测试或可复现联调流程，并检查 `runs/` 产物。
 
-新增能力建议顺序：
+## 协议规则
 
-1. 判断能力应该实现为工具还是任务。
-2. 写清楚需要哪些端侧能力，例如 `rgb`、`imu`、`tof`、`vibrator`。
-3. 确认设备能力文件已经声明对应能力。
-4. 通过上下文 API 请求设备能力，不绕过上下文。
-5. 补充 pytest 或可复现联调流程。
-6. 检查 `runs/` 产物，确认模型请求、工具调用、设备事件和输出链路都符合预期。
-
-## 设备协议和能力声明
-
-当前设备能力文件以结构化 `supports` 为准。示例：
-
-```yaml
-supports:
-  sensors:
-    - type: rgb
-      modes: [single, continuous]
-      default:
-        format: jpeg
-        frequency_hz: 1
-        sample_count: 1
-  actuators:
-    - type: vibrator
-      commands: [vibrate]
-```
+当前设备能力文件以结构化 `supports` 为准。新增或修改协议时必须同步更新 schema、文档、参考端和测试。
 
 远程命令事件只使用：
 
@@ -230,178 +102,43 @@ supports:
 - `stream.control.open.requested`
 - `stream.control.close.requested`
 
-不要新增临时协议名来绕过 schema。修改协议时必须同步更新 schema、文档、参考端和测试。
+WebSocket stream 正式入口只使用：
 
-## 模型和模态
+- `/ws/stream/audio/input`
+- `/ws/stream/audio/output`
+- `/ws/stream/visual/input`
 
-应用配置在：
+不要新增临时协议名或旧路径兼容说明来绕过 schema。
 
-```text
-examples/for-blind-app/agent-server/server.yaml
-```
+## 测试规则
 
-文本模型链路：
+完整测试策略、分层命令和适用范围见 [docs/testing.md](docs/testing.md)。执行任务时按影响面选择测试：
 
-```text
-sensor.mic -> ASR -> VisionRealtimeAgentCore -> Tool -> Streaming TTS -> actuator.speaker
-```
-
-实时音频链路：
-
-```text
-sensor.mic -> OmniRealtimeAgentCore -> assistant_audio.delta -> actuator.speaker
-```
-
-真实 DashScope 模型提供方需要 `DASHSCOPE_API_KEY`。OpenAI 兼容文本模型需要 `OPENAI_API_KEY` 和 `OPENAI_BASE_URL`。如果任务只是验证链路形状，可以使用模拟提供方；如果任务声称验证真实模型、真实 ASR、真实 TTS 或真实设备效果，必须说明实际使用的提供方、模型、端侧和日志证据。
-
-## 测试策略
-
-项目测试按 P0 协议资产检查、L1 事件行为一致性、L2 大模型能力、L3 应用能力组织。完整说明见 `docs/testing.md`。
-
-修改协议数据结构时先跑 P0；修改 server / device 对事件的处理动作时必须跑 L1；修改真实模型 provider 时跑 L2；修改应用或端侧参考工程时跑 L3。不要把“协议资产检查通过”写成“server/device 行为已验证”，也不要把契约测试通过写成真机已验证。
-
-全部测试：
-
-```bash
-uv run python -m pytest
-```
-
-常用子集：
-
-```bash
-uv run python -m pytest protocol/protocol-tests -q
-uv run python -m pytest agent-server/protocol-tests -q
-uv run python -m pytest devices/python/protocol-tests -q
-uv run python -m pytest examples/for-blind-app/app-tests -q
-uv run python -m pytest examples/for-blind-app/replay-tests -q
-uv run python -m pytest examples/dev-support/unit-tests examples/dev-support/app-tests -q
-```
-
-分层回归：
-
-```bash
-uv run python -m pytest -m protocol -q
-uv run python -m pytest -m sdk -q
-uv run python -m pytest -m device_sdk -q
-uv run python -m pytest -m interop -q
-uv run python -m pytest -m model_provider -q
-uv run python -m pytest -m replay -q
-```
-
-真实模型提供方集成测试：
-
-```bash
-uv run python -m pytest agent-server/model-provider-tests/test_dashscope_providers.py -q
-```
+- 修改协议数据结构：先跑 P0 协议资产检查。
+- 修改 server / device 对事件的处理动作：必须跑 L1。
+- 修改真实模型 provider：跑 L2。
+- 修改应用或端侧参考工程：跑 L3，并说明真机、模拟器、构建或契约测试的验证层级。
 
 测试编写要求：
 
 - 测试文件命名为 `test_*.py`。
-- 协议资产检查放 `protocol/protocol-tests/`。
-- Server SDK 行为测试放 `agent-server/protocol-tests/`。
-- Device SDK 行为测试放 `devices/python/protocol-tests/` 或对应语言目录。
-- 示例应用测试放 `examples/<app>/app-tests/`、`replay-tests/` 或 `hardware-tests/`。
-- 开发/测试支持组件测试放 `examples/dev-support/unit-tests/`、`app-tests/`、`replay-tests/` 或 `hardware-tests/`。
-- 新测试要用中文注释或 docstring 写明测试目标、测试方法和预期结果。
-- 测试的目的是真实暴露问题，不是只为通过而放宽断言。
-- 如果功能涉及跨设备，必须提供本地可复现联调流程和观察点。
+- 新测试用中文 docstring 写明测试目标、测试方法和预期结果。
+- 测试目的是暴露问题和验证真实功能，不是为了把测例跑绿而放宽断言。
+- 涉及跨设备功能时，必须提供本地可复现联调流程和观察点。
 
-## 跨设备联调流程
-
-基础本地联调顺序：
-
-1. 校验设备能力文件：
-
-   ```bash
-   uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
-   ```
-
-2. 启动 server：
-
-   ```bash
-   uv run realtime-agent.server.run --app-name for-blind-app
-   ```
-
-3. 打开浏览器眼镜模拟组件：
-
-   ```bash
-   uv run realtime-agent.web.open --serve
-   ```
-
-4. 可选启动 Python 手机简单 mock 组件：
-
-   ```bash
-   uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
-   ```
-
-5. 可选启动 Python 眼镜播放端：
-
-   ```bash
-   uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
-   ```
-
-6. 检查：
-
-   ```bash
-   curl http://127.0.0.1:8765/api/health
-   curl http://127.0.0.1:8765/api/debug/devices
-   curl http://127.0.0.1:8765/api/debug/playback
-   ```
-
-iOS 和 ESP32 相关改动要额外说明实际验证层级：只是构建、模拟器、真机，还是硬件串口监视。不要把“契约测试通过”写成“真机已验证”。
+不要把“协议资产检查通过”写成“server/device 行为已验证”，也不要把“契约测试通过”写成“真机已验证”。
 
 ## 运行产物和排障
 
-`runs/` 是主要排障证据目录，默认位于应用目录下，例如：
+`runs/` 是主要排障证据目录，默认位于应用目录下，例如 `examples/device_demo/agent-server/runs`。详细文件结构和排查顺序见 [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)。
 
-```text
-examples/for-blind-app/agent-server/runs
-```
+排障时优先用真实运行证据定位：
 
-程序启动时，`realtime_agent.runs` 会打印一次 `运行产物目录索引`，其中的 `runs_root` 就是当前应用的运行产物根目录。后续事件日志不再重复打印 `detail_path`、`session_detail_path` 或 `path`，避免终端被同一类存储路径刷屏；排查时按启动索引和下表定位文件。
-
-根目录文件：
-
-```text
-control-events.jsonl      # 全局控制事件流水
-control-routes.jsonl      # 控制事件订阅匹配和投递结果
-system-events.jsonl       # 系统错误、降级和恢复事件
-capability-events.jsonl   # 跨会话能力调用轨迹
-command-events.jsonl      # 跨会话设备命令轨迹
-debug/playback.json       # 当前播放仲裁快照，对应 /api/debug/playback
-tasks/                    # 长流程 Task 运行产物
-```
-
-一次 session 优先看：
-
-```text
-<user_id>/<device_id>/events.jsonl         # 设备注册、唤醒、音频 session、控制事件
-<user_id>/<device_id>/messages.jsonl       # 用户、助手和工具消息历史
-<user_id>/<device_id>/model-request.json   # 最近一次发给模型的请求快照
-<user_id>/<device_id>/agent-events.jsonl   # Agent Core、模型 provider 和 delta 摘要事件
-<user_id>/<device_id>/model-events.jsonl   # 模型相关事件镜像，便于按模型视角排查
-<user_id>/<device_id>/tool-events.jsonl    # 工具调用参数、结果、耗时和错误
-<user_id>/<device_id>/stream-events.jsonl  # 数据流生命周期和分片摘要
-<user_id>/<device_id>/assets.jsonl         # 图片等资产写入和请求记录
-<user_id>/<device_id>/task-signals.jsonl   # Task Engine 信号记录
-<user_id>/<device_id>/output-decisions.jsonl    # 服务端输出仲裁决策
-<user_id>/<device_id>/playback-decisions.jsonl  # 端侧播放仲裁决策
-<user_id>/<device_id>/actuators.jsonl      # 端侧执行器播放和回执记录
-<user_id>/<device_id>/audio/               # 麦克风输入 PCM 和扬声器输出 WAV
-<user_id>/<device_id>/photos/              # RGB 图片或抓拍资产
-<user_id>/<device_id>/imu/                 # IMU 数据
-<user_id>/<device_id>/depth/               # 深度或 ToF 数据
-<user_id>/<device_id>/assets/              # 其他资产
-<user_id>/memory.json                      # 用户长期记忆
-```
-
-排查顺序：
-
-1. 模型没反应：先看 `events.jsonl`、`stream-events.jsonl`、`agent-events.jsonl`、根目录 `system-events.jsonl`。
-2. 模型没拿到工具或上下文：看 `model-request.json`。
-3. 工具行为不符合预期：看 `tool-events.jsonl` 和相关资产文件。
-4. 播放、打断、输出异常：看 `output-decisions.jsonl`、`playback-decisions.jsonl`、`/api/debug/playback`。
-5. 设备没有收到事件：看根目录 `control-routes.jsonl`。
+- 模型没反应：看 `events.jsonl`、`stream-events.jsonl`、`agent-events.jsonl`、根目录 `system-events.jsonl`。
+- 模型没拿到工具或上下文：看 `model-request.json`。
+- 工具行为不符合预期：看 `tool-events.jsonl` 和相关资产文件。
+- 播放、打断、输出异常：看 `output-decisions.jsonl`、`playback-decisions.jsonl`、`/api/debug/playback`。
+- 设备没有收到事件：看根目录 `control-routes.jsonl`。
 
 `runs/`、日志、真实用户音频、图片和视频不能提交。
 
@@ -411,55 +148,47 @@ tasks/                    # 长流程 Task 运行产物
 - 用户可见或关键状态使用 `INFO`。
 - 降级、超时、协议不一致使用 `WARNING` 或 `ERROR`。
 - 本地开发优先支持在配置中打开 DEBUG，不要把临时 `print()` 留在主线代码。
-- 如果新增配置项，必须补默认值、示例配置、文档说明和测试。
+- 新增配置项必须补默认值、示例配置、文档说明和测试。
 - 不要提交 API Key、设备 token、Wi-Fi 密码、`.env`、本地 `AppConfig.json` 或硬件私有配置。
 
 ## 文档规则
 
-写文档是为了记录重要决策、协议和联调方法，不是堆文字。涉及复杂架构、流程、时序时，优先使用 PlantUML。
-
-文档入口：
-
-- `README.md`：项目快速开始和主流程。
-- `docs/reference/project-layout.md`：目录结构。
-- `docs/reference/cli.md`：命令行参考。
-- `agent-server/docs/how-to/设备能力开发说明.md`：设备能力与上下文 API。
-- `agent-server/docs/how-to/运行产物排查说明.md`：运行产物说明。
-- `agent-server/docs/reference/上下文设备接口设计.md`：上下文 API 目标设计。
-- `examples/for-blind-app/docs/`：示例应用相关设计和验收记录。
-
-修改协议、目录结构、命令行、配置、运行产物或跨设备流程时，要同步更新相关文档。文档中的测试结果必须和真实命令结果一致，不能只写设计预期。
+- 写文档是为了记录重要决策、协议和联调方法，不是堆文字。
+- 复杂架构、流程、时序优先使用 PlantUML。
+- 面向开源社区的入口文档优先说明项目价值、推荐路径和当前可运行链路。
+- README / docs / agent-server docs / devices docs 中重复的信息，应通过链接引用权威文档，不要复制长段命令或文件表。
+- 文档中的测试结果必须来自真实命令结果，不能只写设计预期。
 
 ## 代码风格
 
 - 使用 Python 3.11+。
 - 遵守现有包边界，不新增全局硬编码路径。
-- 公共 SDK API 尽量保持类型清晰，避免让示例应用依赖内部实现细节。
+- 公共 SDK API 保持类型清晰，避免让示例应用依赖内部实现细节。
 - 类、函数、测试新增注释和 docstring 使用中文，说明功能、主要逻辑、参数、返回值和异常情况。
 - 临时诊断脚本或一次性排障代码要轻量，任务结束后删除，避免混入架构代码。
-- 复杂或不确定实现先查文档、社区或成熟方案；简单能力可以在依赖成本和自研复杂度之间做平衡。
+- 复杂或不确定实现先查文档、社区或成熟方案；简单能力可以在依赖成本和自研复杂度之间平衡。
 - 不要为了测试通过而牺牲真实功能语义。
 
 ## Git 和提交
 
-- 提交信息使用简短中文，例如 `补齐设备能力文档`。
+- 提交信息使用简短中文。
 - 不允许直接 push 任意分支到远程，除非用户明确要求。
 - 提交保持聚焦，不把无关格式化、运行产物和本地配置混进同一提交。
+- 移动文件使用 `git mv`。
 - 新工具如果产生缓存、构建产物、日志或媒体文件，必须同步更新 `.gitignore`。
-- 当前 `.gitignore` 已覆盖 `.venv`、`runs`、Python 缓存、构建产物、ESP-IDF 和 iOS 常见产物；新增端侧工程时继续补齐对应构建目录。
 
 ## AI 代理工作准则
 
 开始改代码前先确认任务属于哪一层：
 
 - SDK 核心能力：改 `agent-server/realtime_agent/`，补 `agent-server/protocol-tests/`，必要时补 `agent-server/unit-tests/`。
-- 示例应用能力：改 `examples/for-blind-app/agent-server/capabilities/`，补 `examples/for-blind-app/app-tests/` 或 `replay-tests/`。
-- 开发/测试支持组件或端侧参考工程：改 `examples/dev-support/devices/` 或 `examples/for-blind-app/devices/`，补端侧契约或联调说明。
+- Device SDK 或端侧参考：改 `devices/`、`examples/device_demo/ios/` 或 `examples/dev-support/devices/`，补端侧契约或联调说明。
+- 示例和开发支持能力：改对应 `examples/<app>/agent-server/capabilities/` 或 `examples/dev-support/`。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 
 遇到多设备、模型、ASR、TTS、数据流、播放仲裁、工具调用问题时，不要只凭命名推断实现状态；要用代码位置、测试命令、运行产物和日志说明真实链路。
 
-完成后应说明：
+完成后说明：
 
 - 改了哪些文件。
 - 影响 SDK、示例应用、参考端还是文档。

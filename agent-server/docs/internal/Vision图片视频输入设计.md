@@ -54,7 +54,7 @@ Vision 视觉链路不能把历史里的图片描述、相机超时、旧包装�
 这里不在 `VisionRealtimeAgentCore` 中增加关键词过滤或强制工具调用逻辑。正确边界是复用现有 summary / compact 能力：
 
 1. `ConversationMemoryService` 继续维护三层历史：active messages、summary fragment、完整 audit messages。
-2. for-blind-app 将 `user.message_compact_threshold` 调低，只保留最近少量 active messages，把更早历史交给摘要子 Agent。
+2. external-business-app 将 `user.message_compact_threshold` 调低，只保留最近少量 active messages，把更早历史交给摘要子 Agent。
 3. `message_summarizer` 必须把“视觉与环境线索”写成历史观察，不能写成当前图片、当前画面或当前传感器状态。
 4. summary fragment 注入主 Agent 时必须说明：摘要里的视觉线索只代表过去某轮观察；新的看图、读图、眼前/前方观察请求仍应依赖当前视觉输入或采集工具。
 5. `messages.jsonl`、history 归档和资产文件仍完整保存，供排障复盘；只是这些旧原文不再长期直接进入主模型当前请求。
@@ -278,7 +278,7 @@ VisionRealtimeAgentCore 保留标准 tool result message：
 
 ## Message 管理模块
 
-建议新增 Vision 多模态 message 管理模块，位置在 SDK core 的 Agent Core 边界内，而不是 for-blind Tool 内：
+建议新增 Vision 多模态 message 管理模块，位置在 SDK core 的 Agent Core 边界内，而不是 external-business Tool 内：
 
 ```text
 agent-server/realtime_agent/agent_core/multimodal/
@@ -356,7 +356,7 @@ source map 必须记录：
 
 ## 配置设计
 
-建议在 `examples/for-blind-app/agent-server/server.yaml` 中把 Vision 主模型升级为多模态模型：
+建议在 `examples/device_demo/agent-server/server.yaml` 中把 Vision 主模型升级为多模态模型：
 
 ```yaml
 agent:
@@ -504,10 +504,10 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
   - `agent-server/realtime_agent/config.py`
   - `agent-server/realtime_agent/app.py`
   - `agent-server/realtime_agent/preflight.py`
-  - `examples/for-blind-app/agent-server/server.yaml`
+  - `examples/device_demo/agent-server/server.yaml`
 - 验证：
   - `uv run python -m pytest agent-server/protocol-tests/sdk/config/test_config_sync.py -q` 已通过。
-  - `uv run realtime-agent.dev.preflight --config examples/for-blind-app/agent-server/server.yaml --report runs/default-app/text-vlm-preflight.json` 已通过。
+  - `uv run realtime-agent.dev.preflight --config examples/device_demo/agent-server/server.yaml --report runs/default-app/text-vlm-preflight.json` 已通过。
 
 ### Phase 2：Message 管理和工具结果图片拼接
 

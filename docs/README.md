@@ -8,37 +8,31 @@
 
 ## 先读什么
 
-1. [开发者总览](getting-started/developer-overview.md)：快速了解项目价值、核心能力、扩展方式和本地验证路径。
+1. [开发者总览](tutorials/developer-overview.md)：快速了解项目价值、核心能力、扩展方式和本地验证路径。
 2. [第一个 Tool 和 Task](tutorials/build-first-capability.md)：理解业务能力如何接入 Agent。
-3. [端侧 App 接入指南](reference/device-app-integration.md)：理解 Device SDK、端侧能力声明和自定义事件。
-4. [跨设备本地联调](how-to/cross-device-local-debug.md)：按 server、开发支持组件、真实端侧参考工程的顺序做联调。
-5. [CLI 参考](reference/cli.md)：查看常用 `realtime-agent.*` 命令。
+3. [端侧 App 接入指南](../devices/docs/device-app-integration.md)：理解 Device SDK、端侧能力声明和自定义事件。
+4. [CLI 参考](internal/cli.md)：查看常用 `realtime-agent.*` 命令。
 
 ## 社区开发者文档
 
-### Getting Started
-
-- [开发者总览](getting-started/developer-overview.md)
-
 ### Tutorials
 
+- [开发者总览](tutorials/developer-overview.md)
 - [第一个 Tool 和 Task](tutorials/build-first-capability.md)
 
 ### How-to
 
-- [跨设备本地联调](how-to/cross-device-local-debug.md)
 - [测试体系说明](testing.md)
-- [设备能力与 Context API 开发说明](../agent-server/docs/how-to/设备能力开发说明.md)
 - [runs 目录产物说明](../agent-server/docs/how-to/运行产物排查说明.md)
 
 ### Reference
 
-- [项目结构](reference/project-layout.md)
-- [CLI 参考](reference/cli.md)
-- [端侧 App 接入指南](reference/device-app-integration.md)
-- [设备事件行为标准](reference/device-event-behavior.md)
-- [端侧 SDK 事件行为实现蓝图](reference/device-sdk-event-blueprint.md)
-- [Swift 端 Device SDK 与 Device App 开发计划](reference/swift-device-sdk-and-app-development-plan.md)
+- [Server SDK 目录说明](../agent-server/README.md)
+- [Device SDK 目录说明](../devices/README.md)
+- [CLI 参考](internal/cli.md)
+- [端侧 App 接入指南](../devices/docs/device-app-integration.md)
+- [设备事件行为标准](../devices/docs/device-event-behavior.md)
+- [端侧 SDK 事件行为实现蓝图](../devices/docs/device-sdk-event-blueprint.md)
 - [realtime-agent 通讯协议](../protocol/docs/protocol.md)
 - [Context 与设备 API 设计说明](../agent-server/docs/reference/上下文设备接口设计.md)
 
@@ -50,6 +44,4 @@
 
 SDK 内部设计记录位于 [agent-server/docs](../agent-server/docs/)，示例项目设计记录位于各 `examples/<project>/docs` 目录。这些文档可以公开阅读，但不作为稳定 API 或稳定使用入口。
 
-- [多语言端侧通讯 SDK 设计文档](internal/multilanguage-device-sdk-design.md)
-- [端侧协议盘点和冻结候选](internal/device-protocol-inventory.md)
 - [回归测试分层设计文档](internal/regression-test-strategy.md)

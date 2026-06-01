@@ -20,10 +20,10 @@ examples/<your-app>/agent-server/
     tasks.py
 ```
 
-当前可参考：
+当前可参考最小 server 配置：
 
 ```text
-examples/for-blind-app/
+examples/dev-support/agent-server/
 ```
 
 ## 写一个 Tool
@@ -106,11 +106,9 @@ class TimerTask(BaseTask):
         await context.schedule_signal("timer.due", delay_seconds=seconds, payload={"message": message})
 ```
 
-真实任务还需要处理完成、失败、取消和通知。可以参考：
+真实任务还需要处理完成、失败、取消和通知。建议先在自己的 app-root 下补充
+`capabilities/tasks.py`，再通过自动发现注册。
 
-```text
-examples/for-blind-app/agent-server/capabilities/tasks.py
-```
 
 ## 让 SDK 发现能力
 
@@ -135,7 +133,7 @@ tasks:
 启动 server：
 
 ```bash
-uv run realtime-agent.server.run --app-name for-blind-app
+uv run realtime-agent.server.run --config examples/dev-support/agent-server/server.yaml
 ```
 
 打开浏览器眼镜模拟组件：
@@ -153,7 +151,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 查看运行产物：
 
 ```bash
-find examples/for-blind-app/agent-server/runs -maxdepth 4 -type f | sort
+find examples/dev-support/agent-server/runs -maxdepth 4 -type f | sort
 ```
 
 排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../agent-server/docs/how-to/运行产物排查说明.md)。

@@ -521,7 +521,7 @@ agent-server/docs/internal/
 候选命令：
 
 ```bash
-uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-server/server.yaml --mode omni
+uv run realtime-agent.context.inspect --config examples/device_demo/agent-server/server.yaml --mode omni
 ```
 
 验收：
@@ -612,7 +612,7 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 
 1. PromptRegistry 第一版是否允许 app 覆盖 SDK 默认 prompt？
 2. `server.yaml` 中现有 prompt 是否迁移为 prompt name 引用，还是继续允许 inline prompt？
-3. Omni Realtime `capture_photo` 特例是否保留为 ContextPolicy hook，还是迁回 for-blind-app 能力层？
+3. Omni Realtime `capture_photo` 特例是否保留为 ContextPolicy hook，还是迁回 external-business-app 能力层？
 4. Token 估算第一版使用近似字符数，还是引入 provider tokenizer？
 5. `context.inspect` CLI 是否需要同时支持读取最近一次 runs 产物做 diff？
 6. Tool result 默认是否进入下一轮模型上下文，是否允许单个 Tool 覆盖？
@@ -669,9 +669,9 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 ### 阶段 5：清理工具可见内容与上下文检查工具
 
 - 状态：已完成可自动验证部分。
-- 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 for-blind-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
-- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tasks.py`、`examples/for-blind-app/agent-server/capabilities/tasks.py`、`pyproject.toml`。
-- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
+- 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 external-business-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
+- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tasks.py`、`examples/dev-support/agent-server/capabilities/tasks.py`、`pyproject.toml`。
+- 验证：`uv run realtime-agent.context.inspect --config examples/device_demo/agent-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
 - 待验收：Task 进度通知是否默认播报仍需产品体验确认；当前只记录策略和通知事件，不改变默认通知语义。
 
 ### 阶段 6：预算、裁剪和 diff
@@ -679,7 +679,7 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 - 状态：已完成最小闭环。
 - 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`realtime-agent.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
 - 文件：`agent-server/realtime_agent/agent_core/context/models.py`、`agent-server/realtime_agent/agent_core/context/compiler.py`、`agent-server/realtime_agent/cli/context.py`。
-- 验证：`uv run realtime-agent.context.inspect --config examples/for-blind-app/agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
+- 验证：`uv run realtime-agent.context.inspect --config examples/device_demo/agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
 - 风险：第一版不做自动裁剪，后续需要基于真实长对话 runs 再确定裁剪优先级。
 
 ### 验证汇总
@@ -709,4 +709,4 @@ uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_co
 uv run python -m pytest agent-server/unit-tests/cli/test_release_package.py agent-server/unit-tests/cli/test_package_check_release_inputs.py -q
 ```
 
-其中 `test_for_blind_app_can_be_copied_to_temp_project_and_generate_endpoint_configs` 查找复制后 `for-blind-app/server.yaml`，当前示例应用实际配置位于 `examples/for-blind-app/agent-server/server.yaml`。
+其中 `test_example_app_can_be_copied_to_temp_project_and_generate_endpoint_configs` 查找复制后 `external-business-app/server.yaml`，当前示例应用实际配置位于 `examples/device_demo/agent-server/server.yaml`。

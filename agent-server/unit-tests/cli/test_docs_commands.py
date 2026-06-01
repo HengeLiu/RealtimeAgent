@@ -46,16 +46,19 @@ def test_docs_entry_points_exist_in_pyproject() -> None:
     docs = "\n".join(
         [
             (AUDIO_ROOT / "README.md").read_text(encoding="utf-8"),
-            (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "device-capability-development.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "docs" / "internal" / "cli.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "docs" / "tutorials" / "developer-overview.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "docs" / "tutorials" / "build-first-capability.md").read_text(encoding="utf-8"),
         ]
     )
     required = {
-        "realtime-agent.config.sync",
-        "realtime-agent.server.start",
-        "realtime-agent.server.stop",
-        "realtime-agent.server.logs",
+        "realtime-agent.server.run",
+        "realtime-agent.device.validate",
         "realtime-agent.web.open",
-        "realtime-agent.playback.glass",
+        "realtime-agent.playback-glass.run",
+        "realtime-agent.ios.open",
+        "realtime-agent.ios.build-sim",
+        "realtime-agent.esp32.config",
         "realtime-agent.dev.preflight",
         "realtime-agent.sdk.package-check",
     }
@@ -73,7 +76,12 @@ def test_readme_public_classes_import_from_realtime_agent() -> None:
     预期结果：文档中出现的公开类都能从 `realtime_agent` 顶层读取。
     """
 
-    readme = (AUDIO_ROOT / "README.md").read_text(encoding="utf-8")
+    readme = "\n".join(
+        [
+            (AUDIO_ROOT / "docs" / "tutorials" / "build-first-capability.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "agent-server" / "docs" / "reference" / "上下文设备接口设计.md").read_text(encoding="utf-8"),
+        ]
+    )
     imported_names: set[str] = set()
     for line in readme.splitlines():
         line = line.strip()
@@ -103,7 +111,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
             "run",
             "realtime-agent.dev.preflight",
             "--config",
-            "examples/for-blind-app/agent-server/server.yaml",
+            "examples/device_demo/agent-server/server.yaml",
             "--report",
             str(report),
         ],
@@ -129,14 +137,14 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
     } <= names
 
 
-def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> None:
-    """测试目标：确认 for-blind-app 的精简配置仍能指导开发者启动服务。
+def test_device_demo_server_yaml_documents_supported_model_routes(tmp_path) -> None:
+    """测试目标：确认 device_demo 的精简配置仍能指导开发者启动服务。
 
     测试方法：读取 `server.yaml`，检查关键 provider 取值和已删除旧 schema/example 引用。
     预期结果：配置可直接作为 app-root 配置使用，不再依赖老 SDK 示例文件。
     """
 
-    config = AUDIO_ROOT / "examples" / "for-blind-app" / "agent-server" / "server.yaml"
+    config = AUDIO_ROOT / "examples" / "device_demo" / "agent-server" / "server.yaml"
     text = config.read_text(encoding="utf-8")
     data = yaml.safe_load(text)
 
@@ -146,9 +154,9 @@ def test_for_blind_server_yaml_documents_supported_model_routes(tmp_path) -> Non
     assert data["agent"]["vision"]["model"]
     assert data["agent"]["vision"]["asr_provider"] in {"mock", "dashscope"}
     assert data["agent"]["vision"]["tts_provider"] in {"mock", "dashscope"}
-    assert data["mcp"]["enabled"] is True
+    assert data["mcp"]["enabled"] is False
 
-    app_dir = tmp_path / "for-blind-app"
+    app_dir = tmp_path / "device_demo"
     app_dir.mkdir()
     shutil.copyfile(config, app_dir / "server.yaml")
     config = RealtimeAgentConfig.from_yaml(app_dir / "server.yaml")
@@ -169,10 +177,9 @@ def test_developer_context_device_design_doc_covers_target_contracts() -> None:
     预期结果：设计文档清楚标注目标接口，避免被误当成当前实现说明。
     """
 
-    guide = (AUDIO_ROOT / "agent-server" / "docs" / "reference" / "context-api.md").read_text(encoding="utf-8")
+    guide = (AUDIO_ROOT / "agent-server" / "docs" / "reference" / "上下文设备接口设计.md").read_text(encoding="utf-8")
     required = [
         "设计说明",
-        "不是当前版本的开发操作手册",
         "ToolContext",
         "TaskContext",
         "context.devices.sensors.rgb.one",
@@ -208,27 +215,26 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
     预期结果：开发者有一份能按当前代码直接操作的说明，并能分清已落地 API 和目标设计。
     """
 
-    guide = (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "device-capability-development.md").read_text(encoding="utf-8")
+    guide = "\n".join(
+        [
+            (AUDIO_ROOT / "docs" / "tutorials" / "developer-overview.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "docs" / "tutorials" / "build-first-capability.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "运行产物排查说明.md").read_text(encoding="utf-8"),
+            (AUDIO_ROOT / "agent-server" / "docs" / "reference" / "上下文设备接口设计.md").read_text(encoding="utf-8"),
+        ]
+    )
     required = [
-        "当前仓库已经可用",
         "supports",
-        "structured supports",
         "context.devices.sensors.rgb.one",
         "context.devices.commands.call",
         "context.output.say",
-        "context.devices.sensors.rgb.one",
-        "context.devices.commands.call",
         "context.devices.sensors.rgb.stream",
-        "context.output.say",
         "BaseTool",
         "BaseTask",
-        "ToolSpec",
         "TaskContext",
-        "AssetRef | None",
         "realtime-agent.device.validate",
         "realtime-agent.server.run",
         "realtime-agent.web.open",
-        "runs/<app_name>/<user_id>/<device_id>/assets.jsonl",
-        "当前新 Tool 可以优先试用 typed facade",
+        "assets.jsonl",
     ]
     assert not [term for term in required if term not in guide]

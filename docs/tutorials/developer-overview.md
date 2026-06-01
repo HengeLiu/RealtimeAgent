@@ -347,6 +347,6 @@ examples/device_demo/agent-server/runs
 
 如果你想写自己的业务能力，继续读 [第一个 Tool 和 Task](../tutorials/build-first-capability.md)。
 
-如果你想接入自己的端侧设备，继续读 [端侧 App 接入指南](../reference/device-app-integration.md) 和对应语言的 `devices/<language>/README.md`。
+如果你想接入自己的端侧设备，继续读 [端侧 App 接入指南](../../devices/docs/device-app-integration.md) 和对应语言的 `devices/<language>/README.md`。
 
-如果你想理解项目目录和边界，继续读 [项目结构](../reference/project-layout.md)。
+如果你想理解协议边界，继续读 [设备事件行为标准](../../devices/docs/device-event-behavior.md) 和 [通讯协议](../../protocol/docs/protocol.md)。

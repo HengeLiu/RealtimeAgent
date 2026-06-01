@@ -289,7 +289,7 @@ AsrRealtimeEvent
 
 ### 建议二：Vision Realtime 默认使用 `paraformer-realtime-v2`
 
-当前 `examples/for-blind-app/agent-server/server.yaml` 仍是：
+当前 `examples/device_demo/agent-server/server.yaml` 仍是：
 
 ```yaml
 asr_model: "fun-asr-realtime"

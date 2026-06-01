@@ -1,9 +1,10 @@
 <p align="center">
   <img src="docs/assets/realtime-agent-brand.svg" alt="realtime-agent brand logo" width="420" />
   <br />
-  <a href="docs/getting-started/developer-overview.md">Developer Overview</a> ·
+  <a href="docs/tutorials/developer-overview.md">Developer Overview</a> ·
+  <a href="agent-server/README.md">Server SDK</a> ·
   <a href="examples/README.md">Examples</a> ·
-  <a href="devices">Device SDK</a> ·
+  <a href="devices/README.md">Device SDK</a> ·
   <a href="protocol/README.md">Protocol</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
@@ -85,13 +86,43 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-Open the browser glass simulator in another terminal:
+Start local multi-device debugging in this order:
+
+1. Start the server:
+
+   ```bash
+   uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+   ```
+
+2. Open the browser glass simulator:
+
+   ```bash
+   uv run realtime-agent.web.open --serve
+   ```
+
+   The browser component registers with the server as a normal Device. It can be used to test microphone input, camera input, server speaker output, control events, and stream lifecycle behavior.
+
+3. Optionally open the Swift hardware demo:
+
+   ```bash
+   uv run realtime-agent.ios.open
+   ```
+
+   For hardware testing, set the server address in the iOS debug panel to the Mac address reachable on the same LAN, such as `http://192.168.x.x:8765`.
+
+4. Inspect devices, playback, and run artifacts:
+
+   ```bash
+   curl http://127.0.0.1:8765/api/debug/devices
+   curl http://127.0.0.1:8765/api/debug/playback
+   find examples/device_demo/agent-server/runs -maxdepth 3 -type f | sort
+   ```
+
+If you only want to open the browser simulator quickly, run:
 
 ```bash
 uv run realtime-agent.web.open --serve
 ```
-
-The browser component registers with the server as a normal Device. It can be used to test microphone input, camera input, server speaker output, control events, and stream lifecycle behavior.
 
 Run a minimal contract test:
 
@@ -99,7 +130,7 @@ Run a minimal contract test:
 uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
 ```
 
-For more startup, extension, and debugging guidance, see the [Developer Overview](docs/getting-started/developer-overview.md).
+For more startup, extension, and debugging guidance, see the [Developer Overview](docs/tutorials/developer-overview.md).
 
 ## Choose Your Path
 
@@ -148,7 +179,7 @@ Current SDK entry points:
 | Kotlin / Java | [devices/kotlin](devices/kotlin/README.md) |
 | C | [devices/c](devices/c/README.md) |
 
-For the device integration model, see [Device App Integration](docs/reference/device-app-integration.md).
+For the device integration model, see [Device App Integration](devices/docs/device-app-integration.md).
 
 ### Tune the Model Path
 
@@ -169,7 +200,7 @@ Common changes include:
 - Configure OpenAI-compatible or DashScope-compatible model services.
 - Inspect `model-request.json`, `agent-events.jsonl`, and stream / playback logs.
 
-For a fuller explanation of the model paths, see the [Developer Overview](docs/getting-started/developer-overview.md).
+For a fuller explanation of the model paths, see the [Developer Overview](docs/tutorials/developer-overview.md).
 
 ## Core Concepts
 
@@ -187,8 +218,8 @@ For a fuller explanation of the model paths, see the [Developer Overview](docs/g
 ## Repository Layout
 
 ```text
-agent-server/   Python server SDK and server-side runtime
-devices/        Device SDKs for Python, TypeScript, Swift, Kotlin/Java, and C
+agent-server/   Python server SDK and server-side runtime; see agent-server/README.md
+devices/        Device SDKs for Python, TypeScript, Swift, Kotlin/Java, and C; see devices/README.md
 protocol/       Shared protocol docs, fixtures, and protocol tests
 examples/       Example apps, device simulators, replay tests, and hardware references
 docs/           Getting started docs, references, how-to docs, and design notes
@@ -242,10 +273,13 @@ These artifacts are part of the project model: a realtime Agent should not only 
 
 ## Documentation
 
-- [Developer Overview](docs/getting-started/developer-overview.md)
-- [Project Layout](docs/reference/project-layout.md)
-- [Device App Integration](docs/reference/device-app-integration.md)
-- [CLI Reference](docs/reference/cli.md)
+- [Developer Overview](docs/tutorials/developer-overview.md)
+- [Build Your First Tool and Task](docs/tutorials/build-first-capability.md)
+- [Server SDK](agent-server/README.md)
+- [Device SDK](devices/README.md)
+- [Device App Integration](devices/docs/device-app-integration.md)
+- [Device Event Behavior](devices/docs/device-event-behavior.md)
+- [CLI Reference](docs/internal/cli.md)
 - [Testing](docs/testing.md)
 - [Protocol](protocol/README.md)
 

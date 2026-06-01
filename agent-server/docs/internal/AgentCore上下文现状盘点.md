@@ -2,13 +2,13 @@
 
 本文记录当前 `realtime-agent` 中所有会进入大模型视野的内容来源，作为后续上下文管理重构的基线。
 
-当前核对对象是 `examples/for-blind-app/agent-server/server.yaml` 默认配置：`agent.mode=omni`、`memory.enabled=true`、`tools.denylist=[capture_photo, interpret_image, interpret_current_view]`。
+当前核对对象是 `examples/device_demo/agent-server/server.yaml` 默认配置：`agent.mode=omni`、`memory.enabled=true`、`tools.denylist=[capture_photo, interpret_image, interpret_current_view]`。
 
 ## 主链路上下文入口
 
 | 类别 | 来源 | 进入模型的位置 | 当前默认是否生效 | 模型可见内容 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| Omni 主系统提示 | `examples/for-blind-app/agent-server/server.yaml` 的 `agent.omni.prompt` | `RealtimeAgentConfig.from_yaml()` 写入 `omni_prompt`，再传入 `RealtimeProviderConfig.prompt` | 是，默认主链路 | 助手名称“乐鑫”、盲人眼镜身份、视觉问题处理规则、找物任务规则、禁止朗读工具名/参数/JSON、非视觉问题不要描述图片 | 这是当前最重要的主 Agent 指令。 |
+| Omni 主系统提示 | `examples/device_demo/agent-server/server.yaml` 的 `agent.omni.prompt` | `RealtimeAgentConfig.from_yaml()` 写入 `omni_prompt`，再传入 `RealtimeProviderConfig.prompt` | 是，默认主链路 | 助手名称“乐鑫”、盲人眼镜身份、视觉问题处理规则、找物任务规则、禁止朗读工具名/参数/JSON、非视觉问题不要描述图片 | 这是当前最重要的主 Agent 指令。 |
 | Vision 主系统提示 | `server.yaml` 的 `agent.vision.prompt` | `VisionModelProviderConfig.prompt`，最终作为 Chat Completions system message | 配置存在；默认不走 vision 模式 | 助手名称、盲人眼镜身份、找物任务规则、简短中文回答、必要时调用工具 | vision 模式启用时生效。 |
 | 默认系统提示 | `RealtimeAgentConfig.vision_prompt` / `omni_prompt` 默认值 | 未配置 YAML 时作为 fallback | 默认被示例配置覆盖 | “你是中文语音助手。请用简短口语回答用户。” | SDK 默认值，不包含业务语义。 |
 | Memory 使用规则 | `realtime_agent.app.MEMORY_AGENT_INSTRUCTIONS`，通过 `_with_memory_instructions()` 追加 | `from_yaml()` 和直接构造配置时追加到 vision/omni prompt | 是，因 `memory.enabled=true` | 长期记忆规则、何时调用 `memory_search` / `manage_memory`、不要保存敏感信息等 | 追加规则使用字符串包含“长期记忆规则”避免重复追加。 |
@@ -37,8 +37,8 @@
 | `task_runtime_manager` | SDK 内置 | 查询、取消、列出 Task；启动任务必须调用具体 `start_*` Tool | `action`, `task_id`, `include_terminal` | 和 TaskStartTool 配套。 |
 | `memory_search` | SDK 内置 | 读取已保存长期记忆详情；不用于维护记忆 | `topic`, `topics` | 只有 memory enabled 且工具允许时有用。 |
 | `manage_memory` | SDK 内置 | 用户要求记住、更新、忘记、删除，或自然提供值得保存的信息时调用 | `memory_context` | 会触发记忆管理子 Agent。 |
-| `query_route_plan` | for-blind-app Tool | 用户询问怎么走、需要路线时调用，目的地不明确先确认 | `destination`, `origin`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
-| `search_web` | for-blind-app Tool | 用户明确要求搜索、查询资料、查最新公开信息，或问题需要外部资料时调用 | `query`, `limit`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
+| `query_route_plan` | external-business-app Tool | 用户询问怎么走、需要路线时调用，目的地不明确先确认 | `destination`, `origin`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
+| `search_web` | external-business-app Tool | 用户明确要求搜索、查询资料、查最新公开信息，或问题需要外部资料时调用 | `query`, `limit`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
 | `start_find_object_task` | TaskStartTool 自动生成 | 启动找物后台任务；任务返回前不要自行回答已找到、位置、距离或方向 | `object_name`, `timeout_seconds` | 由 `FindObjectTask.description` 和通用 TaskStartTool 描述拼成。 |
 | `start_timer_task` | TaskStartTool 自动生成 | 启动计时器后台任务，到点通过 speaker 播报提醒 | `seconds`, `message`, `auto_fire` | `auto_fire` 字段当前模型可见。 |
 | `start_traffic_light_task` | TaskStartTool 自动生成 | 启动红绿灯识别后台任务，返回通行建议 | `timeout_seconds` | description 中仍写有 YOLO mock。 |
@@ -47,9 +47,9 @@
 
 | 工具名 | 来源 | 为什么不可见 | 仍可能何时进入模型 |
 | --- | --- | --- | --- |
-| `capture_photo` | for-blind-app Tool | `server.yaml` tools.denylist 显式禁用；Realtime 也会过滤 inline vision tools | 如果配置移除 denylist，Vision 链路可见；Realtime 仍被 `REALTIME_INLINE_VISION_TOOLS` 过滤。 |
-| `interpret_image` | for-blind-app Tool | 同上 | 如果配置移除 denylist，Vision 链路可见；Tool 内部会调用视觉子 Agent。 |
-| `interpret_current_view` | for-blind-app Tool | 同上 | 如果配置移除 denylist，Vision 链路可见；Tool 内部会调用视觉子 Agent。 |
+| `capture_photo` | external-business-app Tool | `server.yaml` tools.denylist 显式禁用；Realtime 也会过滤 inline vision tools | 如果配置移除 denylist，Vision 链路可见；Realtime 仍被 `REALTIME_INLINE_VISION_TOOLS` 过滤。 |
+| `interpret_image` | external-business-app Tool | 同上 | 如果配置移除 denylist，Vision 链路可见；Tool 内部会调用视觉子 Agent。 |
+| `interpret_current_view` | external-business-app Tool | 同上 | 如果配置移除 denylist，Vision 链路可见；Tool 内部会调用视觉子 Agent。 |
 | `read_skill` | SDK 内置 | 当前 `skill.enabled=false` 且 Skill policy 会限制工具可见性 | 启用 Skill 并允许工具策略后可见。 |
 | `mcp_call` | SDK 内置 | 当前 `mcp.enabled=false` 或策略限制 | 启用 MCP 后可见。 |
 

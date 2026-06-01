@@ -72,7 +72,7 @@ examples/dev-support/unit-tests/python_playback_glass/
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass run --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml
-uv run python -m realtime_agent_python_playback_glass record --runs-root examples/for-blind-app/agent-server/runs ...
+uv run python -m realtime_agent_python_playback_glass record --runs-root examples/device_demo/agent-server/runs ...
 ```
 
 后续如果需要 pyproject script，也应命名为 dev-support 端侧工具，例如 `realtime-agent.playback-glass.run`，不能使用 `realtime-agent.system-test.*`。
@@ -217,7 +217,7 @@ uv run python -m realtime_agent_python_playback_glass run \
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass record \
-  --runs-root examples/for-blind-app/agent-server/runs \
+  --runs-root examples/device_demo/agent-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
   --audio testdata/audio-sample/看一下我前面有什么.wav \

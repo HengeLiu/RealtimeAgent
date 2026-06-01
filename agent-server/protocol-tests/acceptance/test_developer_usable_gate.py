@@ -10,19 +10,17 @@ from realtime_agent.tools import ToolAutoDiscovery
 AUDIO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_for_blind_app_example_exists_with_tool_and_task_templates(monkeypatch) -> None:
+def test_dev_support_example_exists_with_capability_package(monkeypatch) -> None:
     """测试目标：冻结功能开发者可复制 app-root 的最低门槛。
 
-    测试方法：检查 `examples/for-blind-app` 目录，并用自动发现扫描样板能力。
-    预期结果：至少有一个 Tool 样板和一个 Task 样板，且无需修改 SDK 内部 app.py。
+    测试方法：检查 dev-support 示例服务目录，并用自动发现扫描能力包。
+    预期结果：示例服务可以作为空能力包起点，且无需修改 SDK 内部 app.py。
     """
 
-    project_root = AUDIO_ROOT / "examples" / "for-blind-app"
+    project_root = AUDIO_ROOT / "examples" / "dev-support"
     app_root = project_root / "agent-server"
-    assert (project_root / "README.md").exists()
     assert (app_root / "server.yaml").exists()
-    assert (app_root / "capabilities" / "tools.py").exists()
-    assert (app_root / "capabilities" / "tasks.py").exists()
+    assert (app_root / "capabilities" / "__init__.py").exists()
     for module_name in list(sys.modules):
         if module_name == "capabilities" or module_name.startswith("capabilities."):
             sys.modules.pop(module_name, None)
@@ -31,8 +29,8 @@ def test_for_blind_app_example_exists_with_tool_and_task_templates(monkeypatch) 
     tools = ToolAutoDiscovery().discover(["capabilities"], recursive=True)
     tasks = TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
-    assert {"capture_photo", "query_route_plan", "search_web"} <= {tool.name for tool in tools}
-    assert {"find_object_task", "traffic_light_task", "timer_task"}.issubset({task.task_type for task in tasks})
+    assert {tool.name for tool in tools} == set()
+    assert {task.task_type for task in tasks} == set()
 
 
 def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
@@ -44,4 +42,4 @@ def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
 
     assert (AUDIO_ROOT / "examples" / "dev-support" / "unit-tests" / "playback" / "test_python_playback.py").exists()
     assert (AUDIO_ROOT / "agent-server" / "realtime_agent" / "cli" / "config.py").exists()
-    assert (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "inspect-runs-artifacts.md").exists()
+    assert (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "运行产物排查说明.md").exists()

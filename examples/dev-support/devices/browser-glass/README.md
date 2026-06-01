@@ -22,7 +22,7 @@
 
 ```bash
 # 在项目根目录执行
-uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
 打开页面时使用 CLI 的本地 HTTP 模式：
@@ -66,7 +66,7 @@ SDK，不需要复用这个浏览器页面结构。
 
 ## peer video sender
 
-for-blind-app 的找物和红绿灯 Task 会先启动 Python phone receiver，再向 browser-glass 下发：
+业务 Task 可以先启动 Python phone receiver，再向 browser-glass 下发：
 
 ```text
 command.requested command=peer.video.sender.start

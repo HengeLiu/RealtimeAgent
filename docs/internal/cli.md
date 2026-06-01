@@ -103,18 +103,18 @@ uv run realtime-agent.ios.build-sim
 uv run realtime-agent.esp32.config
 ```
 
-无硬件检查：
+外部固件工程无硬件检查：
 
 ```bash
-uv run realtime-agent.esp32.build --dry-run
+uv run realtime-agent.esp32.build --project-dir /path/to/esp32-firmware --dry-run
 ```
 
 有 ESP-IDF 和硬件时：
 
 ```bash
-uv run realtime-agent.esp32.build
-uv run realtime-agent.esp32.flash --port /dev/tty.usbmodemXXXX
-uv run realtime-agent.esp32.monitor --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.build --project-dir /path/to/esp32-firmware
+uv run realtime-agent.esp32.flash --project-dir /path/to/esp32-firmware --port /dev/tty.usbmodemXXXX
+uv run realtime-agent.esp32.monitor --project-dir /path/to/esp32-firmware --port /dev/tty.usbmodemXXXX
 ```
 
 ## 开发检查

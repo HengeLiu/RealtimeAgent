@@ -5,7 +5,7 @@ iOS 和 macOS，负责协议数据模型、stream chunk 编解码、control / st
 设备注册、心跳、标准事件状态机、显式启用的音视频硬件接入、speaker 播放 buffer 水位线
 以及 `custom.*` 业务事件语法糖。
 
-本期 Swift 实现以 [Swift 端 Device SDK 与 Device App 开发计划](../../docs/reference/swift-device-sdk-and-app-development-plan.md)
+Swift SDK 的当前实现设计以 [../swift/SWIFT_DEVICE_SDK_DESIGN.md](../swift/SWIFT_DEVICE_SDK_DESIGN.md)
 为准。旧的 `IOS_DEVICE_SDK_DESIGN_PLAN.md` 只作为历史阶段记录，不再作为当前公开 API 边界。
 
 ## 遵循的协议

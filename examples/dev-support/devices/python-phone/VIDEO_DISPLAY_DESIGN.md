@@ -542,7 +542,7 @@ uv run python -m pytest examples/dev-support/unit-tests/python_phone_mock/test_p
 终端 1：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
 终端 2：

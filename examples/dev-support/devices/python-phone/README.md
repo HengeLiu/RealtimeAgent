@@ -45,7 +45,7 @@ runs/realtime-agent/python-phone/latest-rgb.png
 
 ## peer video receiver
 
-`phone.preview.yaml` 现在作为 peer video 接收端参与 for-blind-app 找物和红绿灯任务：
+`phone.preview.yaml` 现在可以作为 peer video 接收端参与找物、红绿灯等业务任务：
 
 1. 注册属性包含 `device_role: phone`、`endpoint.compute.vision: true` 和 `peer.video.receiver: true`。
 2. 收到 `peer.video.receiver.start` 后，Python phone 会打开 `ws://<phone-ip>:19081/peer-video/<peer_session_id>`。
@@ -78,7 +78,7 @@ uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.
 终端 1：
 
 ```bash
-uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
 ```
 
 终端 2：

@@ -615,7 +615,7 @@ Gate -> Msg: assistant_text.done
 - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py agent-server/protocol-tests/sdk/agent_core/test_context_compiler.py agent-server/protocol-tests/sdk/runtime/test_voice_session_modes.py -q`
   - 结果：通过，29 passed。
 - `uv run python -m realtime_agent_python_playback_glass run --server-url http://127.0.0.1:18765 --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml --runs-root /tmp/realtime-agent-text-e2e/runs --report /tmp/realtime-agent-text-e2e/reports/smoke/report.json`
-  - 配置：临时 `/tmp/realtime-agent-text-e2e/server.yaml`，`agent.mode=vision`，ASR/Vision/TTS 均为 mock provider，复用 for-blind capabilities，清空临时 denylist 以允许 `capture_photo`。
+  - 配置：临时 `/tmp/realtime-agent-text-e2e/server.yaml`，`agent.mode=vision`，ASR/Vision/TTS 均为 mock provider，复用 external-business capabilities，清空临时 denylist 以允许 `capture_photo`。
   - 结果：通过，2 cases passed。
   - 普通问答 case：`messages.jsonl` 记录 `你是谁呀 -> 我是 realtime-agent Vision 链路助手。`，产生 speaker WAV。
   - 普通问答 case：`agent-events.jsonl` 记录每个 `vision.response_gate.buffered` 后立即出现 `assistant_text.delta` 和 `vision.response_gate.released(reason=vision_delta_realtime)`；`stream-events.jsonl` 记录 mock TTS `tts_first_audio_latency_ms=2`。

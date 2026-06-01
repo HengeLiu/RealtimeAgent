@@ -54,7 +54,6 @@ where = [
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
-    "examples/for-blind-app/devices/native-esp32-glass",
 ]
 include = [
     "realtime_agent*",
@@ -77,7 +76,6 @@ pythonpath = [
     "examples/dev-support/devices/python-glass",
     "examples/dev-support/devices/python-playback-glass",
     "examples/dev-support/devices/python-phone",
-    "examples/for-blind-app/devices/native-esp32-glass",
 ]
 testpaths = [
     "protocol/unit-tests",
@@ -87,10 +85,6 @@ testpaths = [
     "agent-server/model-provider-tests",
     "devices/python/unit-tests",
     "devices/python/protocol-tests",
-    "examples/for-blind-app/unit-tests",
-    "examples/for-blind-app/app-tests",
-    "examples/for-blind-app/replay-tests",
-    "examples/for-blind-app/hardware-tests",
     "examples/device_demo/app-tests",
     "examples/dev-support/unit-tests",
     "examples/dev-support/app-tests",

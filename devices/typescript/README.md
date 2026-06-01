@@ -15,7 +15,9 @@ stream 通道。
 | 通道 | 路径 | 用途 |
 | --- | --- | --- |
 | Control WebSocket | `/ws/control` | 注册、心跳、命令、stream 生命周期事件。 |
-| Stream WebSocket | `/ws/stream?device_id=<device_id>` | 二进制数据上传和下行播放数据。 |
+| Audio Input WebSocket | `/ws/stream/audio/input?device_id=<device_id>` | 端侧上传 `sensor.mic` PCM chunk。 |
+| Audio Output WebSocket | `/ws/stream/audio/output?device_id=<device_id>` | 端侧接收 server 下发的 `actuator.speaker` chunk。 |
+| Visual Input WebSocket | `/ws/stream/visual/input?device_id=<device_id>` | server 请求后，端侧上传一帧 `sensor.rgb` 图片。 |
 
 控制事件字段：
 

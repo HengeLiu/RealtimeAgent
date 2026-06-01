@@ -415,7 +415,7 @@ client.onEvent("custom.demo.message") { event in
 }
 ```
 
-不要在 Device Demo 里加入 for-blind 业务逻辑、导航业务、复杂任务编排或固定设备 ID 路由。
+不要在 Device Demo 里加入外部业务逻辑、导航业务、复杂任务编排或固定设备 ID 路由。
 
 ## 15. 错误处理
 
@@ -489,7 +489,7 @@ App 设计完成后的验收点：
 6. speaker 播放完全由 SDK 处理，App 不含播放 buffer 或 renderer 逻辑。
 7. 点击结束通话后，SDK 发送端侧结束请求，server 下发 close 后 App 回到等待页。
 8. 调试面板能复制 SDK diagnostics 和 App 日志。
-9. 代码中不出现 for-blind app、旧业务设备路由或 SDK 内部协议重实现。
+9. 代码中不出现外部业务 App、旧业务设备路由或 SDK 内部协议重实现。
 
 ## 19. 后续实现顺序
 

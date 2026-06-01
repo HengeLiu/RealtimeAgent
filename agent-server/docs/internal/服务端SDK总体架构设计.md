@@ -2,7 +2,7 @@
 
 更新时间：2026-05-15
 
-文档状态：总体架构设计与历史决策记录。本文覆盖了 `realtime-agent` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。当前可执行开发说明以 [设备注册与功能开发说明](../how-to/设备能力开发说明.md) 为准，完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/上下文设备接口设计.md) 为准。
+文档状态：总体架构设计与历史决策记录。本文覆盖了 `realtime-agent` 从早期设计到老 SDK 对齐阶段的完整架构思路，部分章节保留了历史草案名称和过渡方案。当前可执行代码的开发入口是 `ToolContext` / `TaskContext` 注入的 `ToolDeviceFacade` / `TaskDeviceFacade` typed API，例如 `context.devices.sensors.rgb.one()`、`context.devices.sensors.rgb.stream()`、`context.devices.commands.call()` 和 `context.output.say()`；当前设备注册只接受结构化 `supports`，不接受端侧手写 `routes/subscriptions`；当前 stream 控制事件是 `stream.control.open.requested` / `stream.control.close.requested`，端侧命令事件是 `command.requested` / `command.accepted` / `command.progress` / `command.completed` / `command.failed`。完整 Context API 设计以 [Context 与设备 API 设计说明](../reference/上下文设备接口设计.md) 为准。
 
 ## 1. 文档目的
 
@@ -100,7 +100,7 @@ legacy/
 2. `examples` 按项目组织应用、业务能力、参考端侧和应用测试。
 3. `agent-server/tests` 和各 `examples/*/tests` 保留 SDK 契约、回放、集成测试。
 4. `testdata` 保留跨项目共享的音频样例。
-5. `legacy` 保存旧 `openaiglass-sdk`、旧 `openaiglass-for-blind` 和历史资料，只作为迁移参考。
+5. `legacy` 保存旧 `openaiglass-sdk`、旧 `openaiglass-external-business` 和历史资料，只作为迁移参考。
 
 ### 3.3 SDK 边界
 
@@ -161,7 +161,7 @@ legacy/
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Control Service        | 已实现   | 设备注册、订阅匹配、事件发布和 debug API 已由 `agent-server/protocol-tests/sdk/runtime/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。                                                                                                                                                                               |
 | Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`、`examples/dev-support/app-tests/network/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
-| Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；Vision 路线可复用 AudioSample 做无头回放，见 `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
+| Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；Vision 路线可复用 AudioSample 做无头回放，见 `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
 | Asset Service          | 已实现   | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。                                                                                                                                          |
 | Agent Core             | 部分实现 | Vision / Omni mock 链路、工具发现和 provider schema 已覆盖；VisionRealtimeAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
 | ToolGateway            | 已实现   | `BaseTool`、自动发现、策略、schema、执行和 trace 记录已由 `agent-server/protocol-tests/acceptance/test_auto_discovery_developer_contract.py`、`agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py` 与 `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py` 覆盖。                                                                                                                                                      |
@@ -181,11 +181,11 @@ legacy/
 | 自动发现 Tool / Task        | `agent-server/protocol-tests/acceptance/test_auto_discovery_developer_contract.py`                                                                                                                                                                 |
 | 设备注册与订阅分发          | `agent-server/protocol-tests/sdk/runtime/test_control_service.py`                                                                                                                                       |
 | stream chunk 协议           | `protocol/protocol-tests/test_protocol_contracts.py`、`agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`                                                                                 |
-| 资产缓存与能力回放          | `examples/for-blind-app/app-tests/acceptance/test_capability_template_playback.py`                                                                                                                  |
+| 资产缓存与能力回放          | `examples/device_demo/app-tests/acceptance/test_capability_template_playback.py`                                                                                                                  |
 | Tool / Task 协议原生扩展    | `agent-server/protocol-tests/acceptance/test_auto_discovery_developer_contract.py`、`agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py`、`agent-server/protocol-tests/acceptance/test_task_device_stream_contract.py`                                                                                                                                                                |
-| Vision 模型音频闭环           | `examples/for-blind-app/replay-tests/test_vision_route_audio_samples.py`                                                                                                                                                                                     |
+| Vision 模型音频闭环           | `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`                                                                                                                                                                                     |
 | Output Service 与播放仲裁   | `agent-server/protocol-tests/sdk/runtime/test_phase2_providers_output.py`                                                                                                          |
-| H 线路迁移样板              | `examples/for-blind-app/agent-server/capabilities/tools.py`、`examples/for-blind-app/agent-server/capabilities/tasks.py`、`examples/for-blind-app/app-tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
+| H 线路迁移样板              | `examples/dev-support/agent-server/capabilities/tools.py`、`examples/dev-support/agent-server/capabilities/tasks.py`、`examples/device_demo/app-tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
 | Memory / Skill / MCP 能力面 | `agent-server/protocol-tests/sdk/runtime/test_memory_service.py`、`agent-server/protocol-tests/sdk/extensions/test_skill_service.py`、`agent-server/protocol-tests/sdk/extensions/test_mcp_gateway.py`、`agent-server/protocol-tests/acceptance/test_indirect_device_context_contract.py`                                                                |
 
 ### 3.7 公开扩展 API
@@ -3144,8 +3144,8 @@ await context.devices.submit_text(
 建议目录：
 
 ```text
-examples/for-blind-app/devices/
-  native-esp32-glass/
+examples/device_demo/devices/
+  esp32-s3/
 examples/device_demo/ios/
 examples/dev-support/devices/
   browser-glass/
@@ -3312,8 +3312,8 @@ CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、�
 
 ```bash
 uv run realtime-agent.config.sync \
-  --app-root examples/for-blind-app \
-  --config examples/for-blind-app/agent-server/server.yaml
+  --app-root examples/device_demo \
+  --config examples/device_demo/agent-server/server.yaml
 ```
 
 同步命令应做这些事：
@@ -3328,7 +3328,7 @@ uv run realtime-agent.config.sync \
 
 ```bash
 uv run realtime-agent.config.sync \
-  --config examples/for-blind-app/agent-server/server.yaml \
+  --config examples/device_demo/agent-server/server.yaml \
   --public-url http://192.168.1.23:8765
 ```
 
@@ -3345,7 +3345,7 @@ uv run realtime-agent.config.sync \
 
 ```bash
 uv run realtime-agent.server.run \
-  --config examples/for-blind-app/agent-server/server.yaml
+  --config examples/device_demo/agent-server/server.yaml
 ```
 
 业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
@@ -3378,7 +3378,7 @@ Omni Realtime 联调启动：
 
 ```bash
 DASHSCOPE_API_KEY=xxx uv run realtime-agent.server.run \
-  --config examples/for-blind-app/server-omni.yaml
+  --config examples/device_demo/agent-server/server.yaml
 ```
 
 然后直接打开独立参考端侧页面：
@@ -3407,7 +3407,7 @@ omni.visual_stream.close.requested
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
-uv run realtime-agent.server.start --config examples/for-blind-app/agent-server/server.yaml
+uv run realtime-agent.server.start --config examples/device_demo/agent-server/server.yaml
 uv run realtime-agent.server.logs
 uv run realtime-agent.server.stop
 ```
@@ -3509,7 +3509,7 @@ ESP32 后续目标命令形态，当前未落地：
 ```bash
 uv run realtime-agent.esp32.start \
   --app-root /path/to/my-app \
-  --project-dir /path/to/examples/for-blind-app/devices/native-esp32-glass \
+  --project-dir /path/to/external-device-repo/esp32-s3 \
   --idf-root /path/to/esp-idf \
   --port '/dev/tty.usbmodem*'
 ```
@@ -3529,9 +3529,9 @@ ESP32 命令需要支持：
 本地研发：
 
 1. `uv pip install -e realtime-agent`
-2. 后续目标，当前未落地：`uv run realtime-agent.config.sync --config examples/for-blind-app/agent-server/server.yaml`
+2. 后续目标，当前未落地：`uv run realtime-agent.config.sync --config examples/device_demo/agent-server/server.yaml`
 3. `uv run realtime-agent.dev.preflight --report runs/preflight.json`
-4. `uv run realtime-agent.server.run --config examples/for-blind-app/agent-server/server.yaml`
+4. `uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml`
 5. 另一个终端运行 `uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml`
 6. 查看 `runs/realtime-agent` 和 `/api/debug/*`
 
@@ -3571,7 +3571,7 @@ ESP32 命令需要支持：
 
 ```bash
 uv run realtime-agent.dev.preflight \
-  --config examples/for-blind-app/agent-server/server.yaml \
+  --config examples/device_demo/agent-server/server.yaml \
   --require-server \
   --report runs/preflight-live.json
 ```
@@ -4165,7 +4165,7 @@ runs/realtime-agent/playback/<run_id>/
 
 ```text
 legacy/openaiglass-sdk/
-legacy/openaiglass-for-blind/
+legacy/openaiglass-external-business/
 agent-server/realtime_agent/
 examples/
 ```

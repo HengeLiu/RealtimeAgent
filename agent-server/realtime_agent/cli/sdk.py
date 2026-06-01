@@ -240,7 +240,6 @@ def _wheel_contents_check(wheel_path: Path) -> dict:
         ".pyc",
         "runs/",
         "examples/",
-        "examples/for-blind-app/devices/native-esp32-glass/",
         "examples/dev-support/devices/browser-glass/",
         "local.env",
         "AppConfig.json",
@@ -304,26 +303,17 @@ def _editable_install_check(audio_root: Path, public_names: list[str]) -> dict:
 
 
 def _esp32_reference_check(audio_root: Path) -> dict:
-    """检查 ESP32-S3 参考端随包输入。
+    """记录 ESP32-S3 参考端的外部工程边界。
 
-    主要逻辑：package-check 不要求本机安装 ESP-IDF，也不假装真机构建成功；它只检查
-    参考目录、README、本地 env 模板和 ESP-IDF 工程骨架是否齐全。
+    主要逻辑：当前仓库不再内置 ESP32 固件工程；package-check 只声明该检查被跳过，
+    真机 smoke 由外部端侧仓库使用 `realtime-agent.esp32.* --project-dir` 完成。
     """
 
-    from realtime_agent.cli.esp32 import _esp32_project_manifest_check
-
-    endpoint_root = audio_root / "examples" / "for-blind-app" / "devices" / "native-esp32-glass"
-    errors = []
-    for relative in ("README.md", "local.env.example"):
-        if not (endpoint_root / relative).exists():
-            errors.append(f"missing ESP32 endpoint file: {relative}")
-    firmware_check = _esp32_project_manifest_check(endpoint_root / "firmware")
-    errors.extend(firmware_check["errors"])
     return {
-        "ok": not errors,
-        "endpoint_root": str(endpoint_root),
-        "firmware": firmware_check,
-        "errors": errors,
+        "ok": True,
+        "skipped": True,
+        "reason": "ESP32-S3 firmware is maintained outside this repository",
+        "errors": [],
     }
 
 
@@ -341,11 +331,6 @@ def _endpoint_source_check(audio_root: Path) -> dict:
             "examples/device_demo/ios/DeviceDemo.xcodeproj/project.pbxproj",
             "examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift",
             "examples/device_demo/ios/DeviceDemo/Info.plist",
-        ],
-        "esp32_s3": [
-            "examples/for-blind-app/devices/native-esp32-glass/README.md",
-            "examples/for-blind-app/devices/native-esp32-glass/local.env.example",
-            "examples/for-blind-app/devices/native-esp32-glass/firmware/CMakeLists.txt",
         ],
         "browser_glass": [
             "examples/dev-support/devices/browser-glass/README.md",
@@ -376,7 +361,7 @@ def _endpoint_source_check(audio_root: Path) -> dict:
         }
     esp32_check = _esp32_reference_check(audio_root)
     errors.extend(esp32_check["errors"])
-    checks["esp32_s3"]["firmware"] = esp32_check["firmware"]
+    checks["esp32_s3"] = esp32_check
     return {"ok": not errors, "checks": checks, "errors": errors}
 
 
@@ -394,7 +379,7 @@ def _source_boundary_check(audio_root: Path) -> dict:
         if any(path.is_relative_to(prefix) for prefix in allowed_prefixes):
             continue
         text = path.read_text(encoding="utf-8")
-        for needle in ("realtime_agent.endpoints", "examples.", "examples/for-blind-app/devices/native-esp32-glass"):
+        for needle in ("realtime_agent.endpoints", "examples."):
             if needle in text:
                 offenders.append(f"{path.relative_to(audio_root)}:{needle}")
     errors = [f"server SDK core imports endpoint/example boundary: {item}" for item in offenders]

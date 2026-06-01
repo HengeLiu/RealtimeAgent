@@ -4,7 +4,6 @@
 
 ## How-to
 
-- [设备能力与 Context API 开发说明](how-to/设备能力开发说明.md)
 - [runs 目录产物说明](how-to/运行产物排查说明.md)
 
 ## Reference
@@ -18,4 +17,4 @@
 - [SDK 照片资产处理链路设计](internal/照片资产处理链路设计.md)
 - [SDK 照片资产处理链路开发计划](internal/照片资产处理链路实施计划.md)
 - [Vision 图片和视频输入设计](internal/Vision图片视频输入设计.md)
-- [VL 增量图片上下文预览压缩实验](internal/VL增量图片上下文预览压缩实验.md)
+- [VL 增量图片上下文预览压缩实验](experiment/VL模型连续提交图片实验.md)

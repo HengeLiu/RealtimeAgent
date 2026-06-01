@@ -154,7 +154,7 @@ Case Recorder 负责把一次运行归纳成 Case 草稿：
 
 ```bash
 uv run python -m realtime_agent_python_playback_glass record \
-  --runs-root examples/for-blind-app/agent-server/runs \
+  --runs-root examples/device_demo/agent-server/runs \
   --user-id user-browser-glass-001 \
   --device-id dev-browser-glass-001 \
   --audio testdata/audio-sample/看一下我前面有什么.wav \
@@ -334,7 +334,7 @@ expect:
           "actual": []
         }
       ],
-      "runs_dir": "examples/for-blind-app/agent-server/runs/user-system-test/dev-python-playback-glass"
+      "runs_dir": "examples/device_demo/agent-server/runs/user-system-test/dev-python-playback-glass"
     }
   ]
 }
