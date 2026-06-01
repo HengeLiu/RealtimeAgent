@@ -3,6 +3,7 @@ name = "realtime-agent"
 version = "0.1.0rc1"
 description = "Server-side Python SDK for realtime-agent voice and device sessions."
 requires-python = ">=3.11,<3.13"
+license = { file = "LICENSE" }
 dependencies = [
     "aiohttp>=3.9.0",
     "dashscope>=1.25.0",

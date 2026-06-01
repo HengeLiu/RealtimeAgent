@@ -294,4 +294,4 @@ uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_cont
 
 ## License
 
-在生产环境使用或重新分发本项目之前，请先确认仓库的 license 信息。
+本项目使用 [MIT License](LICENSE)。

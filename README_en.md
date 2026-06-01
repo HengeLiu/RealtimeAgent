@@ -297,4 +297,4 @@ uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_cont
 
 ## License
 
-Check the repository license before using this project in production or redistributing it.
+This project is licensed under the [MIT License](LICENSE).
