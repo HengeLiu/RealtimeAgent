@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreImage
+import ImageIO
 import RealtimeAgentDeviceKit
 import SwiftUI
 import UIKit
@@ -72,7 +73,10 @@ final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCa
         guard let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let image = CIImage(cvPixelBuffer: imageBuffer)
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        guard let data = context.jpegRepresentation(of: image, colorSpace: colorSpace, options: [:]) else { return }
+        let options: [CIImageRepresentationOption: Any] = [
+            kCGImageDestinationLossyCompressionQuality as CIImageRepresentationOption: 0.68,
+        ]
+        guard let data = context.jpegRepresentation(of: image, colorSpace: colorSpace, options: options) else { return }
         lock.lock()
         latestJPEG = data
         lock.unlock()
@@ -112,7 +116,7 @@ final class CameraPreviewController: NSObject, ObservableObject, RealtimeAgentCa
             queue.async {
                 do {
                     self.session.beginConfiguration()
-                    self.session.sessionPreset = .high
+                    self.session.sessionPreset = .vga640x480
 
                     guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back)
                         ?? AVCaptureDevice.default(for: .video) else {

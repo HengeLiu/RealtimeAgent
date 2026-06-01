@@ -66,8 +66,9 @@ public enum CameraFrameUploader {
 
     /// 注册 RGB handler。
     ///
-    /// 主要功能：当前协议阶段只支持 server 请求触发的单帧采集。即使旧 server 误传
-    /// `mode=continuous` 或频率字段，SDK 也只上传一张 `final=true` 图片并关闭逻辑流。
+    /// 主要功能：`mode=single` 时上传一张 `final=true` 图片并关闭逻辑流；
+    /// `mode=continuous` 时按 `frequency_hz` 持续上传帧，直到 server 下发 close
+    /// 事件取消当前 handler。
     public static func registerFrameHandler(
         client: RealtimeAgentDeviceClient,
         source: RealtimeAgentCameraFrameSource,
@@ -75,10 +76,14 @@ public enum CameraFrameUploader {
         defaultSampleCount _: Int = 1
     ) {
         client.onStreamOpen("sensor.rgb") { request in
-            var openedPayload: [String: Any] = [
+            let mode = request.request.payload["mode"] as? String ?? "single"
+            let sampleLimit = sampleLimit(from: request)
+            let frequencyHz = frequencyHz(from: request, fallback: options.sampleRate)
+            let openedPayload: [String: Any] = [
                 "request_id": request.requestID ?? "",
-                "mode": "single",
-                "sample_count": 1,
+                "mode": mode,
+                "sample_count": sampleLimit ?? 0,
+                "frequency_hz": frequencyHz,
                 "format": [
                     "codec": options.codec,
                     "sample_rate": options.sampleRate,
@@ -86,25 +91,86 @@ public enum CameraFrameUploader {
                     "chunk_ms": options.durationMS,
                 ],
             ]
-            if request.request.payload["mode"] as? String == "continuous" {
-                openedPayload["requested_mode_ignored"] = "continuous"
-            }
             try await request.opened(openedPayload)
-            let jpeg = try await source.captureJPEG()
-            var metadata = metadata(from: request)
-            metadata["sample_index"] = 0
-            metadata["sample_count"] = 1
-            try await request.write(
-                jpeg,
-                codec: options.codec,
-                sampleRate: options.sampleRate,
-                channels: options.channels,
-                durationMS: options.durationMS,
-                final: true,
-                metadata: metadata
-            )
-            try await request.closed(reason: "camera_frame_uploaded")
+            if mode == "continuous" {
+                var sampleIndex = 0
+                while !Task.isCancelled {
+                    if let sampleLimit, sampleIndex >= sampleLimit {
+                        break
+                    }
+                    try await uploadFrame(
+                        request: request,
+                        source: source,
+                        options: options,
+                        sampleIndex: sampleIndex,
+                        sampleCount: sampleLimit ?? 0,
+                        final: false
+                    )
+                    sampleIndex += 1
+                    if options.sleepBetweenContinuousFrames {
+                        let seconds = 1.0 / max(0.1, frequencyHz)
+                        try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+                    } else {
+                        await Task.yield()
+                    }
+                }
+                try Task.checkCancellation()
+                try await request.closed(reason: "camera_continuous_completed")
+            } else {
+                try await uploadFrame(
+                    request: request,
+                    source: source,
+                    options: options,
+                    sampleIndex: 0,
+                    sampleCount: 1,
+                    final: true
+                )
+                try await request.closed(reason: "camera_frame_uploaded")
+            }
         }
+    }
+
+    private static func uploadFrame(
+        request: RealtimeAgentInputStreamRequest,
+        source: RealtimeAgentCameraFrameSource,
+        options: CameraFrameUploadOptions,
+        sampleIndex: Int,
+        sampleCount: Int,
+        final: Bool
+    ) async throws {
+        let jpeg = try await source.captureJPEG()
+        var metadata = metadata(from: request)
+        metadata["sample_index"] = sampleIndex
+        metadata["sample_count"] = sampleCount
+        try await request.write(
+            jpeg,
+            codec: options.codec,
+            sampleRate: options.sampleRate,
+            channels: options.channels,
+            durationMS: options.durationMS,
+            final: final,
+            metadata: metadata
+        )
+    }
+
+    private static func sampleLimit(from request: RealtimeAgentInputStreamRequest) -> Int? {
+        if let value = request.request.payload["max_samples"] as? Int, value > 0 {
+            return value
+        }
+        if let value = request.request.payload["sample_count"] as? Int, value > 0 {
+            return value
+        }
+        return nil
+    }
+
+    private static func frequencyHz(from request: RealtimeAgentInputStreamRequest, fallback: Int) -> Double {
+        if let value = request.request.payload["frequency_hz"] as? Double, value > 0 {
+            return value
+        }
+        if let value = request.request.payload["frequency_hz"] as? Int, value > 0 {
+            return Double(value)
+        }
+        return Double(max(1, fallback))
     }
 
     private static func metadata(from request: RealtimeAgentInputStreamRequest) -> [String: Any] {
@@ -115,9 +181,19 @@ public enum CameraFrameUploader {
         if let turnID = request.request.payload["turn_id"] {
             metadata["turn_id"] = turnID
         }
+        if let correlationID = request.request.payload["correlation_id"] {
+            metadata["correlation_id"] = correlationID
+        }
+        if let ttlSeconds = request.request.payload["ttl_seconds"] {
+            metadata["ttl_seconds"] = ttlSeconds
+        }
+        if let direction = request.request.payload["direction"] {
+            metadata["direction"] = direction
+        }
         if let captureReason = request.request.payload["capture_reason"] {
             metadata["capture_reason"] = captureReason
         }
+        metadata["captured_at_ms"] = Int(Date().timeIntervalSince1970 * 1000)
         return metadata
     }
 

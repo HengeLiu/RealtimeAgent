@@ -507,9 +507,16 @@ class AssetService:
         异常情况：发布控制事件或文件写入失败时向上抛出。
         """
         self._reject_media_bytes(params or {})
-        cached = self.store.query(user_id=user_id, stream_type=stream_type, freshness_seconds=freshness_seconds, limit=1)
-        if cached:
-            return cached[-1]
+        cached = []
+        if freshness_seconds > 0:
+            cached = self.store.query(
+                user_id=user_id,
+                stream_type=stream_type,
+                freshness_seconds=freshness_seconds,
+                limit=1,
+            )
+            if cached:
+                return cached[-1]
         request_id = new_id("asset_req")
         pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id)
         with self._lock:

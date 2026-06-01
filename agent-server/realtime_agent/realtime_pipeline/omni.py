@@ -53,6 +53,19 @@ class OmniInputBoundary:
         def _record_provider_event(*, user_id: str, session_id: str, record: dict[str, Any]) -> None:
             event = str(record.get("event") or "")
             if event == "omni.input_audio_buffer.speech_started":
+                energy_gate = {}
+                gate = getattr(core, "_provider_speech_energy_gate", None)
+                if callable(gate):
+                    accepted, energy_gate = gate(user_id=user_id, session_id=session_id, record=record)
+                    if not accepted:
+                        recorder = getattr(core, "recorder", None)
+                        if recorder is not None:
+                            recorder.record_agent_event(session_id, record)
+                        return
+                    record = {**record, "energy_gate": energy_gate}
+                notify_user_activity = getattr(core, "_notify_user_activity", None)
+                if callable(notify_user_activity):
+                    notify_user_activity(user_id=user_id, session_id=session_id, reason="provider_speech_started")
                 active_stream_id = output_controller.active_output_stream_id(user_id=user_id, session_id=session_id)
                 state = getattr(core, "_state_by_session", {}).get(session_id, "")
                 has_active_output = active_stream_id is not None
@@ -72,19 +85,27 @@ class OmniInputBoundary:
                     interruptible=interruptible,
                     will_cancel=interruptible,
                     provider_event=event,
+                    diagnostics={
+                        "provider_event": event,
+                        "state": state,
+                        "will_cancel": interruptible,
+                        "energy_gate": energy_gate,
+                    },
                 )
-                emitter.emit(
-                    "output_cancel_requested",
-                    user_id=user_id,
-                    session_id=session_id,
-                    stream_id=active_stream_id or "",
-                    reason="provider_speech_started",
-                    output_stream_id=active_stream_id,
-                    state=state,
-                    has_active_output=has_active_output,
-                    interruptible_state=interruptible_state,
-                    interruptible=interruptible,
-                )
+                if interruptible:
+                    emitter.emit(
+                        "output_cancel_requested",
+                        user_id=user_id,
+                        session_id=session_id,
+                        stream_id=active_stream_id or "",
+                        reason="provider_speech_started",
+                        output_stream_id=active_stream_id,
+                        state=state,
+                        has_active_output=has_active_output,
+                        interruptible_state=interruptible_state,
+                        interruptible=interruptible,
+                        energy_gate=energy_gate,
+                    )
             elif event == "omni.input_audio_buffer.speech_stopped":
                 emitter.emit(
                     "speech_stopped",
@@ -104,6 +125,11 @@ class OmniInputBoundary:
 
         self._upstreams[stream_ref.stream_id] = stream_ref
         self.core.open(stream_ref.user_id, stream_ref.session_id)
+        self.core.on_audio_input_opened(
+            user_id=stream_ref.user_id,
+            session_id=stream_ref.session_id,
+            stream_id=stream_ref.stream_id,
+        )
         return self.emitter.emit(
             "upstream_ready",
             user_id=stream_ref.user_id,

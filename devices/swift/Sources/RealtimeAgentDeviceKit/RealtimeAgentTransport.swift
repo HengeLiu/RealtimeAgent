@@ -40,6 +40,7 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
         let socket = session.webSocketTask(with: url)
         controlSocket = socket
         socket.resume()
+        try await waitUntilSocketReady(socket)
     }
 
     func connectStream(channel: RealtimeAgentStreamChannel, url: URL) async throws {
@@ -47,6 +48,15 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
         streamSockets[channel]?.cancel(with: .normalClosure, reason: nil)
         streamSockets[channel] = socket
         socket.resume()
+        do {
+            try await waitUntilSocketReady(socket)
+        } catch {
+            if streamSockets[channel] === socket {
+                streamSockets[channel] = nil
+            }
+            socket.cancel(with: .goingAway, reason: nil)
+            throw error
+        }
     }
 
     func sendControl(text: String) async throws {
@@ -92,5 +102,17 @@ final class URLSessionRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @
         }
         controlSocket = nil
         streamSockets = [:]
+    }
+
+    private func waitUntilSocketReady(_ socket: URLSessionWebSocketTask) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            socket.sendPing { error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else {
+                    continuation.resume()
+                }
+            }
+        }
     }
 }

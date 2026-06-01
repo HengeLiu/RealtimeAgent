@@ -187,6 +187,46 @@ def test_playback_arbiter_interrupts_lower_priority_stream(tmp_path) -> None:
     assert not any(event.event_name == "stream.output.cancelled" for event in connection.events)
 
 
+def test_playback_arbiter_explicit_on_blocked_interrupt_cancels_equal_priority_stream(tmp_path) -> None:
+    """测试目标：验证实时对话的新回答可以主动打断同优先级旧播放。
+
+    测试方法：先提交一条 normal 输出占用播放链路，再提交另一条 normal 输出，
+    但显式设置 `on_blocked="interrupt"`。
+    预期结果：旧 stream 收到 cancel，新输出立即成为 active，不进入播放队列。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    active = OutputItem(user_id="user-001", session_id="sess-old", priority="normal")
+    interrupting = OutputItem(
+        user_id="user-001",
+        session_id="sess-new",
+        priority="normal",
+        on_blocked="interrupt",
+    )
+
+    app.output_service.on_assistant_vision_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-old", text="old output", intent=active)
+    )
+    old_stream_id = app.output_service.active_output_stream_id("user-001", "sess-old")
+    assert old_stream_id is not None
+
+    app.output_service.on_assistant_vision_delta(
+        AssistantTextDelta(user_id="user-001", session_id="sess-new", text="new output", intent=interrupting)
+    )
+
+    assert app.output_service.active_output_stream_id("user-001", "sess-new") is not None
+    assert app.output_service.active_output_stream_id("user-001", "sess-old") is None
+    assert any(
+        event.event_name == "stream.output.cancel.requested" and event.stream_id == old_stream_id
+        for event in connection.events
+    )
+    decisions = session_text(app, "sess-new", "playback-decisions.jsonl")
+    assert "blocked_output_interrupt" in decisions
+    assert "active_playback_not_preempted" not in decisions
+
+
 def test_user_interrupt_cancels_current_output_stream(tmp_path) -> None:
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
@@ -362,6 +402,66 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     assert app.output_service.active_output_stream_id("user-001", "sess-new") is not None
     queued_decisions = (tmp_path / "runs" / "user-001" / "sess-new" / "playback-decisions.jsonl").read_text()
     assert "queued_playback_ready" in queued_decisions
+
+
+def test_user_interrupt_discards_queued_native_audio_and_allows_next_turn(tmp_path) -> None:
+    """测试目标：验证用户打断会清理尚未播放的排队原生音频。
+
+    测试方法：先让同一实时会话输出一段原生音频并进入等待端侧 finished 的状态，
+    再提交第二段原生音频使其进入 queue；随后模拟 provider speech_started 打断，
+    最后提交第三段原生音频。
+    预期结果：第二段排队音频被 drop，第三段可以重新打开 speaker stream 播放，
+    不会因为 `_queued_sessions` 残留而只记录文字/音频 transcript。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    connection = Connection("dev-playback")
+    register_speaker(app, connection)
+    session_id = "sess-realtime"
+    audio_format = StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20)
+
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id=session_id,
+        audio=b"\x01\x00" * 480,
+        format=audio_format,
+        final=False,
+    )
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id=session_id,
+        audio=b"",
+        format=audio_format,
+        final=True,
+    )
+    first_stream_id = app.output_service.active_output_stream_id("user-001", session_id)
+    assert first_stream_id is not None
+
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id=session_id,
+        audio=b"\x02\x00" * 480,
+        format=audio_format,
+        final=False,
+    )
+    queued_decisions = session_text(app, session_id, "playback-decisions.jsonl")
+    assert "active_playback_not_preempted" in queued_decisions
+
+    app.output_service.interrupt_user("user-001", session_id=session_id, reason="provider_speech_started")
+    after_interrupt_decisions = session_text(app, session_id, "playback-decisions.jsonl")
+    assert "provider_speech_started:discard_queued" in after_interrupt_decisions
+
+    before = len(connection.chunks)
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id=session_id,
+        audio=b"\x03\x00" * 480,
+        format=audio_format,
+        final=False,
+    )
+    assert len(connection.chunks) > before
+    latest_decisions = session_text(app, session_id, "playback-decisions.jsonl")
+    assert "no_active_playback" in latest_decisions
 
 
 def test_audio_session_idle_waits_for_endpoint_playback_finished(tmp_path) -> None:

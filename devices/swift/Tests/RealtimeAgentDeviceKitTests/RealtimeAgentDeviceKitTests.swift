@@ -1346,7 +1346,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
     #expect(names.contains("control.audio_session.closed"))
 }
 
-@Test func cameraUploaderTreatsLegacyContinuousRgbRequestAsSingleFrame() async throws {
+@Test func cameraUploaderKeepsContinuousRgbRequestOpenUntilServerClose() async throws {
     let transport = MockRealtimeAgentTransport()
     let device = RealtimeAgentDevice(deviceID: "dev-ios-001").user("user-001")
     let client = RealtimeAgentDeviceClient(
@@ -1358,13 +1358,12 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
         Data("jpeg".utf8)
     }
     CameraFrameUploader.registerFrameHandler(client: client, source: source, options: CameraFrameUploadOptions(sampleRate: 1))
-    let event = RealtimeAgentEvent(
+    let open = RealtimeAgentEvent(
         eventName: "stream.control.open.requested",
         userID: "user-001",
         producerID: "server-main",
         payload: [
             "stream_type": "sensor.rgb",
-            "request_id": "req-002",
             "mode": "continuous",
             "frequency_hz": 50,
         ],
@@ -1372,23 +1371,33 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
         streamID: "stream-rgb-002",
         streamType: "sensor.rgb"
     )
+    let close = RealtimeAgentEvent(
+        eventName: "stream.control.close.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: ["stream_type": "sensor.rgb"],
+        sessionID: "dev-ios-001",
+        streamID: "stream-rgb-002",
+        streamType: "sensor.rgb"
+    )
 
-    #expect(try await client.dispatchEvent(event))
+    #expect(try await client.dispatchEvent(open))
+    try await Task.sleep(nanoseconds: 70_000_000)
+    #expect(try await client.dispatchEvent(close))
     try await Task.sleep(nanoseconds: 30_000_000)
 
-    #expect(transport.sentStreamData.count == 1)
+    #expect(transport.sentStreamData.count >= 2)
     let opened = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
     let format = opened.payload["format"] as? [String: Any]
     #expect(format?["codec"] as? String == "jpeg")
     #expect(format?["sample_rate"] as? Int == 1)
-    #expect(opened.payload["mode"] as? String == "single")
-    #expect(opened.payload["sample_count"] as? Int == 1)
-    #expect(opened.payload["requested_mode_ignored"] as? String == "continuous")
+    #expect(opened.payload["mode"] as? String == "continuous")
+    #expect(opened.payload["sample_count"] as? Int == 0)
+    #expect(opened.payload["frequency_hz"] as? Double == 50)
     let chunks = try transport.sentStreamData.map { try RealtimeAgentStreamChunkCodec.decode($0) }
-    #expect(chunks.map(\.seq) == [0])
-    #expect(chunks.allSatisfy { $0.final })
-    #expect(chunks.last?.metadata["sample_count"] as? Int == 1)
-    #expect(chunks.last?.metadata["frequency_hz"] == nil)
+    #expect(chunks.map(\.seq) == Array(0..<chunks.count))
+    #expect(chunks.allSatisfy { !$0.final })
+    #expect(chunks.last?.metadata["sample_count"] as? Int == 0)
     let names = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
     #expect(names == ["stream.input.opened", "stream.input.closed"])
 }

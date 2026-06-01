@@ -527,6 +527,9 @@ class RealtimeAgentApp:
                 visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
                 visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
                 visual_direction=self.config.visual_realtime_video_direction,
+                provider_speech_min_rms=self.config.audio_pipeline_vad_rms_threshold
+                if self.config.audio_pipeline_vad == "provider"
+                else 0,
             ),
             asr_config=AsrProviderConfig(
                 provider=self.config.asr_provider,

@@ -809,6 +809,24 @@ class PlaybackArbiter:
             )
             self._record(intent.session_id, decision)
             return decision, stream_id
+        if intent.on_blocked == "interrupt":
+            self.stream_service.cancel_stream(active_stream_id, reason="interrupted_by_new_output")
+            if active_intent.on_interrupted == "requeue":
+                self._queue_by_user.setdefault(intent.user_id, []).append(
+                    QueuedOutput(source=active_source, intent=active_intent, source_stream_id=active_stream_id)
+                )
+            stream_id = self._open_output_stream(intent, source=source, format=format)
+            decision = PlaybackDecision(
+                action="interrupt",
+                reason="blocked_output_interrupt",
+                active_stream_id=stream_id,
+                interrupted_stream_id=active_stream_id,
+                user_id=intent.user_id,
+                session_id=intent.session_id,
+                priority=intent.priority,
+            )
+            self._record(intent.session_id, decision)
+            return decision, stream_id
         if intent.on_blocked == "queue":
             queue = self._queue_by_user.setdefault(intent.user_id, [])
             if len(queue) >= self.max_queue_size:
@@ -851,6 +869,42 @@ class PlaybackArbiter:
                 continue
             return queued
         return None
+
+    def discard_queued(self, user_id: str, *, session_id: str | None, reason: str) -> list[QueuedOutput]:
+        """丢弃用户打断时尚未播放的排队输出。
+
+        主要逻辑：用户重新开始说话时，旧 assistant 回复即使已经生成音频也不应在后续
+        轮次继续播放；因此按 user/session 清理播放队列，并记录 drop 决策。
+        参数：`user_id` 定位队列；`session_id` 为空时清理该用户全部队列。
+        返回值：被丢弃的排队输出列表，调用方可据此清理 session 级缓存。
+        异常情况：无。
+        """
+
+        queue = self._queue_by_user.get(user_id, [])
+        if not queue:
+            return []
+        kept: list[QueuedOutput] = []
+        discarded: list[QueuedOutput] = []
+        for queued in queue:
+            if session_id is None or queued.intent.session_id == session_id:
+                discarded.append(queued)
+                self._record(
+                    queued.intent.session_id,
+                    PlaybackDecision(
+                        action="drop",
+                        reason=reason,
+                        user_id=queued.intent.user_id,
+                        session_id=queued.intent.session_id,
+                        priority=queued.intent.priority,
+                    ),
+                )
+            else:
+                kept.append(queued)
+        if kept:
+            self._queue_by_user[user_id] = kept
+        else:
+            self._queue_by_user.pop(user_id, None)
+        return discarded
 
     def activate_queued(self, queued: QueuedOutput, *, format: StreamFormat | None = None) -> str:
         stream_id = self._open_output_stream(queued.intent, source=queued.source, format=format)
@@ -2773,6 +2827,18 @@ class OutputService:
 
     def interrupt_user(self, user_id: str, *, session_id: str | None, reason: str) -> PlaybackDecision:
         decision = self.router.arbiter.cancel_current(user_id, session_id=session_id, reason=reason)
+        discarded = self.router.arbiter.discard_queued(user_id, session_id=session_id, reason=f"{reason}:discard_queued")
+        for queued in discarded:
+            queued_session = queued.intent.session_id
+            close = getattr(queued.source, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    pass
+            self.router._queued_sessions.discard(queued_session)
+            self.router._source_by_session.pop(queued_session, None)
+            self.router._native_source_by_session.pop(queued_session, None)
         if decision.interrupted_stream_id:
             self.router._paused_streams.discard(decision.interrupted_stream_id)
             self.router._paused_payload_by_stream.pop(decision.interrupted_stream_id, None)
@@ -2787,6 +2853,7 @@ class OutputService:
                         except Exception:
                             pass
                     self.router._native_source_by_session.pop(stored_session, None)
+                    self.router._queued_sessions.discard(stored_session)
         return decision
 
     def active_output_stream_id(self, user_id: str, session_id: str | None = None) -> str | None:

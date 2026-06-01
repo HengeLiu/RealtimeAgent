@@ -21,6 +21,7 @@ from realtime_agent.agent_core.omni import (
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.asset.service import AssetRef
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
+from realtime_agent.realtime_pipeline import create_omni_realtime_pipeline
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
@@ -286,6 +287,27 @@ def _realtime_app(tmp_path, instances: list[FakeRealtimeProvider]) -> RealtimeAg
     return app
 
 
+def _realtime_app_with_provider_speech_gate(
+    tmp_path,
+    instances: list[FakeRealtimeProvider],
+    *,
+    min_rms: int,
+) -> RealtimeAgentApp:
+    """创建启用 provider speech 能量门限的测试应用。"""
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core = OmniRealtimeAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        omni_config=RealtimeProviderConfig(provider="fake", model="fake-omni", provider_speech_min_rms=min_rms),
+        provider_factory=lambda config: _new_fake(config, instances),
+    )
+    app.vision_agent_core = app.agent_core
+    app.audio_pipeline.agent_core = app.agent_core
+    return app
+
+
 def _new_fake(config: RealtimeProviderConfig, instances: list[FakeRealtimeProvider]) -> FakeRealtimeProvider:
     fake = FakeRealtimeProvider(config)
     instances.append(fake)
@@ -305,6 +327,7 @@ class FakeAssetService:
         self.query_count = 0
         self.requests: list[dict] = []
         self.claims: list[dict] = []
+        self.clears: list[dict] = []
 
     def request_asset(self, **kwargs) -> AssetRef:
         """返回一帧本地测试图片。"""
@@ -320,7 +343,7 @@ class FakeAssetService:
             created_at_ms=int(time.time() * 1000),
             uri=str(self.image_path),
             size_bytes=self.image_path.stat().st_size,
-            metadata={"request_count": self.request_count},
+            metadata={"request_count": self.request_count, **dict(kwargs.get("params") or {})},
         )
 
     def query_assets(self, **kwargs) -> list[AssetRef]:
@@ -346,6 +369,12 @@ class FakeAssetService:
 
         self.claims.append(dict(kwargs))
         return types.SimpleNamespace(ok=True, reason="", claim=types.SimpleNamespace(claim_id=f"claim-{len(self.claims)}"))
+
+    def clear_turn_buffer(self, **kwargs) -> int:
+        """记录 turn buffer 清理请求。"""
+
+        self.clears.append(dict(kwargs))
+        return 1
 
     def get_asset_payload(self, asset_id: str) -> bytes | None:
         """模拟内存 payload 缺失，测试磁盘回退路径。"""
@@ -624,6 +653,154 @@ def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> Non
     assert "omni.response.audio_done_ignored_after_interrupt" in agent_events_text
 
 
+def test_realtime_provider_speech_started_low_energy_does_not_cancel_active_output(tmp_path) -> None:
+    """测试目标：验证低能量 provider speech_started 不会误触发播放打断。
+
+    测试方法：启用 provider speech RMS 门限，先输入低 RMS 音频并让 fake provider
+    建立 active output，再模拟 provider 上报 `speech_started`。
+    预期结果：端侧不会收到 `audio.speech.started` 或 `stream.output.cancel.requested`，
+    runs 中记录 `ignore_low_energy_speech_started` 诊断。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app_with_provider_speech_gate(tmp_path, instances, min_rms=819)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    core = app.agent_core
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            duration_ms=20,
+        )
+    )
+    assert app.output_service.active_output_stream_id("user-001", "dev-web") is not None
+    connection.events.clear()
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert instances[0].cancelled is False
+    assert "audio.speech.started" not in event_names
+    assert "stream.output.cancel.requested" not in event_names
+    agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "ignore_low_energy_speech_started" in agent_events_text
+    assert '"max_rms": 1' in agent_events_text
+    assert '"min_rms": 819' in agent_events_text
+
+
+def test_realtime_provider_speech_started_high_energy_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证高能量 provider speech_started 仍然可以正常打断。
+
+    测试方法：启用 provider speech RMS 门限，输入 RMS 高于阈值的 PCM16 音频后模拟
+    provider `speech_started`。
+    预期结果：端侧收到 `audio.speech.started` 和 `stream.output.cancel.requested`，
+    runs 中记录 `accepted_speech_started` 诊断。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app_with_provider_speech_gate(tmp_path, instances, min_rms=819)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    core = app.agent_core
+    loud_sample = int(2000).to_bytes(2, byteorder="little", signed=True)
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=loud_sample * 320,
+            duration_ms=20,
+        )
+    )
+    assert app.output_service.active_output_stream_id("user-001", "dev-web") is not None
+    connection.events.clear()
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+
+    event_names = [event.event_name for event in connection.events]
+    assert instances[0].cancelled is True
+    assert "audio.speech.started" in event_names
+    assert "stream.output.cancel.requested" in event_names
+    agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "accepted_speech_started" in agent_events_text
+    assert '"max_rms": 2000' in agent_events_text
+
+
+def test_omni_pipeline_speech_started_respects_energy_gate_and_interruptible_state(tmp_path) -> None:
+    """测试目标：验证正式 Omni pipeline 不会把低能量 speech_started 转成 cancel。
+
+    测试方法：直接创建 Omni pipeline，绑定事件监听器；先输入低 RMS 音频并模拟
+    provider `speech_started`，再输入高 RMS 音频并再次模拟 `speech_started`。
+    预期结果：低 RMS 时没有 `speech_started/output_cancel_requested` pipeline 事件；
+    高 RMS 且存在 active output 时两个事件都会出现。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    pipeline = create_omni_realtime_pipeline(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        omni_config=RealtimeProviderConfig(provider="fake", model="fake-omni", provider_speech_min_rms=819),
+        provider_factory=lambda config: _new_fake(config, instances),
+    )
+    emitted = []
+    pipeline.bind_pipeline_event_handler(lambda event: emitted.append(event))
+
+    pipeline.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            duration_ms=20,
+        )
+    )
+    assert instances[0].callbacks is not None
+    emitted.clear()
+    instances[0].callbacks.provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
+    assert [event.event for event in emitted] == []
+
+    loud_sample = int(2000).to_bytes(2, byteorder="little", signed=True)
+    pipeline.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=1,
+            payload=loud_sample * 320,
+            duration_ms=20,
+        )
+    )
+    emitted.clear()
+    instances[0].callbacks.provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
+    event_names = [event.event for event in emitted]
+    assert "speech_started" in event_names
+    assert "output_cancel_requested" in event_names
+
+
 def test_realtime_provider_speech_started_does_not_cancel_without_active_response(tmp_path) -> None:
     """测试目标：验证用户正常开始说话时不会提前取消后续回复。
 
@@ -655,6 +832,57 @@ def test_realtime_provider_speech_started_does_not_cancel_without_active_respons
     )
     assert "omni.provider_speech_started.no_active_response" in agent_events_text
     assert "omni.response.marked_interrupted" not in agent_events_text
+
+
+def test_omni_new_native_audio_interrupts_previous_endpoint_playback(tmp_path) -> None:
+    """测试目标：验证 Omni 新回答不会排队等待上一轮端侧播放自然结束。
+
+    测试方法：先让 fake provider 输出并完成一段音频，使 OutputService 已请求 finish
+    但端侧尚未回报 `stream.output.finished`；随后模拟 provider 生成下一轮音频。
+    预期结果：服务端取消旧 output stream，并立即为新回答打开新 stream，避免用户
+    插话后的回答被旧播放阻塞。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+    first_stream_id = app.output_service.active_output_stream_id("user-001", handle.session_id)
+    assert first_stream_id is not None
+    instances[0].emit_done()
+    assert app.output_service.active_output_stream_id("user-001", handle.session_id) == first_stream_id
+
+    instances[0].callbacks.audio_delta(
+        b"\x02\x00" * 480,
+        StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
+        {"provider": "fake", "model": "fake-omni", "response_id": "resp-new"},
+    )
+
+    second_stream_id = app.output_service.active_output_stream_id("user-001", handle.session_id)
+    assert second_stream_id is not None
+    assert second_stream_id != first_stream_id
+    assert any(
+        event.event_name == "stream.output.cancel.requested" and event.stream_id == first_stream_id
+        for event in connection.events
+    )
+    decisions = (tmp_path / "runs" / "user-001" / handle.session_id / "playback-decisions.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "blocked_output_interrupt" in decisions
+    assert "active_playback_not_preempted" not in decisions
 
 
 def test_realtime_provider_speech_started_cancels_active_response_without_output(tmp_path) -> None:
@@ -833,6 +1061,89 @@ def test_realtime_visual_sampler_stops_when_no_rgb_device(tmp_path) -> None:
     assert "omni.visual_sampler.stopped" in agent_events
 
 
+def test_realtime_visual_sampler_uses_turn_bound_single_rgb_request(tmp_path) -> None:
+    """测试目标：验证 Omni 实时视觉按文档使用 turn 级单帧照片资产。
+
+    测试方法：打开同设备 mic/RGB 能力，先追加真实音频，再模拟 provider
+    `speech_started`，等待后台视觉采样请求图片并 append。
+    预期结果：RGB 请求为 `mode=single`，payload 携带同一个 `turn_id` 和
+    `correlation_id`；append 前走 `agent_inline` claim；turn 结束时清理同一
+    turn buffer。
+    """
+
+    image_path = tmp_path / "turn-frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = OmniRealtimeAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        omni_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.1,
+            visual_frame_ttl_seconds=5,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.on_audio_input_opened(user_id="user-001", session_id="dev-web", stream_id="stream-mic-dev-web")
+    assert not any(
+        event.event_name == "stream.control.open.requested" and event.stream_type == "sensor.rgb"
+        for event in connection.events
+    )
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    deadline = time.time() + 1
+    while time.time() < deadline and not instances[0].images:
+        time.sleep(0.02)
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
+    )
+    core.close("user-001", reason="test_done")
+
+    assert asset_service.query_count == 0
+    assert asset_service.request_count >= 1
+    request_params = asset_service.requests[0]["params"]
+    assert asset_service.requests[0]["freshness_seconds"] == 0.0
+    assert request_params["sample_count"] == 1
+    assert request_params["capture_reason"] == "realtime_video"
+    assert request_params["turn_id"]
+    assert request_params["correlation_id"] == request_params["turn_id"]
+    assert asset_service.claims[0]["consumer"] == "agent_inline"
+    assert asset_service.claims[0]["reason"] == "realtime_video_append"
+    assert asset_service.clears
+    assert asset_service.clears[0]["turn_id"] == request_params["turn_id"]
+    assert instances[0].images[0][1]["source"] == "asset_request"
+    assert instances[0].images[0][1]["frame_index"] >= 0
+    agent_events = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
+    assert "omni.visual_frame.appended" in agent_events
+    assert "omni.visual_frame.final_request_started" not in agent_events
+    assert "continuous_cache" not in agent_events
+
+
 def test_realtime_visual_sampler_waits_for_real_audio_before_requesting_rgb(tmp_path) -> None:
     """测试目标：验证 provider 只上报 speech_started 但本轮还没有音频时不会请求图片。
 
@@ -886,13 +1197,13 @@ def test_realtime_visual_sampler_waits_for_real_audio_before_requesting_rgb(tmp_
     assert '"audio_since_commit": false' in agent_events
 
 
-def test_realtime_visual_sampler_drops_frame_returned_after_speech_stopped(tmp_path) -> None:
-    """测试目标：验证语音结束后才返回的图片不会追加到 provider。
+def test_realtime_visual_sampler_accepts_frame_returned_after_speech_stopped_before_commit(tmp_path) -> None:
+    """测试目标：验证 speech_stopped 后、输入提交前返回的图片仍能追加到 provider。
 
     测试方法：使用阻塞 AssetService 让视觉请求卡住；provider 上报 speech_started
     后确认请求已发起，随后先上报 speech_stopped，再放行图片返回。
-    预期结果：图片被记录为 discarded，不会调用 provider.append_image，避免 Qwen
-    下一轮输入 buffer 出现“图片早于音频”的协议错误。
+    预期结果：图片会被追加到当前输入 buffer；speech_stopped 只表示用户停止说话，
+    不能提前关闭图片追加窗口，否则最后一帧容易赶不上模型提交。
     """
 
     image_path = tmp_path / "late-frame.jpg"
@@ -938,6 +1249,76 @@ def test_realtime_visual_sampler_drops_frame_returned_after_speech_stopped(tmp_p
         user_id="user-001",
         session_id="dev-web",
         record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "fake"},
+    )
+    asset_service.release_request.set()
+    deadline = time.time() + 1
+    agent_events_path = tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl"
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "omni.visual_frame.appended" in agent_events:
+            break
+        time.sleep(0.02)
+    core.close("user-001", reason="test_done")
+
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+    assert asset_service.request_count == 1
+    assert len(instances[0].images) == 1
+    assert "omni.visual_frame.appended" in agent_events
+    assert "omni.visual_frame.discarded" not in agent_events
+
+
+def test_realtime_visual_sampler_drops_frame_returned_after_input_committed(tmp_path) -> None:
+    """测试目标：验证输入已提交后才返回的图片不会污染下一轮 provider buffer。
+
+    测试方法：使用阻塞 AssetService 让视觉请求卡住；provider 上报 speech_started 后
+    确认请求已发起，随后模拟 input_audio_buffer.committed，再放行图片返回。
+    预期结果：图片被记录为 discarded，不会调用 provider.append_image，避免下一轮
+    输入出现“图片早于音频”的协议错误。
+    """
+
+    image_path = tmp_path / "late-committed-frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = BlockingAssetService(image_path)
+    instances: list[FakeRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    core = OmniRealtimeAgentCore(
+        control_service=app.control_service,
+        asset_service=asset_service,  # type: ignore[arg-type]
+        output_service=app.output_service,
+        recorder=app.recorder,
+        omni_config=RealtimeProviderConfig(
+            provider="fake",
+            model="fake-omni",
+            visual_frame_interval_seconds=0.05,
+            visual_frame_timeout_seconds=0.5,
+        ),
+        provider_factory=lambda config: _new_fake(config, instances),
+        tool_gateway=app.tool_gateway,
+    )
+
+    core.append_audio_event(
+        StreamChunk(
+            user_id="user-001",
+            session_id="dev-web",
+            stream_id="stream-mic-dev-web",
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x02",
+        )
+    )
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.speech_started", "provider": "fake"},
+    )
+    assert asset_service.request_started.wait(timeout=1.0)
+
+    core._record_provider_event(
+        user_id="user-001",
+        session_id="dev-web",
+        record={"event": "omni.input_audio_buffer.committed", "provider": "fake"},
     )
     asset_service.release_request.set()
     deadline = time.time() + 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import math
 import os
 import threading
 import time
@@ -14,7 +15,7 @@ from realtime_agent.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from realtime_agent.agent_core.context import ContextCompileRequest, ContextCompiler, PromptRegistry, record_context_events
 from realtime_agent.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 from realtime_agent.agent_core.visual import OmniVisualAppender, VisualAppendContext
-from realtime_agent.asset.service import AssetService
+from realtime_agent.asset.service import AssetRef, AssetService
 from realtime_agent.control import ControlService
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import OutputService
@@ -25,6 +26,7 @@ from realtime_agent.tools import ToolGateway
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
 DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS = 10
+DEFAULT_PROVIDER_SPEECH_GATE_WINDOW_CHUNKS = 5
 
 
 class RealtimeProviderConcurrencyLimitError(RuntimeError):
@@ -156,6 +158,7 @@ class RealtimeProviderConfig:
     visual_max_frames_per_turn: int = 8
     visual_direction: str = "front"
     max_concurrent_sessions: int = DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
+    provider_speech_min_rms: int = 0
 
 
 @dataclass(frozen=True)
@@ -174,6 +177,24 @@ class RealtimeProviderCallbacks:
     tool_call_delta: Callable[[dict[str, Any]], None] | None = None
     tool_call_done: Callable[[dict[str, Any]], dict[str, Any]] | None = None
     replay_audio_for_tool_result: Callable[[dict[str, Any]], list[bytes]] | None = None
+
+
+@dataclass(frozen=True)
+class InputAudioLevel:
+    """麦克风输入音量采样。
+
+    主要功能：保存最近一片 `sensor.mic` PCM16 的 RMS/峰值，供 provider
+    `speech_started` 触发打断前做本地能量门限过滤。
+    主要属性：`seq` 是端侧 chunk 序号；`audio_end_ms` 是按 chunk 时长累计的音频末尾
+    时间；`rms/peak` 是 PCM16 幅度值。
+    """
+
+    seq: int
+    audio_start_ms: int
+    audio_end_ms: int
+    rms: int
+    peak: int
+    payload_size: int
 
 
 class RealtimeProviderAdapter(Protocol):
@@ -1097,7 +1118,14 @@ class OmniOutputAdapter:
             audio=audio,
             format=format,
             final=False,
-            intent=OutputItem(user_id=user_id, session_id=session_id, source="omni", priority="normal"),
+            intent=OutputItem(
+                user_id=user_id,
+                session_id=session_id,
+                source="omni",
+                priority="normal",
+                on_blocked="interrupt",
+                on_interrupted="drop",
+            ),
             metadata=metadata,
         )
 
@@ -1115,7 +1143,14 @@ class OmniOutputAdapter:
             audio=b"",
             format=StreamFormat(codec="pcm16le", sample_rate=24000, channels=1, chunk_ms=20),
             final=True,
-            intent=OutputItem(user_id=user_id, session_id=session_id, source="omni", priority="normal"),
+            intent=OutputItem(
+                user_id=user_id,
+                session_id=session_id,
+                source="omni",
+                priority="normal",
+                on_blocked="interrupt",
+                on_interrupted="drop",
+            ),
             metadata=metadata,
         )
 
@@ -1272,12 +1307,17 @@ class OmniRealtimeAgentCore:
         self._visual_sampler_stop_by_session: dict[str, threading.Event] = {}
         self._visual_sampler_threads_by_session: dict[str, threading.Thread] = {}
         self._visual_sampler_generation_by_session: dict[str, int] = {}
+        self._visual_turn_id_by_session: dict[str, str] = {}
+        self._visual_request_in_flight_by_session: set[str] = set()
         self._provider_speech_active_by_session: set[str] = set()
+        self._visual_input_accepting_by_session: set[str] = set()
         self._audio_since_commit_by_session: set[str] = set()
         self._visual_stream_id_by_session: dict[str, str] = {}
         self._visual_appended_asset_ids_by_session: dict[str, set[str]] = {}
         self._audio_stream_by_session: dict[str, str] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
+        self._input_levels_by_session: dict[str, list[InputAudioLevel]] = {}
+        self._input_audio_ms_by_session: dict[str, int] = {}
         self._state_by_session: dict[str, str] = {}
         self._user_activity_callback: Callable[[str, str], None] | None = None
 
@@ -1384,6 +1424,7 @@ class OmniRealtimeAgentCore:
         self._audio_stream_by_session[chunk.session_id] = chunk.stream_id
         self._closed_audio_streams_by_session.setdefault(chunk.session_id, set()).discard(chunk.stream_id)
         self._cache_replay_audio(chunk)
+        self._record_input_audio_level(chunk)
         self.open(chunk.user_id, chunk.session_id)
         _session_id, provider = self._sessions[chunk.user_id]
         has_payload = bool(chunk.payload)
@@ -1429,8 +1470,8 @@ class OmniRealtimeAgentCore:
         """记录端侧麦克风输入已打开。
 
         主要逻辑：麦克风打开只代表端侧进入待听状态，不能提前请求 RGB 上传。
-        视觉帧采样由 provider 的 speech_started 事件触发，避免把会话启动时的旧画面
-        当成用户当前问题的上下文。
+        视觉帧采样由 provider 的 speech_started 事件触发，并通过 turn_id 绑定
+        当前用户语音 turn，避免会话启动时的旧画面污染当前问题。
         """
 
         self._audio_stream_by_session[session_id] = stream_id
@@ -1527,8 +1568,11 @@ class OmniRealtimeAgentCore:
             self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
             self._visual_appended_asset_ids_by_session.pop(session_id, None)
             self._provider_speech_active_by_session.discard(session_id)
+            self._visual_input_accepting_by_session.discard(session_id)
             self._audio_since_commit_by_session.discard(session_id)
             self._visual_sampler_generation_by_session.pop(session_id, None)
+            self._visual_turn_id_by_session.pop(session_id, None)
+            self._visual_request_in_flight_by_session.discard(session_id)
         if existing:
             existing[1].close(user_id=user_id, reason=reason)
         if session_id:
@@ -1857,6 +1901,7 @@ class OmniRealtimeAgentCore:
         self._failed_sessions.add(session_id)
         self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_failed")
         self._provider_speech_active_by_session.discard(session_id)
+        self._visual_input_accepting_by_session.discard(session_id)
         self._audio_since_commit_by_session.discard(session_id)
         existing = self._sessions.pop(user_id, None)
         if existing:
@@ -1890,12 +1935,35 @@ class OmniRealtimeAgentCore:
         """记录 provider 事件到 runs 和统一事件缓存。"""
 
         self.recorder.record_agent_event(session_id, record)
+        event = str(record.get("event") or "")
+        if event == "omni.input_audio_buffer.speech_started":
+            if isinstance(record.get("energy_gate"), dict):
+                gate_diagnostics = dict(record.get("energy_gate") or {})
+                accepted = bool(gate_diagnostics.get("accepted", True))
+            else:
+                accepted, gate_diagnostics = self._provider_speech_energy_gate(
+                    user_id=user_id,
+                    session_id=session_id,
+                    record=record,
+                )
+                record = {**record, "energy_gate": gate_diagnostics}
+            if not accepted:
+                self._event_buffer.record_event(
+                    str(record.get("event") or "provider.event"),
+                    user_id=user_id,
+                    session_id=session_id,
+                    payload=dict(record),
+                )
+                return
         self._track_provider_response_event(session_id=session_id, record=record)
+        if event == "omni.input_audio_buffer.speech_stopped":
+            self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._track_provider_input_buffer_state(session_id=session_id, record=record)
         self._map_provider_turn_state(user_id=user_id, session_id=session_id, record=record)
         self._handle_provider_speech_started_interrupt(user_id=user_id, session_id=session_id, record=record)
         self._handle_provider_speech_stopped(user_id=user_id, session_id=session_id, record=record)
-        self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
+        if event != "omni.input_audio_buffer.speech_stopped":
+            self._handle_visual_sampler_provider_event(user_id=user_id, session_id=session_id, record=record)
         self._capture_provider_message(user_id=user_id, session_id=session_id, record=record)
         self._event_buffer.record_event(
             str(record.get("event") or "provider.event"),
@@ -1903,6 +1971,161 @@ class OmniRealtimeAgentCore:
             session_id=session_id,
             payload=dict(record),
         )
+
+    def _record_input_audio_level(self, chunk: StreamChunk) -> None:
+        """记录最近的麦克风输入能量。
+
+        主要逻辑：在音频进入 provider 前按 PCM16 计算 RMS 和 peak，并按 session 保留
+        最近几秒的轻量采样；这些采样只用于 provider `speech_started` 的打断门限判断和
+        日志诊断，不改变上行音频内容。
+        参数：`chunk` 为已通过 Audio Pipeline 的 `sensor.mic` chunk。
+        返回值：无。
+        异常情况：空 payload 记为静音；格式异常时同样按静音处理，避免影响主链路。
+        """
+
+        duration_ms = int(chunk.duration_ms or self._estimate_input_chunk_duration_ms(chunk))
+        duration_ms = max(0, duration_ms)
+        audio_start_ms = self._input_audio_ms_by_session.get(chunk.session_id, 0)
+        audio_end_ms = audio_start_ms + duration_ms
+        self._input_audio_ms_by_session[chunk.session_id] = audio_end_ms
+        rms, peak = self._pcm16_level(chunk.payload)
+        levels = self._input_levels_by_session.setdefault(chunk.session_id, [])
+        levels.append(
+            InputAudioLevel(
+                seq=int(chunk.seq or len(levels)),
+                audio_start_ms=audio_start_ms,
+                audio_end_ms=audio_end_ms,
+                rms=rms,
+                peak=peak,
+                payload_size=len(chunk.payload),
+            )
+        )
+        if len(levels) > 300:
+            del levels[: len(levels) - 300]
+
+    def _provider_speech_energy_gate(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        record: dict[str, Any],
+    ) -> tuple[bool, dict[str, Any]]:
+        """按 E4 的能量门限过滤 provider speech_started。
+
+        主要逻辑：provider 的 VAD 事件只作为候选打断；服务端再用最近麦克风 chunk 的
+        RMS/peak 判断是否像真实用户说话。低于阈值时只记录诊断，不取消当前输出。
+        参数：`record` 为 provider 原始事件摘要。
+        返回值：`(accepted, diagnostics)`；`accepted=False` 表示应忽略本次候选。
+        异常情况：没有采样或阈值未启用时放行，并在 diagnostics 中说明原因。
+        """
+
+        threshold = max(0, int(getattr(self.omni_config, "provider_speech_min_rms", 0) or 0))
+        levels = list(self._input_levels_by_session.get(session_id, []))
+        if threshold <= 0:
+            return True, {"enabled": False, "reason": "threshold_disabled", "min_rms": threshold}
+        if not levels:
+            diagnostics = {
+                "enabled": True,
+                "accepted": True,
+                "reason": "no_recent_audio_levels",
+                "min_rms": threshold,
+                "level_count": 0,
+            }
+            self._record_provider_speech_gate_decision(user_id=user_id, session_id=session_id, diagnostics=diagnostics)
+            return True, diagnostics
+
+        audio_ms = self._extract_provider_audio_ms(record)
+        if audio_ms is None:
+            selected = levels[-DEFAULT_PROVIDER_SPEECH_GATE_WINDOW_CHUNKS:]
+            chunk_range = f"{selected[0].seq}-{selected[-1].seq}" if selected else ""
+            center_seq = selected[-1].seq if selected else -1
+        else:
+            center = min(levels, key=lambda level: abs(level.audio_end_ms - audio_ms))
+            center_seq = center.seq
+            selected = [level for level in levels if center_seq - 2 <= level.seq <= center_seq + 2]
+            chunk_range = f"{center_seq - 2}-{center_seq + 2}"
+        max_rms = max((level.rms for level in selected), default=0)
+        max_peak = max((level.peak for level in selected), default=0)
+        accepted = max_rms >= threshold
+        diagnostics = {
+            "enabled": True,
+            "accepted": accepted,
+            "reason": "accepted" if accepted else "low_energy",
+            "audio_ms": audio_ms,
+            "center_seq": center_seq,
+            "chunk_range": chunk_range,
+            "level_count": len(selected),
+            "max_rms": max_rms,
+            "max_peak": max_peak,
+            "min_rms": threshold,
+        }
+        self._record_provider_speech_gate_decision(user_id=user_id, session_id=session_id, diagnostics=diagnostics)
+        return accepted, diagnostics
+
+    def _record_provider_speech_gate_decision(self, *, user_id: str, session_id: str, diagnostics: dict[str, Any]) -> None:
+        """记录 provider speech_started 能量门限诊断。"""
+
+        decision = "accepted_speech_started" if diagnostics.get("accepted") else "ignore_low_energy_speech_started"
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": f"omni.provider_speech_started.{decision}",
+                "user_id": user_id,
+                **diagnostics,
+            },
+        )
+        self._event_buffer.record_event(
+            f"provider_speech_started.{decision}",
+            user_id=user_id,
+            session_id=session_id,
+            payload=dict(diagnostics),
+        )
+
+    @staticmethod
+    def _pcm16_level(payload: bytes) -> tuple[int, int]:
+        """计算 PCM16 little-endian 的 RMS 和 peak。"""
+
+        if not payload:
+            return 0, 0
+        usable = len(payload) - (len(payload) % 2)
+        if usable <= 0:
+            return 0, 0
+        total = 0
+        peak = 0
+        count = 0
+        for index in range(0, usable, 2):
+            sample = int.from_bytes(payload[index : index + 2], byteorder="little", signed=True)
+            value = abs(sample)
+            peak = max(peak, value)
+            total += sample * sample
+            count += 1
+        if count <= 0:
+            return 0, 0
+        return int(math.sqrt(total / count)), peak
+
+    @staticmethod
+    def _estimate_input_chunk_duration_ms(chunk: StreamChunk) -> int:
+        """按 PCM16 payload 长度估算 chunk 时长。"""
+
+        if not chunk.payload or chunk.sample_rate <= 0 or chunk.channels <= 0:
+            return 0
+        sample_count = len(chunk.payload) // 2 // chunk.channels
+        return int(sample_count * 1000 / chunk.sample_rate)
+
+    @staticmethod
+    def _extract_provider_audio_ms(record: dict[str, Any]) -> int | None:
+        """从 provider speech_started 事件中提取音频时间戳。"""
+
+        for key in ("audio_ms", "audio_start_ms", "audioStartMs", "start_ms", "startMs"):
+            value = record.get(key)
+            if value is None:
+                continue
+            try:
+                parsed = int(value)
+            except (TypeError, ValueError):
+                continue
+            return parsed if parsed >= 0 else None
+        return None
 
     def _track_provider_input_buffer_state(self, *, session_id: str, record: dict[str, Any]) -> None:
         """跟踪 provider 当前输入 buffer 是否仍能接收图片。
@@ -1915,11 +2138,16 @@ class OmniRealtimeAgentCore:
         event = str(record.get("event") or "")
         if event == "omni.input_audio_buffer.speech_started":
             self._provider_speech_active_by_session.add(session_id)
-        elif event in {"omni.input_audio_buffer.speech_stopped", "omni.input_audio_buffer.committed", "omni.input.committed"}:
+            self._visual_input_accepting_by_session.add(session_id)
+        elif event == "omni.input_audio_buffer.speech_stopped":
             self._provider_speech_active_by_session.discard(session_id)
+        elif event in {"omni.input_audio_buffer.committed", "omni.input.committed"}:
+            self._provider_speech_active_by_session.discard(session_id)
+            self._visual_input_accepting_by_session.discard(session_id)
             self._audio_since_commit_by_session.discard(session_id)
         elif event == "omni.response.done":
             self._provider_speech_active_by_session.discard(session_id)
+            self._visual_input_accepting_by_session.discard(session_id)
             self._audio_since_commit_by_session.discard(session_id)
 
     def _map_provider_turn_state(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
@@ -2163,16 +2391,18 @@ class OmniRealtimeAgentCore:
             return
         reason = "provider_speech_started"
         stream_id = self._audio_stream_by_session.get(session_id, "")
-        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
         if getattr(self, "_pipeline_event_control_enabled", False):
             return
+        gate_diagnostics = dict(record.get("energy_gate") or {})
+        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        speech_record = {**record, "energy_gate": gate_diagnostics}
         self._publish_provider_speech_event(
             event_name="audio.speech.started",
             user_id=user_id,
             session_id=session_id,
             stream_id=stream_id,
             reason=reason,
-            record=record,
+            record=speech_record,
         )
         active_stream_id = self.output_service.active_output_stream_id(user_id, session_id)
         response_active = session_id in self._active_response_sessions
@@ -2214,6 +2444,7 @@ class OmniRealtimeAgentCore:
                 "interrupted_stream_id": decision.interrupted_stream_id,
                 "playback_action": decision.action,
                 "playback_reason": decision.reason,
+                "energy_gate": gate_diagnostics,
             },
         )
         self._event_buffer.record_event(
@@ -2225,6 +2456,7 @@ class OmniRealtimeAgentCore:
                 "interrupted_stream_id": decision.interrupted_stream_id,
                 "playback_action": decision.action,
                 "playback_reason": decision.reason,
+                "energy_gate": gate_diagnostics,
             },
         )
 
@@ -2279,6 +2511,8 @@ class OmniRealtimeAgentCore:
             "provider": record.get("provider"),
             "model": record.get("model"),
         }
+        if "energy_gate" in record:
+            diagnostics["energy_gate"] = record.get("energy_gate")
         try:
             self.control_service.publish(
                 Event(
@@ -2338,9 +2572,20 @@ class OmniRealtimeAgentCore:
         if event == "omni.input_audio_buffer.speech_started":
             self._start_visual_sampler(user_id=user_id, session_id=session_id)
         elif event == "omni.input_audio_buffer.speech_stopped":
-            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_speech_stopped")
+            self._stop_visual_sampler(
+                user_id=user_id,
+                session_id=session_id,
+                reason="provider_speech_stopped",
+                close_stream=False,
+                invalidate_generation=False,
+            )
         elif event == "omni.response.done":
-            self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason="provider_response_done")
+            self._stop_visual_sampler(
+                user_id=user_id,
+                session_id=session_id,
+                reason="provider_response_done",
+                close_stream=False,
+            )
 
     def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
         """启动当前用户语音 turn 的实时视觉帧消费线程。"""
@@ -2355,7 +2600,9 @@ class OmniRealtimeAgentCore:
             return
         stop_event = threading.Event()
         generation = self._visual_sampler_generation_by_session.get(session_id, 0) + 1
+        turn_id = new_id("turn")
         self._visual_sampler_generation_by_session[session_id] = generation
+        self._visual_turn_id_by_session[session_id] = turn_id
         self._visual_sampler_stop_by_session[session_id] = stop_event
         thread = threading.Thread(
             target=self._visual_sampler_loop,
@@ -2365,6 +2612,7 @@ class OmniRealtimeAgentCore:
                 "stop_event": stop_event,
                 "interval": interval,
                 "generation": generation,
+                "turn_id": turn_id,
             },
             name=f"realtime-visual-{session_id}",
             daemon=True,
@@ -2377,6 +2625,7 @@ class OmniRealtimeAgentCore:
                 "provider": self.omni_config.provider,
                 "interval_seconds": interval,
                 "generation": generation,
+                "turn_id": turn_id,
             },
         )
         thread.start()
@@ -2436,18 +2685,31 @@ class OmniRealtimeAgentCore:
             },
         )
 
-    def _stop_visual_sampler(self, *, user_id: str, session_id: str, reason: str) -> None:
+    def _stop_visual_sampler(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        reason: str,
+        close_stream: bool = True,
+        invalidate_generation: bool = True,
+    ) -> None:
         """停止当前 turn 的视觉帧采样线程。"""
 
+        turn_id = self._visual_turn_id_by_session.get(session_id)
         stop_event = self._visual_sampler_stop_by_session.pop(session_id, None)
         thread = self._visual_sampler_threads_by_session.pop(session_id, None)
         if stop_event is None and thread is None:
+            if close_stream:
+                self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
+            self._clear_visual_turn_buffer(user_id=user_id, session_id=session_id, turn_id=turn_id, reason=reason)
             return
         if stop_event is not None:
             stop_event.set()
-        self._visual_sampler_generation_by_session[session_id] = (
-            self._visual_sampler_generation_by_session.get(session_id, 0) + 1
-        )
+        if invalidate_generation:
+            self._visual_sampler_generation_by_session[session_id] = (
+                self._visual_sampler_generation_by_session.get(session_id, 0) + 1
+            )
         self.recorder.record_agent_event(
             session_id,
             {
@@ -2455,9 +2717,28 @@ class OmniRealtimeAgentCore:
                 "provider": self.omni_config.provider,
                 "reason": reason,
                 "generation": self._visual_sampler_generation_by_session.get(session_id),
+                "close_stream": close_stream,
+                "invalidate_generation": invalidate_generation,
+                "turn_id": turn_id,
             },
         )
-        self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
+        self._clear_visual_turn_buffer(user_id=user_id, session_id=session_id, turn_id=turn_id, reason=reason)
+        if close_stream:
+            self._request_visual_stream_close(user_id=user_id, session_id=session_id, reason=reason)
+
+    def _clear_visual_turn_buffer(self, *, user_id: str, session_id: str, turn_id: str | None, reason: str) -> None:
+        """清理当前视觉 turn 的照片 buffer。"""
+
+        if self.asset_service is None or turn_id is None:
+            return
+        clear_turn_buffer = getattr(self.asset_service, "clear_turn_buffer", None)
+        if callable(clear_turn_buffer):
+            clear_turn_buffer(
+                user_id=user_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                reason=f"omni_visual_{reason}",
+            )
 
     def _request_visual_stream_close(self, *, user_id: str, session_id: str, reason: str) -> None:
         """通知端侧关闭本轮 Realtime 视觉采集。
@@ -2510,6 +2791,7 @@ class OmniRealtimeAgentCore:
         stop_event: threading.Event,
         interval: float,
         generation: int,
+        turn_id: str,
     ) -> None:
         """按固定间隔请求并追加当前视觉帧。
 
@@ -2549,6 +2831,7 @@ class OmniRealtimeAgentCore:
                     frame_index=frame_index,
                     timeout_seconds=timeout,
                     generation=generation,
+                    turn_id=turn_id,
                 )
             except Exception as exc:  # noqa: BLE001 - 后台采样异常只能记录，不能打断音频主链路
                 self.recorder.record_agent_event(
@@ -2568,13 +2851,14 @@ class OmniRealtimeAgentCore:
         """判断图片是否仍属于当前 provider 语音输入 buffer。
 
         主要逻辑：采样线程可能正在等待端侧上传图片；等待期间 provider 可能已经
-        speech_stopped 并自动提交 buffer。只有采样代际仍匹配、provider 仍处于当前
-        用户语音段，并且本轮 buffer 已经追加过音频时，才允许追加图片。
+        speech_stopped 并即将自动提交 buffer。speech_stopped 只表示用户停止说话，
+        不等同于 provider 已经提交输入；只有采样代际仍匹配、当前输入 buffer 尚未
+        committed，并且本轮 buffer 已经追加过音频时，才允许追加图片。
         """
 
         return (
             self._visual_sampler_generation_by_session.get(session_id) == generation
-            and session_id in self._provider_speech_active_by_session
+            and session_id in self._visual_input_accepting_by_session
             and session_id in self._audio_since_commit_by_session
         )
 
@@ -2599,6 +2883,7 @@ class OmniRealtimeAgentCore:
                 "generation": generation,
                 "current_generation": self._visual_sampler_generation_by_session.get(session_id),
                 "speech_active": session_id in self._provider_speech_active_by_session,
+                "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
                 "audio_since_commit": session_id in self._audio_since_commit_by_session,
                 **({"asset_id": asset_id} if asset_id else {}),
             },
@@ -2637,6 +2922,7 @@ class OmniRealtimeAgentCore:
         frame_index: int,
         timeout_seconds: float,
         generation: int,
+        turn_id: str,
     ) -> None:
         """请求一张当前 RGB 帧并追加到当前 Realtime provider。"""
 
@@ -2645,23 +2931,29 @@ class OmniRealtimeAgentCore:
         existing = self._sessions.get(user_id)
         if not existing or existing[0] != session_id:
             return
-        asset = self.asset_service.request_asset(
-            user_id=user_id,
-            stream_type="sensor.rgb",
-            freshness_seconds=0.0,
-            params={
-                "format": "jpeg",
-                "frequency_hz": 1,
-                "sample_count": 1,
-                "duration_seconds": 0,
-                "ttl_seconds": self.omni_config.visual_frame_ttl_seconds,
-                "capture_reason": "realtime_video",
-                "direction": self.omni_config.visual_direction,
-            },
-            session_id=session_id,
-            timeout_seconds=max(0.05, timeout_seconds),
-            device_ids=(session_id,),
-        )
+        self._visual_request_in_flight_by_session.add(session_id)
+        try:
+            asset = self.asset_service.request_asset(
+                user_id=user_id,
+                stream_type="sensor.rgb",
+                freshness_seconds=0.0,
+                params={
+                    "format": "jpeg",
+                    "frequency_hz": 1,
+                    "sample_count": 1,
+                    "duration_seconds": 0,
+                    "ttl_seconds": self.omni_config.visual_frame_ttl_seconds,
+                    "capture_reason": "realtime_video",
+                    "direction": self.omni_config.visual_direction,
+                    "turn_id": turn_id,
+                    "correlation_id": turn_id,
+                },
+                session_id=session_id,
+                timeout_seconds=max(0.05, timeout_seconds),
+                device_ids=(session_id,),
+            )
+        finally:
+            self._visual_request_in_flight_by_session.discard(session_id)
         if asset is None:
             self.recorder.record_agent_event(
                 session_id,
@@ -2674,6 +2966,32 @@ class OmniRealtimeAgentCore:
                 },
             )
             return
+        self._append_visual_asset(
+            user_id=user_id,
+            session_id=session_id,
+            asset=asset,
+            frame_index=frame_index,
+            generation=generation,
+            source="asset_request",
+            turn_id=turn_id,
+        )
+
+    def _append_visual_asset(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        asset: AssetRef,
+        frame_index: int,
+        generation: int,
+        source: str,
+        turn_id: str,
+    ) -> bool:
+        """把已拿到的视觉资产追加到当前 provider 输入 buffer。"""
+
+        existing = self._sessions.get(user_id)
+        if not existing or existing[0] != session_id:
+            return False
         if not self._can_append_visual_frame(session_id=session_id, generation=generation):
             self._record_visual_frame_discarded(
                 session_id=session_id,
@@ -2682,13 +3000,19 @@ class OmniRealtimeAgentCore:
                 generation=generation,
                 asset_id=asset.asset_id,
             )
-            return
-        provider = existing[1]
+            self._clear_visual_turn_buffer(
+                user_id=user_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                reason="visual_frame_discarded",
+            )
+            return False
         appended_ids = self._visual_appended_asset_ids_by_session.setdefault(session_id, set())
         if asset.asset_id in appended_ids:
-            return
+            return False
         appended_ids.add(asset.asset_id)
-        OmniVisualAppender(
+        provider = existing[1]
+        appended = OmniVisualAppender(
             asset_service=self.asset_service,
             recorder=self.recorder,
             provider_name=self.omni_config.provider,
@@ -2696,9 +3020,13 @@ class OmniRealtimeAgentCore:
         ).append_agent_inline(
             provider=provider,
             asset=asset,
-            context=VisualAppendContext(user_id=user_id, session_id=session_id),
+            context=VisualAppendContext(user_id=user_id, session_id=session_id, turn_id=turn_id),
             frame_index=frame_index,
+            source=source,
         )
+        if not appended:
+            appended_ids.discard(asset.asset_id)
+        return appended
 
     def _capture_provider_message(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """把 Omni provider 的可读文本同步进用户级 messages。
@@ -2875,6 +3203,9 @@ class OmniRealtimeAgentCore:
 def _summarize_omni_event(message: dict[str, Any]) -> dict[str, Any]:
     event_type = str(message.get("type") or "unknown")
     record: dict[str, Any] = {"event": f"omni.{event_type}", "provider": "qwen"}
+    for key in ("audio_ms", "audio_start_ms", "audioStartMs", "start_ms", "startMs"):
+        if key in message:
+            record[key] = message.get(key)
     response_id = _omni_response_id(message)
     if response_id:
         record["response_id"] = response_id

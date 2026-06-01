@@ -86,6 +86,7 @@ class OmniVisualAppender:
         asset: Any,
         context: VisualAppendContext,
         frame_index: int,
+        source: str = "asset_request",
     ) -> bool:
         """立即把一张图片 append 到 Omni provider。
 
@@ -119,6 +120,7 @@ class OmniVisualAppender:
                 "stream_type": asset.stream_type,
                 "direction": asset.metadata.get("direction") or self.default_direction,
                 "captured_at_ms": asset.metadata.get("captured_at_ms"),
+                "source": source,
             },
         )
         self._record(
@@ -132,6 +134,7 @@ class OmniVisualAppender:
                 "image_sha256": hashlib.sha256(image_bytes).hexdigest(),
                 "direction": asset.metadata.get("direction") or self.default_direction,
                 "captured_at_ms": asset.metadata.get("captured_at_ms"),
+                "source": source,
             },
         )
         return True
