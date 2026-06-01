@@ -160,8 +160,12 @@ agent:
     provider: "qwen"
     # Qwen Omni Realtime 模型名。
     model: "qwen3.5-omni-plus-realtime"
-    # turn detection 归属。provider 表示交给 Realtime 服务判断用户说完。
+    # turn detection 归属。provider / semantic_vad 表示交给 Realtime 服务判断用户说完。
     turn_detection: "provider"
+    # 可选：provider VAD 参数。阈值越接近 1 越不容易把噪声判成语音。
+    # turn_detection_threshold: 0.75
+    # turn_detection_silence_duration_ms: 800
+    # turn_detection_prefix_padding_ms: 500
     # Omni 输出音色，取值由 provider 决定。
     voice: "Tina"
     # Realtime 会话系统指令。

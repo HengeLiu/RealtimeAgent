@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import types
+import wave
 from pathlib import Path
 
 from realtime_agent.agent_core.omni import (
@@ -433,6 +434,47 @@ def test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream(t
     assert connection.chunks
     assert connection.chunks[0].stream_type == "actuator.speaker"
     assert connection.chunks[0].sample_rate == 24000
+
+
+def test_realtime_provider_input_audio_is_saved_as_wav(tmp_path) -> None:
+    """测试目标：验证 Omni provider 实际收到的输入音频会保存为可听检 WAV。
+
+    测试方法：注入 fake provider，发送一片 sensor.mic PCM16LE 音频，读取 runs/audio
+    下的 provider-input WAV 和 agent 事件。
+    预期结果：WAV 采样率、声道和帧数与发送给 provider 的 chunk 一致，并记录保存路径。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+
+    wav_path = tmp_path / "runs" / "user-001" / handle.session_id / "audio" / f"provider-input-{handle.stream_id}.wav"
+    pcm_path = tmp_path / "runs" / "user-001" / handle.session_id / "audio" / f"provider-input-{handle.stream_id}.pcm"
+    assert wav_path.exists()
+    assert pcm_path.read_bytes() == b"\x01\x00" * 320
+    with wave.open(str(wav_path), "rb") as handle_wav:
+        assert handle_wav.getframerate() == 16000
+        assert handle_wav.getnchannels() == 1
+        assert handle_wav.getnframes() == 320
+    agent_events_text = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "omni.provider_input_audio.saved" in agent_events_text
+    assert str(wav_path) in agent_events_text
 
 
 def test_omni_audio_done_closes_current_output_stream(tmp_path) -> None:
@@ -1887,12 +1929,21 @@ def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> 
         model="fake-omni-limit-test",
         websocket_url="wss://example.invalid/realtime-limit-test",
         max_concurrent_sessions=1,
+        turn_detection="semantic_vad",
+        turn_detection_threshold=0.75,
+        turn_detection_silence_duration_ms=800,
+        turn_detection_prefix_padding_ms=500,
     )
 
     first = QwenOmniRealtimeAdapter(config)
     first.open(user_id="user-001", session_id="session-001", callbacks=callbacks)
     assert len(FakeConversation.instances) == 1
     assert FakeConversation.instances[0].connected is True
+    session_kwargs = FakeConversation.instances[0].session_kwargs
+    assert session_kwargs["turn_detection_type"] == "semantic_vad"
+    assert session_kwargs["turn_detection_threshold"] == 0.75
+    assert session_kwargs["turn_detection_silence_duration_ms"] == 800
+    assert session_kwargs["prefix_padding_ms"] == 500
 
     second = QwenOmniRealtimeAdapter(config)
     try:

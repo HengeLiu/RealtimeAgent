@@ -142,6 +142,9 @@ class RealtimeProviderConfig:
     provider: str = "qwen"
     model: str = "qwen3.5-omni-plus-realtime"
     turn_detection: str = "provider"
+    turn_detection_threshold: float | None = None
+    turn_detection_silence_duration_ms: int | None = None
+    turn_detection_prefix_padding_ms: int | None = None
     voice: str = "Tina"
     session_idle_timeout_seconds: int = 60
     websocket_url: str = "wss://dashscope.aliyuncs.com/api-ws/v1/realtime"
@@ -316,6 +319,12 @@ class QwenOmniRealtimeAdapter:
                 "turn_detection_type": turn_detection_type,
                 "instructions": self.config.prompt,
             }
+            if self.config.turn_detection_threshold is not None:
+                session_update_kwargs["turn_detection_threshold"] = self.config.turn_detection_threshold
+            if self.config.turn_detection_silence_duration_ms is not None:
+                session_update_kwargs["turn_detection_silence_duration_ms"] = self.config.turn_detection_silence_duration_ms
+            if self.config.turn_detection_prefix_padding_ms is not None:
+                session_update_kwargs["prefix_padding_ms"] = self.config.turn_detection_prefix_padding_ms
             if self.config.tools:
                 session_update_kwargs["tools"] = self.config.tools
             with self._operation_lock:
@@ -1447,6 +1456,8 @@ class OmniRealtimeAgentCore:
                 record={"event": "omni.provider.append_audio.failed"},
             )
             return
+        if has_payload:
+            self._record_provider_input_audio(chunk)
         self.recorder.record_agent_event(
             chunk.session_id,
             {
@@ -1470,6 +1481,57 @@ class OmniRealtimeAgentCore:
                 session_id=chunk.session_id,
                 reason="input_audio_appended",
             )
+
+    def _record_provider_input_audio(self, chunk: StreamChunk) -> None:
+        """记录已经成功追加给 provider 的输入音频。
+
+        主要逻辑：把 provider 实际收到的 PCM16LE 音频保存到 runs/audio，用于人工
+        听检回声、采样率和 VAD 误触发问题。保存失败只记录诊断事件，不影响实时链路。
+        参数：`chunk` 为成功 append 到 provider 的麦克风分片。
+        返回值：无。
+        异常情况：内部吞掉保存异常并写入 `agent-events.jsonl`。
+        """
+
+        try:
+            stats = self.recorder.record_provider_input_audio(chunk)
+        except Exception as exc:
+            self.recorder.record_agent_event(
+                chunk.session_id,
+                {
+                    "event": "omni.provider_input_audio.save_failed",
+                    "user_id": chunk.user_id,
+                    "provider": self.omni_config.provider,
+                    "model": self.omni_config.model,
+                    "stream_id": chunk.stream_id,
+                    "seq": chunk.seq,
+                    "error": str(exc),
+                },
+            )
+            return
+        if not stats:
+            return
+        chunk_count = int(stats.get("chunk_count") or 0)
+        if chunk_count != 1 and chunk_count % 50 != 0 and not chunk.final:
+            return
+        self.recorder.record_agent_event(
+            chunk.session_id,
+            {
+                "event": "omni.provider_input_audio.saved",
+                "user_id": chunk.user_id,
+                "provider": self.omni_config.provider,
+                "model": self.omni_config.model,
+                "stream_id": chunk.stream_id,
+                "seq": chunk.seq,
+                "chunk_count": chunk_count,
+                "audio_bytes": stats.get("audio_bytes"),
+                "sample_rate": stats.get("sample_rate"),
+                "channels": stats.get("channels"),
+                "chunk_ms": stats.get("chunk_ms"),
+                "path": stats.get("wav_path"),
+                "pcm_path": stats.get("pcm_path"),
+                "final": chunk.final,
+            },
+        )
 
     def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
         """记录端侧麦克风输入已打开。

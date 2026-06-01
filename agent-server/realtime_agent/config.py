@@ -160,6 +160,9 @@ class AgentOmniConfig:
     provider: str = "qwen"
     model: str = "qwen3.5-omni-plus-realtime"
     turn_detection: str = "provider"
+    turn_detection_threshold: float | None = None
+    turn_detection_silence_duration_ms: int | None = None
+    turn_detection_prefix_padding_ms: int | None = None
     voice: str = "Tina"
     prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     session_idle_timeout_seconds: int = 60
@@ -591,6 +594,17 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "REALTIME_AGENT_OMNI_VOICE": ("agent", "omni", "voice"),
         "REALTIME_AGENT_OMNI_PROMPT": ("agent", "omni", "prompt"),
         "REALTIME_AGENT_OMNI_TURN_DETECTION": ("agent", "omni", "turn_detection"),
+        "REALTIME_AGENT_OMNI_TURN_DETECTION_THRESHOLD": ("agent", "omni", "turn_detection_threshold"),
+        "REALTIME_AGENT_OMNI_TURN_DETECTION_SILENCE_DURATION_MS": (
+            "agent",
+            "omni",
+            "turn_detection_silence_duration_ms",
+        ),
+        "REALTIME_AGENT_OMNI_TURN_DETECTION_PREFIX_PADDING_MS": (
+            "agent",
+            "omni",
+            "turn_detection_prefix_padding_ms",
+        ),
     }
     for env_name, path in mapping.items():
         value = os.getenv(env_name)

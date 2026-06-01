@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import struct
 import sys
 import time
 import wave
@@ -242,6 +243,7 @@ class RunRecorder:
         self.logger = get_logger("realtime_agent.runs")
         self._session_users: dict[str, str] = {}
         self._stream_chunk_stats: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._provider_input_audio_stats: dict[tuple[str, str], dict[str, Any]] = {}
         self._agent_event_counts: dict[tuple[str, str], int] = {}
         self._model_request_started_at: dict[str, float] = {}
         self._delta_stats: dict[tuple[str, str, str], dict[str, Any]] = {}
@@ -1080,6 +1082,96 @@ class RunRecorder:
         path = self.media_dir(chunk.session_id, chunk.stream_type) / f"{name}-{chunk.stream_id}.pcm"
         with path.open("ab") as handle:
             handle.write(chunk.payload)
+
+    def record_provider_input_audio(self, chunk: StreamChunk) -> dict[str, Any] | None:
+        """保存实际追加给 Omni provider 的麦克风音频。
+
+        主要逻辑：仅处理 Omni 链路当前发送给 provider 的 `sensor.mic/pcm16le`
+        载荷，同时落一份原始 PCM 和一份随写随可播放的 WAV。WAV 头会在每次追加后
+        更新，方便真机测试中途直接打开听检。
+        参数：`chunk` 为已经完成音频归一化、并成功 append 到 provider 的分片。
+        返回值：保存路径和累计统计；非麦克风、非 pcm16le 或空载荷时返回 None。
+        异常情况：文件系统不可写时抛出底层 IO 异常。
+        """
+
+        if chunk.stream_type != "sensor.mic" or chunk.codec != "pcm16le" or not chunk.payload:
+            return None
+        self.bind_device(user_id=chunk.user_id, device_id=chunk.session_id)
+        directory = self.media_dir(chunk.session_id, chunk.stream_type)
+        wav_path = directory / f"provider-input-{chunk.stream_id}.wav"
+        pcm_path = directory / f"provider-input-{chunk.stream_id}.pcm"
+        with pcm_path.open("ab") as handle:
+            handle.write(chunk.payload)
+        self._append_pcm16le_wav(
+            wav_path,
+            chunk.payload,
+            sample_rate=chunk.sample_rate,
+            channels=chunk.channels,
+        )
+        key = (chunk.session_id, chunk.stream_id)
+        stats = self._provider_input_audio_stats.setdefault(
+            key,
+            {
+                "chunk_count": 0,
+                "audio_bytes": 0,
+                "first_seq": chunk.seq,
+                "last_seq": chunk.seq,
+                "sample_rate": chunk.sample_rate,
+                "channels": chunk.channels,
+                "chunk_ms": chunk.duration_ms,
+                "wav_path": str(wav_path),
+                "pcm_path": str(pcm_path),
+            },
+        )
+        stats["chunk_count"] = int(stats.get("chunk_count") or 0) + 1
+        stats["audio_bytes"] = int(stats.get("audio_bytes") or 0) + len(chunk.payload)
+        stats["last_seq"] = chunk.seq
+        stats["sample_rate"] = chunk.sample_rate
+        stats["channels"] = chunk.channels
+        stats["chunk_ms"] = chunk.duration_ms
+        return dict(stats)
+
+    @staticmethod
+    def _append_pcm16le_wav(path: Path, pcm: bytes, *, sample_rate: int, channels: int) -> None:
+        """向 PCM16LE WAV 文件追加帧并刷新 RIFF 长度。
+
+        主要逻辑：标准库 `wave` 更适合一次性写完文件；这里需要测试过程中持续
+        追加并保持文件可播放，因此直接维护 44 字节 WAV 头。
+        参数：`path` 为目标 WAV，`pcm` 为 16-bit little-endian 音频，`sample_rate`
+        和 `channels` 描述音频格式。
+        返回值：无。
+        异常情况：采样率或声道数非法、文件不可写时抛出异常。
+        """
+
+        if sample_rate <= 0 or channels <= 0:
+            raise ValueError("sample_rate and channels must be positive")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            path.write_bytes(RunRecorder._pcm16le_wav_header(sample_rate=sample_rate, channels=channels, data_size=0))
+        with path.open("r+b") as handle:
+            handle.seek(0, 2)
+            handle.write(pcm)
+            data_size = handle.tell() - 44
+            handle.seek(4)
+            handle.write(struct.pack("<I", 36 + data_size))
+            handle.seek(40)
+            handle.write(struct.pack("<I", data_size))
+
+    @staticmethod
+    def _pcm16le_wav_header(*, sample_rate: int, channels: int, data_size: int) -> bytes:
+        byte_rate = sample_rate * channels * 2
+        block_align = channels * 2
+        return b"".join(
+            [
+                b"RIFF",
+                struct.pack("<I", 36 + data_size),
+                b"WAVE",
+                b"fmt ",
+                struct.pack("<IHHIIHH", 16, 1, channels, sample_rate, byte_rate, block_align, 16),
+                b"data",
+                struct.pack("<I", data_size),
+            ]
+        )
 
     def media_dir(self, session_id: str, stream_type: str) -> Path:
         """返回某类媒体或传感器数据的子目录。

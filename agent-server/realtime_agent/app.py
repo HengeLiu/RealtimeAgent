@@ -144,6 +144,9 @@ class RealtimeAgentConfig:
     omni_provider: str = "qwen"
     omni_model: str = "qwen3.5-omni-plus-realtime"
     omni_turn_detection: str = "provider"
+    omni_turn_detection_threshold: float | None = None
+    omni_turn_detection_silence_duration_ms: int | None = None
+    omni_turn_detection_prefix_padding_ms: int | None = None
     omni_voice: str = "Tina"
     omni_prompt: str = "你是中文语音助手。请用简短口语回答用户。"
     omni_session_idle_timeout_seconds: int = 60
@@ -295,6 +298,9 @@ class RealtimeAgentConfig:
             omni_provider=omni.provider,
             omni_model=omni.model,
             omni_turn_detection=omni.turn_detection,
+            omni_turn_detection_threshold=omni.turn_detection_threshold,
+            omni_turn_detection_silence_duration_ms=omni.turn_detection_silence_duration_ms,
+            omni_turn_detection_prefix_padding_ms=omni.turn_detection_prefix_padding_ms,
             omni_voice=omni.voice,
             omni_prompt=_with_memory_instructions(omni.prompt, enabled=memory_enabled),
             omni_session_idle_timeout_seconds=omni.session_idle_timeout_seconds,
@@ -517,6 +523,9 @@ class RealtimeAgentApp:
                 provider=self.config.omni_provider,
                 model=self.config.omni_model,
                 turn_detection=self.config.omni_turn_detection,
+                turn_detection_threshold=self.config.omni_turn_detection_threshold,
+                turn_detection_silence_duration_ms=self.config.omni_turn_detection_silence_duration_ms,
+                turn_detection_prefix_padding_ms=self.config.omni_turn_detection_prefix_padding_ms,
                 voice=self.config.omni_voice,
                 prompt=getattr(self.config, "omni_prompt", "你是中文语音助手。请用简短口语回答用户。"),
                 session_idle_timeout_seconds=self.config.omni_session_idle_timeout_seconds,
