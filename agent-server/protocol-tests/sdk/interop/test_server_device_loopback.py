@@ -90,7 +90,14 @@ async def _run_loopback_contract(tmp_path) -> None:
             received_events.append(event)
             if await client.dispatch_event(event):
                 continue
-            if event.event_name == "stream.output.open.requested":
+            if event.event_name == "stream.output.start.requested":
+                await client.send_event_name(
+                    "stream.output.ready",
+                    {"stream_type": event.stream_type or "actuator.speaker", "reason": "loopback_ready"},
+                    session_id=device_id,
+                    stream_id=event.stream_id,
+                    stream_type=event.stream_type or "actuator.speaker",
+                )
                 output_chunks.append(await client.receive_stream_chunk(timeout=2))
                 continue
             if event.event_name in {"stream.output.finish.requested", "stream.output.close.requested"}:
@@ -133,7 +140,7 @@ async def _run_loopback_contract(tmp_path) -> None:
         event_names = [event.event_name for event in received_events]
         assert "stream.control.open.requested" in event_names
         assert "command.requested" in event_names
-        assert "stream.output.open.requested" in event_names
+        assert "stream.output.start.requested" in event_names
         assert "stream.output.finish.requested" in event_names
 
         report = {
@@ -308,6 +315,22 @@ async def _run_split_stream_contract(tmp_path) -> None:
                 session_id=device_id,
                 audio=b"\x01\x02" * 320,
                 format=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
+            )
+            start_event = await _receive_event(control)
+            assert start_event.event_name == "stream.output.start.requested"
+            await control.send_str(
+                json.dumps(
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=user_id,
+                        producer_id=device_id,
+                        session_id=device_id,
+                        stream_id=start_event.stream_id,
+                        stream_type=start_event.stream_type,
+                        payload={"stream_type": "actuator.speaker", "reason": "raw_split_ready"},
+                    ).to_dict(),
+                    ensure_ascii=False,
+                )
             )
             output_message = await audio_output.receive(timeout=2)
             assert output_message.type == WSMsgType.BINARY

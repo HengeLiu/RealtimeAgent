@@ -23,7 +23,7 @@ class Connection:
         """记录控制事件。"""
 
         self.events.append(event)
-        if event.event_name == "stream.output.open.requested" and self.app is not None:
+        if event.event_name == "stream.output.start.requested" and self.app is not None:
             self.app.publish_control_event(
                 Event(
                     event_name="stream.output.ready",
@@ -236,7 +236,7 @@ def test_output_service_completes_tts_task_on_each_answer_final(tmp_path) -> Non
     first_finish = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
     app.publish_control_event(
         Event(
-            event_name="stream.output.closed",
+            event_name="stream.output.finished",
             user_id="user-001",
             producer_id="dev-speaker",
             session_id="sess-task",
@@ -260,7 +260,7 @@ def test_output_endpoint_ack_timeout_releases_active_playback(tmp_path) -> None:
     """测试目标：验证端侧不回 output closed 时 Server 会超时释放播放状态。
 
     测试方法：提交一轮文本并 final，只让 Server 下发 `stream.output.finish.requested`，
-    不模拟端侧 `stream.output.closed`，随后触发维护任务。
+    不模拟端侧 `stream.output.finished`，随后触发维护任务。
     预期结果：stream 被标记为 failed，active playback 被释放，并记录 endpoint ack timeout。
     """
 
@@ -401,7 +401,7 @@ def test_vision_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
     """测试目标：验证没有任何文本 delta 时，空 final 不会打开扬声器输出流。
 
     测试方法：直接提交 `text=""、final=True` 的 AssistantTextDelta。
-    预期结果：端侧不会收到 `stream.output.open.requested`，runs 记录 empty_output。
+    预期结果：端侧不会收到 `stream.output.start.requested`，runs 记录 empty_output。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), tts_provider="mock"))
@@ -412,7 +412,7 @@ def test_vision_tts_empty_final_does_not_open_output_stream(tmp_path) -> None:
         AssistantTextDelta(user_id="user-001", session_id="sess-empty-final", text="", final=True)
     )
 
-    assert not any(event.event_name == "stream.output.open.requested" for event in connection.events)
+    assert not any(event.event_name == "stream.output.start.requested" for event in connection.events)
     model_events = (tmp_path / "runs" / "user-001" / "sess-empty-final" / "model-events.jsonl").read_text(
         encoding="utf-8"
     )

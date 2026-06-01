@@ -147,7 +147,7 @@ def test_browser_like_registration_compiles_standard_event_routes(tmp_path) -> N
     assert snapshot["connection_state"] == "online"
     assert snapshot["properties"]["realtime_agent.audio_input"] == "sensor.mic"
     assert "stream.control.open.requested" in endpoint.event_names()
-    assert "stream.output.open.requested" in endpoint.event_names()
+    assert "stream.output.start.requested" in endpoint.event_names()
 
 
 def test_realtime_dialog_opens_after_wake_and_endpoint_ack(tmp_path) -> None:
@@ -345,7 +345,7 @@ def test_device_consumes_server_events_with_acknowledgement_events(tmp_path) -> 
         )
     )
     app.stream_service.close_stream(speaker.stream_id, reason="assistant_audio_done")
-    for event_name in ("stream.output.started", "stream.output.closed"):
+    for event_name in ("stream.output.started", "stream.output.finished"):
         app.publish_control_event(
             Event(
                 event_name=event_name,
@@ -377,7 +377,7 @@ def test_device_consumes_server_events_with_acknowledgement_events(tmp_path) -> 
     )
 
     assert "stream.control.open.requested" in endpoint.event_names()
-    assert "stream.output.open.requested" in endpoint.event_names()
+    assert "stream.output.start.requested" in endpoint.event_names()
     assert any(
         name in endpoint.event_names()
         for name in ("stream.output.close.requested", "stream.output.finish.requested")

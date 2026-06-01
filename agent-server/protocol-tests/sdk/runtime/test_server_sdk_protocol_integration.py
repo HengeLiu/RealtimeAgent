@@ -85,7 +85,20 @@ def test_server_sdk_processes_text_turn_from_protocol_events_and_stream_chunks(t
 
     event_names = endpoint.event_names()
     assert "control.audio_session.open.requested" in event_names
-    assert "stream.output.open.requested" in event_names
+    assert "stream.output.start.requested" in event_names
+    start_event = next(event for event in endpoint.events if event.event_name == "stream.output.start.requested")
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.ready",
+            user_id=user_id,
+            producer_id=device_id,
+            session_id=device_id,
+            stream_id=start_event.stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": "test_ready"},
+        )
+    )
+    event_names = endpoint.event_names()
     assert "stream.output.finish.requested" in event_names
     assert endpoint.chunks
     assert [chunk.stream_type for chunk in asr_provider.chunks] == ["sensor.mic"]

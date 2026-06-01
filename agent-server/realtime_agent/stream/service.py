@@ -131,7 +131,7 @@ class StreamService:
         主要逻辑：输入 stream 注册本地句柄；非麦克风传感器输入 stream 会按
         `stream.input.opened` 订阅冻结消费者，用于把眼镜 RGB 等上行数据转发给手机
         端侧；输出 stream 先按订阅和 selection 选出 consumer，再发布
-        `stream.output.open.requested`，后续 chunk 和 close/cancel 事件都只发送给这批
+        `stream.output.start.requested`，后续 chunk 和 finish/cancel 事件都只发送给这批
         consumer。输出 stream 的首包会等端侧回 `stream.output.ready` 后再下发。
         参数：`selection` 控制多个订阅命中设备时的选择策略。
         返回值：`StreamHandle`。
@@ -172,7 +172,7 @@ class StreamService:
             handle.consumer_device_ids = consumers
         if stream_type.startswith("actuator."):
             match_event = Event(
-                event_name="stream.output.open.requested",
+                event_name="stream.output.start.requested",
                 user_id=user_id,
                 producer_id=SERVER_PRODUCER_ID,
                 stream_id=stream_id,
@@ -421,7 +421,7 @@ class StreamService:
 
         主要逻辑：`stream.output.finish.requested` 只表示 server 已经没有更多
         `StreamChunk` 要写入；端侧还需要把 SDK buffer 和本地 speaker sink drain
-        完成后再回 `stream.output.closed`。因此这里把状态标记为
+        完成后再回 `stream.output.finished`。因此这里把状态标记为
         `finish_requested`，由 `mark_output_endpoint_closed()` 最终收口。
         参数：`stream_id` 为 output stream 标识，`reason` 为写完原因；
         `output_bytes`、`output_chunk_count`、`output_last_seq` 用于跨 WebSocket
@@ -502,7 +502,7 @@ class StreamService:
     def mark_output_endpoint_closed(self, stream_id: str, *, reason: str = "endpoint_closed", state: str = "closed") -> None:
         """记录端侧 output stream 终态并关闭服务端句柄。
 
-        主要逻辑：只有端侧回 `stream.output.closed/cancelled/failed` 后，server
+        主要逻辑：只有端侧回 `stream.output.finished/cancelled/failed` 后，server
         才把 output stream 从 `finish_requested/cancel_requested/open` 进入终态。
         """
 

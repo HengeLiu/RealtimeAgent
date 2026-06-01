@@ -106,7 +106,7 @@ def test_publish_resolves_by_route() -> None:
 
     result = service.publish(
         Event(
-            event_name="stream.output.open.requested",
+            event_name="stream.output.start.requested",
             user_id="user-001",
             producer_id="server-main",
             stream_type="actuator.speaker",
@@ -119,7 +119,7 @@ def test_publish_resolves_by_route() -> None:
     assert result.route_diagnostics[0]["device_id"] == "speaker"
     assert result.route_diagnostics[0]["route_matched"] is True
     assert result.route_diagnostics[0]["delivered"] is True
-    assert [event.event_name for event in speaker.events] == ["stream.output.open.requested"]
+    assert [event.event_name for event in speaker.events] == ["stream.output.start.requested"]
     assert sensor.events == []
 
 

@@ -465,7 +465,7 @@ def test_realtime_provider_speech_started_publishes_control_event_after_output_f
     finish_event = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
     app.publish_control_event(
         Event(
-            event_name="stream.output.closed",
+            event_name="stream.output.finished",
             user_id="user-001",
             producer_id="dev-web",
             session_id=handle.session_id,

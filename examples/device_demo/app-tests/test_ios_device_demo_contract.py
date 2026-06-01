@@ -36,7 +36,7 @@ def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() ->
     """测试目标：确认 DeviceDemo 是 SDK 验证 App，不承载 for-blind 业务逻辑。
 
     测试方法：静态检查 Swift 运行时、调试日志和硬件 enable 配置。
-    预期结果：App 只通过 `DeviceClient` 启用麦克风、单帧相机和 speaker。
+    预期结果：App 只通过 `DeviceClient` 启用麦克风、单帧相机和 speaker，并调用 SDK 高层对话 API。
     """
 
     runtime = _read("ios/DeviceDemo/DeviceDemoRuntime.swift")
@@ -50,16 +50,25 @@ def test_device_demo_runtime_enables_sdk_hardware_without_business_app_code() ->
         "camera: .enabled(",
         "modes: [\"single\"]",
         "speaker: .enabled(",
+        "duplexMode: .fullDuplexServerBargeIn",
+        "client.requestPermissions()",
+        "client.register()",
+        "client.startConversation(reason:",
+        "client.requestConversationClose(reason:",
         "onDebugLog",
         "DeviceDemo.log",
-        "control.user.wake.detected",
     ]:
         assert token in source
 
     for forbidden in [
+        "import AVFoundation",
         "for-blind-app",
         "RealtimeAgentPhone",
         "DirectCameraSinkServer",
+        "requestMediaPermissions",
+        "sendWakeDetected",
+        "client.sendEvent(",
+        "control.user.wake.detected",
         "phone.task.",
         "target_device",
         "target_device_id",

@@ -13,6 +13,7 @@ class Connection:
 
     def __init__(self, device_id: str) -> None:
         self.device_id = device_id
+        self.app: RealtimeAgentApp | None = None
         self.events: list[Event] = []
         self.chunks: list[StreamChunk] = []
 
@@ -20,6 +21,32 @@ class Connection:
         """记录控制事件。"""
 
         self.events.append(event)
+        if self.app is None:
+            return
+        if event.event_name == "stream.output.start.requested":
+            self.app.publish_control_event(
+                Event(
+                    event_name="stream.output.ready",
+                    user_id=event.user_id,
+                    producer_id=self.device_id,
+                    session_id=event.session_id,
+                    stream_id=event.stream_id,
+                    stream_type=event.stream_type,
+                    payload={"stream_type": event.stream_type, "reason": "test_ready"},
+                )
+            )
+        if event.event_name == "stream.output.cancel.requested":
+            cancelled_event = Event(
+                event_name="stream.output.cancelled",
+                user_id=event.user_id,
+                producer_id=self.device_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                stream_type=event.stream_type,
+                payload={"stream_type": event.stream_type, "reason": "test_cancelled"},
+            )
+            self.events.append(cancelled_event)
+            self.app.publish_control_event(cancelled_event)
 
     def push_stream_chunk(self, chunk: StreamChunk) -> None:
         """记录音频 chunk。"""
@@ -30,6 +57,7 @@ class Connection:
 def register_speaker(app: RealtimeAgentApp, connection: Connection) -> None:
     """注册可消费 speaker 的端侧。"""
 
+    connection.app = app
     app.register_device(
         Event(
             event_name="control.device.register.requested",

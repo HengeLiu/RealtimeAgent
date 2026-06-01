@@ -39,7 +39,7 @@
             "stream.input.opened",
             "stream.input.closed",
             "stream.input.failed",
-            "stream.output.open.requested",
+            "stream.output.start.requested",
             "stream.output.ready",
             "stream.output.close.requested",
             "stream.output.finish.requested",

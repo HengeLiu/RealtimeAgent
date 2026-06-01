@@ -8,7 +8,7 @@ pytestmark = pytest.mark.protocol
 
 def test_event_envelope_uses_realtime_agent_v1_without_target_fields() -> None:
     event = Event(
-        event_name="stream.output.open.requested",
+        event_name="stream.output.start.requested",
         user_id="user-001",
         producer_id="server-main",
         stream_id="stream_out_001",
@@ -19,7 +19,7 @@ def test_event_envelope_uses_realtime_agent_v1_without_target_fields() -> None:
     data = event.to_dict()
 
     assert data["version"] == "realtime-agent.v1"
-    assert data["event_name"] == "stream.output.open.requested"
+    assert data["event_name"] == "stream.output.start.requested"
     assert all(not key.endswith("_device_id") for key in data)
 
 

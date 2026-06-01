@@ -205,7 +205,7 @@ def test_close_after_reply_waits_for_current_output_then_requests_close(tmp_path
     stream_id = app.output_service.router._stream_by_session[session_id]
     app.publish_control_event(
         Event(
-            event_name="stream.output.closed",
+            event_name="stream.output.finished",
             user_id="user-a",
             producer_id="dev-audio",
             session_id=session_id,

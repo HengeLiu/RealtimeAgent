@@ -42,7 +42,7 @@ class EventName(StrEnum):
     STREAM_INPUT_OPENED = "stream.input.opened"
     STREAM_INPUT_CLOSED = "stream.input.closed"
     STREAM_INPUT_FAILED = "stream.input.failed"
-    STREAM_OUTPUT_OPEN_REQUESTED = "stream.output.open.requested"
+    STREAM_OUTPUT_START_REQUESTED = "stream.output.start.requested"
     STREAM_OUTPUT_READY = "stream.output.ready"
     STREAM_OUTPUT_CLOSE_REQUESTED = "stream.output.close.requested"
     STREAM_OUTPUT_FINISH_REQUESTED = "stream.output.finish.requested"

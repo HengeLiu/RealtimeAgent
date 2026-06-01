@@ -10,10 +10,24 @@ class SpeakerConnection:
     """测试用 speaker 端侧连接。"""
 
     def __init__(self) -> None:
+        self.app: RealtimeAgentApp | None = None
         self.chunks = []
 
     def push_event(self, event: Event) -> None:
-        """忽略控制事件。"""
+        """收到 speaker start 后模拟端侧 ready。"""
+
+        if self.app is not None and event.event_name == "stream.output.start.requested":
+            self.app.publish_control_event(
+                Event(
+                    event_name="stream.output.ready",
+                    user_id=event.user_id,
+                    producer_id="dev-speaker",
+                    session_id=event.session_id,
+                    stream_id=event.stream_id,
+                    stream_type=event.stream_type,
+                    payload={"stream_type": event.stream_type, "reason": "test_ready"},
+                )
+            )
 
     def push_stream_chunk(self, chunk) -> None:
         """记录输出音频 chunk。"""
@@ -27,6 +41,7 @@ class SpeakerConnection:
 def register_speaker(app: RealtimeAgentApp, connection: SpeakerConnection) -> None:
     """注册一个可消费 speaker output stream 的测试设备。"""
 
+    connection.app = app
     app.register_device(
         Event(
             event_name="control.device.register.requested",

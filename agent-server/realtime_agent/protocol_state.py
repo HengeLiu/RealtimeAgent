@@ -19,11 +19,10 @@ INPUT_STREAM_EVENTS = {
 }
 
 OUTPUT_STREAM_EVENTS = {
-    "stream.output.open.requested",
+    "stream.output.start.requested",
     "stream.output.ready",
     "stream.output.started",
     "stream.output.finished",
-    "stream.output.closed",
     "stream.output.failed",
     "stream.output.cancel.requested",
     "stream.output.cancelled",
@@ -127,8 +126,8 @@ def validate_output_stream_event_sequence(event_names: Iterable[str]) -> None:
     if not names:
         raise ValueError("output stream sequence is empty")
     _ensure_known_events(names, OUTPUT_STREAM_EVENTS, "output stream")
-    if names[0] != "stream.output.open.requested":
-        raise ValueError("output stream sequence must start with stream.output.open.requested")
+    if names[0] != "stream.output.start.requested":
+        raise ValueError("output stream sequence must start with stream.output.start.requested")
 
     ready = False
     started = False
@@ -152,15 +151,10 @@ def validate_output_stream_event_sequence(event_names: Iterable[str]) -> None:
             started = True
             continue
         if name == "stream.output.finished":
-            if not started:
-                raise ValueError("stream.output.finished must appear after stream.output.started")
+            if not ready:
+                raise ValueError("stream.output.finished must appear after stream.output.ready")
             if cancel_requested:
                 raise ValueError("stream.output.finished must not follow cancel request")
-            terminal_seen = True
-            continue
-        if name == "stream.output.closed":
-            if not ready:
-                raise ValueError("stream.output.closed must appear after stream.output.ready")
             terminal_seen = True
             continue
         if name == "stream.output.cancel.requested":

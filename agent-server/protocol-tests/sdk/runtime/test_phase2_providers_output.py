@@ -17,7 +17,7 @@ class Connection:
 
     def push_event(self, event: Event) -> None:
         self.events.append(event)
-        if event.event_name == "stream.output.open.requested" and self.app is not None:
+        if event.event_name == "stream.output.start.requested" and self.app is not None:
             self.app.publish_control_event(
                 Event(
                     event_name="stream.output.ready",
@@ -119,7 +119,7 @@ def close_output_stream(
 
     app.publish_control_event(
         Event(
-            event_name="stream.output.closed",
+            event_name="stream.output.finished",
             user_id=user_id,
             producer_id=producer_id,
             session_id=session_id,
@@ -244,7 +244,7 @@ def test_requeue_plays_after_interrupting_stream_finishes(tmp_path) -> None:
     high_decisions = session_text(app, "sess-high", "playback-decisions.jsonl")
     assert "play_now" in low_decisions
     assert "interrupt" in high_decisions
-    assert len([event for event in connection.events if event.event_name == "stream.output.open.requested"]) >= 3
+    assert len([event for event in connection.events if event.event_name == "stream.output.start.requested"]) >= 3
 
 
 def test_queue_ttl_expiry_and_same_priority_no_interrupt(tmp_path) -> None:
@@ -322,7 +322,7 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
     """测试目标：验证端侧播放完成事件会释放播放仲裁 active 状态。
 
     测试方法：先让当前设备的一条输出保持 active，再提交同用户新会话输出进入队列，
-    然后模拟当前设备上报 `stream.output.closed`。
+    然后模拟当前设备上报 `stream.output.finished`。
     预期结果：当前 active 被释放且服务端 output stream 被关闭，新会话排队输出恢复播放。
     """
 
@@ -348,7 +348,7 @@ def test_endpoint_output_closed_releases_active_and_replays_queued_output(tmp_pa
 
     app.publish_control_event(
         Event(
-            event_name="stream.output.closed",
+            event_name="stream.output.finished",
             user_id="user-001",
             producer_id="dev-old",
             session_id="sess-old",
@@ -472,7 +472,7 @@ def test_native_audio_empty_done_does_not_open_output_stream(tmp_path) -> None:
 
     测试方法：直接调用 Output Service 的 native audio 入口，传入 `final=True` 和空
     audio payload。
-    预期结果：端侧不会收到 `stream.output.open.requested`，runs 中记录 empty_output。
+    预期结果：端侧不会收到 `stream.output.start.requested`，runs 中记录 empty_output。
     """
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
     connection = Connection("dev-playback")
@@ -487,7 +487,7 @@ def test_native_audio_empty_done_does_not_open_output_stream(tmp_path) -> None:
         metadata={"provider": "fake"},
     )
 
-    assert not any(event.event_name == "stream.output.open.requested" for event in connection.events)
+    assert not any(event.event_name == "stream.output.start.requested" for event in connection.events)
     model_events = session_text(app, "sess-native-empty", "model-events.jsonl")
     assert "assistant_audio.done" in model_events
     assert '"empty_output": true' in model_events

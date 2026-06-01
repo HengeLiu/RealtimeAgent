@@ -450,7 +450,7 @@ def test_vision_agent_core_final_mic_chunk_emits_output() -> None:
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
-            if event.event_name == "stream.output.open.requested":
+            if event.event_name == "stream.output.start.requested":
                 app.publish_control_event(
                     Event(
                         event_name="stream.output.ready",
@@ -495,7 +495,7 @@ def test_vision_agent_core_final_mic_chunk_emits_output() -> None:
         )
     )
 
-    assert any(event.event_name == "stream.output.open.requested" for event in connection.events)
+    assert any(event.event_name == "stream.output.start.requested" for event in connection.events)
     assert connection.chunks
 
 
@@ -519,7 +519,7 @@ def test_vision_agent_core_replies_to_multiple_input_streams_in_same_session(tmp
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
-            if event.event_name == "stream.output.open.requested":
+            if event.event_name == "stream.output.start.requested":
                 app.publish_control_event(
                     Event(
                         event_name="stream.output.ready",
@@ -619,7 +619,7 @@ def test_vision_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path
 
         def push_event(self, event: Event) -> None:
             self.events.append(event)
-            if event.event_name == "stream.output.open.requested":
+            if event.event_name == "stream.output.start.requested":
                 app.publish_control_event(
                     Event(
                         event_name="stream.output.ready",

@@ -138,7 +138,7 @@ def _protocol_summary_check() -> dict:
         "control.device.register.requested",
         "control.device.registered",
         "stream.input.opened",
-        "stream.output.open.requested",
+        "stream.output.start.requested",
     }
     required_streams = {"sensor.rgb", "sensor.imu", "sensor.tof", "actuator.haptic"}
     missing_events = sorted(required_events - set(CONTROL_EVENTS))
