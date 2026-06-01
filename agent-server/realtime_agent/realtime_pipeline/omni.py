@@ -56,12 +56,7 @@ class OmniInputBoundary:
                 energy_gate = {}
                 gate = getattr(core, "_provider_speech_energy_gate", None)
                 if callable(gate):
-                    accepted, energy_gate = gate(user_id=user_id, session_id=session_id, record=record)
-                    if not accepted:
-                        recorder = getattr(core, "recorder", None)
-                        if recorder is not None:
-                            recorder.record_agent_event(session_id, record)
-                        return
+                    _accepted, energy_gate = gate(user_id=user_id, session_id=session_id, record=record)
                     record = {**record, "energy_gate": energy_gate}
                 notify_user_activity = getattr(core, "_notify_user_activity", None)
                 if callable(notify_user_activity):

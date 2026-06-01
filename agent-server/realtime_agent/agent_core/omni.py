@@ -184,7 +184,7 @@ class InputAudioLevel:
     """麦克风输入音量采样。
 
     主要功能：保存最近一片 `sensor.mic` PCM16 的 RMS/峰值，供 provider
-    `speech_started` 触发打断前做本地能量门限过滤。
+    `speech_started` 误触发排查使用。
     主要属性：`seq` 是端侧 chunk 序号；`audio_end_ms` 是按 chunk 时长累计的音频末尾
     时间；`rms/peak` 是 PCM16 幅度值。
     """
@@ -2015,25 +2015,25 @@ class OmniRealtimeAgentCore:
         session_id: str,
         record: dict[str, Any],
     ) -> tuple[bool, dict[str, Any]]:
-        """按 E4 的能量门限过滤 provider speech_started。
+        """记录 provider speech_started 附近的麦克风能量诊断。
 
-        主要逻辑：provider 的 VAD 事件只作为候选打断；服务端再用最近麦克风 chunk 的
-        RMS/peak 判断是否像真实用户说话。低于阈值时只记录诊断，不取消当前输出。
+        主要逻辑：Omni provider 的 VAD、输入缓冲区提交和 response 生成属于同一个闭环。
+        因此 `speech_started` 是否成立以 provider 为准；这里只回查最近麦克风 chunk 的
+        RMS/peak，帮助排查误触发，不再用本地 RMS 阈值拦截打断。
         参数：`record` 为 provider 原始事件摘要。
-        返回值：`(accepted, diagnostics)`；`accepted=False` 表示应忽略本次候选。
-        异常情况：没有采样或阈值未启用时放行，并在 diagnostics 中说明原因。
+        返回值：始终返回 `(True, diagnostics)`，表示 provider speech_started 总是被接受。
+        异常情况：没有采样时仍放行，并在 diagnostics 中说明原因。
         """
 
         threshold = max(0, int(getattr(self.omni_config, "provider_speech_min_rms", 0) or 0))
         levels = list(self._input_levels_by_session.get(session_id, []))
-        if threshold <= 0:
-            return True, {"enabled": False, "reason": "threshold_disabled", "min_rms": threshold}
         if not levels:
             diagnostics = {
-                "enabled": True,
+                "enabled": False,
                 "accepted": True,
-                "reason": "no_recent_audio_levels",
-                "min_rms": threshold,
+                "reason": "provider_authoritative_no_recent_audio_levels",
+                "diagnostic_only": True,
+                "configured_min_rms": threshold,
                 "level_count": 0,
             }
             self._record_provider_speech_gate_decision(user_id=user_id, session_id=session_id, diagnostics=diagnostics)
@@ -2051,26 +2051,26 @@ class OmniRealtimeAgentCore:
             chunk_range = f"{center_seq - 2}-{center_seq + 2}"
         max_rms = max((level.rms for level in selected), default=0)
         max_peak = max((level.peak for level in selected), default=0)
-        accepted = max_rms >= threshold
         diagnostics = {
-            "enabled": True,
-            "accepted": accepted,
-            "reason": "accepted" if accepted else "low_energy",
+            "enabled": False,
+            "accepted": True,
+            "reason": "provider_authoritative",
+            "diagnostic_only": True,
             "audio_ms": audio_ms,
             "center_seq": center_seq,
             "chunk_range": chunk_range,
             "level_count": len(selected),
             "max_rms": max_rms,
             "max_peak": max_peak,
-            "min_rms": threshold,
+            "configured_min_rms": threshold,
         }
         self._record_provider_speech_gate_decision(user_id=user_id, session_id=session_id, diagnostics=diagnostics)
-        return accepted, diagnostics
+        return True, diagnostics
 
     def _record_provider_speech_gate_decision(self, *, user_id: str, session_id: str, diagnostics: dict[str, Any]) -> None:
-        """记录 provider speech_started 能量门限诊断。"""
+        """记录 provider speech_started 能量诊断。"""
 
-        decision = "accepted_speech_started" if diagnostics.get("accepted") else "ignore_low_energy_speech_started"
+        decision = "rms_diagnostic"
         self.recorder.record_agent_event(
             session_id,
             {

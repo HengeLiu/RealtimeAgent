@@ -653,13 +653,13 @@ def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> Non
     assert "omni.response.audio_done_ignored_after_interrupt" in agent_events_text
 
 
-def test_realtime_provider_speech_started_low_energy_does_not_cancel_active_output(tmp_path) -> None:
-    """测试目标：验证低能量 provider speech_started 不会误触发播放打断。
+def test_realtime_provider_speech_started_low_energy_still_cancels_active_output(tmp_path) -> None:
+    """测试目标：验证 Omni 链路完全信任 provider speech_started。
 
-    测试方法：启用 provider speech RMS 门限，先输入低 RMS 音频并让 fake provider
+    测试方法：保留 provider speech RMS 诊断阈值，先输入低 RMS 音频并让 fake provider
     建立 active output，再模拟 provider 上报 `speech_started`。
-    预期结果：端侧不会收到 `audio.speech.started` 或 `stream.output.cancel.requested`，
-    runs 中记录 `ignore_low_energy_speech_started` 诊断。
+    预期结果：端侧仍收到 `audio.speech.started` 和 `stream.output.cancel.requested`，
+    runs 中只记录 RMS 诊断，不再因为低能量拦截 provider turn。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -689,22 +689,22 @@ def test_realtime_provider_speech_started_low_energy_does_not_cancel_active_outp
     )
 
     event_names = [event.event_name for event in connection.events]
-    assert instances[0].cancelled is False
-    assert "audio.speech.started" not in event_names
-    assert "stream.output.cancel.requested" not in event_names
+    assert instances[0].cancelled is True
+    assert "audio.speech.started" in event_names
+    assert "stream.output.cancel.requested" in event_names
     agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "ignore_low_energy_speech_started" in agent_events_text
+    assert "rms_diagnostic" in agent_events_text
     assert '"max_rms": 1' in agent_events_text
-    assert '"min_rms": 819' in agent_events_text
+    assert '"configured_min_rms": 819' in agent_events_text
 
 
 def test_realtime_provider_speech_started_high_energy_cancels_active_output(tmp_path) -> None:
-    """测试目标：验证高能量 provider speech_started 仍然可以正常打断。
+    """测试目标：验证高能量 provider speech_started 可以正常打断并保留 RMS 诊断。
 
-    测试方法：启用 provider speech RMS 门限，输入 RMS 高于阈值的 PCM16 音频后模拟
+    测试方法：保留 provider speech RMS 诊断阈值，输入 RMS 高于阈值的 PCM16 音频后模拟
     provider `speech_started`。
     预期结果：端侧收到 `audio.speech.started` 和 `stream.output.cancel.requested`，
-    runs 中记录 `accepted_speech_started` 诊断。
+    runs 中记录 `rms_diagnostic` 诊断。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -739,17 +739,17 @@ def test_realtime_provider_speech_started_high_energy_cancels_active_output(tmp_
     assert "audio.speech.started" in event_names
     assert "stream.output.cancel.requested" in event_names
     agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "accepted_speech_started" in agent_events_text
+    assert "rms_diagnostic" in agent_events_text
     assert '"max_rms": 2000' in agent_events_text
 
 
-def test_omni_pipeline_speech_started_respects_energy_gate_and_interruptible_state(tmp_path) -> None:
-    """测试目标：验证正式 Omni pipeline 不会把低能量 speech_started 转成 cancel。
+def test_omni_pipeline_speech_started_uses_provider_boundary_and_interruptible_state(tmp_path) -> None:
+    """测试目标：验证正式 Omni pipeline 以 provider speech_started 作为唯一边界。
 
-    测试方法：直接创建 Omni pipeline，绑定事件监听器；先输入低 RMS 音频并模拟
-    provider `speech_started`，再输入高 RMS 音频并再次模拟 `speech_started`。
-    预期结果：低 RMS 时没有 `speech_started/output_cancel_requested` pipeline 事件；
-    高 RMS 且存在 active output 时两个事件都会出现。
+    测试方法：直接创建 Omni pipeline，绑定事件监听器；输入低 RMS 音频并模拟
+    provider `speech_started`。
+    预期结果：只要 provider 上报 speech_started 且存在 active output，就发出
+    `speech_started/output_cancel_requested` pipeline 事件。
     """
 
     instances: list[FakeRealtimeProvider] = []
@@ -778,22 +778,6 @@ def test_omni_pipeline_speech_started_respects_energy_gate_and_interruptible_sta
         )
     )
     assert instances[0].callbacks is not None
-    emitted.clear()
-    instances[0].callbacks.provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
-    assert [event.event for event in emitted] == []
-
-    loud_sample = int(2000).to_bytes(2, byteorder="little", signed=True)
-    pipeline.append_audio_event(
-        StreamChunk(
-            user_id="user-001",
-            session_id="dev-web",
-            stream_id="stream-mic-dev-web",
-            stream_type="sensor.mic",
-            seq=1,
-            payload=loud_sample * 320,
-            duration_ms=20,
-        )
-    )
     emitted.clear()
     instances[0].callbacks.provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
     event_names = [event.event for event in emitted]

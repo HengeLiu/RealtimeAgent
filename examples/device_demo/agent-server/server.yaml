@@ -58,8 +58,8 @@ audio_pipeline:
   volume_normalize: true
   # device demo 使用真实 Omni provider 判断 speech_start/speech_stopped。
   vad: "provider"
-  # provider speech_started 只作为候选打断；服务端再用最近 mic chunk 的 RMS 做能量门限过滤。
-  # 819 约等于 E4 实验中的 normalized RMS 0.025，可通过 agent-events 中的 max_rms 继续调参。
+  # Omni 链路以 provider speech_started 作为唯一 turn boundary；该值仅保留给 server_vad
+  # 或 RMS 诊断使用，不再拦截 Omni provider 的 speech_started。
   vad_rms_threshold: 819
   vad_silence_timeout_ms: 600
   asr_sidecar: "disabled"
