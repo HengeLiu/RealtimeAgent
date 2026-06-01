@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="980" height="190" viewBox="0 0 980 190" role="img" aria-labelledby="title desc">
   <title id="title">realtime-agent handwritten wordmark</title>
-  <desc id="desc">A handwritten-style realtime-agent wordmark. The real prefix is blue, and time-agent is dark blue.</desc>
+  <desc id="desc">A handwritten-style realtime-agent wordmark. The real and agent parts are blue, and time is dark blue.</desc>
   <defs>
     <style>
       .word {
@@ -21,6 +21,6 @@
   </defs>
 
   <text x="58" y="126" class="word">
-    <tspan class="real">real</tspan><tspan class="rest">time-agent</tspan>
+    <tspan class="real">real</tspan><tspan class="rest">time-</tspan><tspan class="real">agent</tspan>
   </text>
 </svg>
