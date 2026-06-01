@@ -10,6 +10,44 @@ public enum DeviceConversationState: String, Sendable, Equatable {
     case closing
 }
 
+/// SDK 连接状态。
+///
+/// 主要功能：让 App 明确区分注册、在线、断连和本地主动关闭，避免 App 解析底层日志。
+public enum DeviceConnectionState: Sendable, Equatable {
+    case idle
+    case connecting
+    case registering
+    case registered
+    case disconnected(DeviceDisconnectReason)
+    case closed
+}
+
+/// SDK 断连原因。
+///
+/// 主要功能：把 heartbeat、control 和 stream 的断连入口统一成 App 可展示和记录的原因。
+public enum DeviceDisconnectReason: Sendable, Equatable {
+    case heartbeatFailed(String)
+    case controlReceiveFailed(String)
+    case streamReceiveFailed(String)
+    case serverClosed(String)
+    case localClose
+
+    var message: String {
+        switch self {
+        case let .heartbeatFailed(message):
+            return "heartbeat_failed: \(message)"
+        case let .controlReceiveFailed(message):
+            return "control_receive_failed: \(message)"
+        case let .streamReceiveFailed(message):
+            return "stream_receive_failed: \(message)"
+        case let .serverClosed(message):
+            return "server_closed: \(message)"
+        case .localClose:
+            return "local_close"
+        }
+    }
+}
+
 /// realtime-agent 端侧通讯客户端。
 ///
 /// 主要功能：管理 control / stream WebSocket、设备注册、心跳、标准事件状态机、`custom.*`
@@ -22,6 +60,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     public typealias EventHandler = @Sendable (RealtimeAgentEvent) async throws -> Void
     public typealias DebugLogHandler = @Sendable (String) async -> Void
     public typealias ConversationStateHandler = @Sendable (DeviceConversationState) async -> Void
+    public typealias ConnectionStateHandler = @Sendable (DeviceConnectionState) async -> Void
 
     public let serverURL: URL
     public let device: RealtimeAgentDevice
@@ -57,6 +96,8 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var sequenceByStream: [String: Int] = [:]
     private var debugLogHandler: DebugLogHandler?
     private var conversationStateHandler: ConversationStateHandler?
+    private var connectionStateHandler: ConnectionStateHandler?
+    private var connectionState: DeviceConnectionState = .idle
     private var audioInput: AudioInput = .disabled()
     private var camera: Camera = .disabled()
     private var speaker: Speaker = .disabled()
@@ -152,6 +193,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
 
     /// 连接 control WebSocket。
     public func connect() async throws {
+        await emitConnectionState(.connecting)
         try await transport.connectControl(url: try websocketURL(path: "/ws/control"))
         diagnostics.controlState = "connected"
     }
@@ -164,12 +206,14 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         if diagnostics.controlState != "connected" {
             try await connect()
         }
+        await emitConnectionState(.registering)
         try await sendEvent(name: "control.device.register.requested", payload: registrationPayload())
         while true {
             let event = try await receiveEvent()
             if event.eventName == "control.device.registered" {
                 diagnostics.registered = true
                 diagnostics.controlState = "registered"
+                await emitConnectionState(.registered)
                 if shouldStartHeartbeat {
                     let interval = event.payload["heartbeat_interval_seconds"] as? Double
                         ?? Double(event.payload["heartbeat_interval_seconds"] as? Int ?? 10)
@@ -180,6 +224,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
             if event.eventName == "control.device.register.failed" {
                 let reason = String(describing: event.payload["reason"] ?? event.payload)
                 diagnostics.lastError = reason
+                await emitConnectionState(.idle)
                 throw RealtimeAgentDeviceError.registrationFailed(reason)
             }
         }
@@ -291,8 +336,11 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         streamReceiveTask = nil
         microphoneTask = nil
         await transport.close()
+        diagnostics.registered = false
         diagnostics.controlState = "closed"
         diagnostics.streamState = "closed"
+        await emitConnectionState(.closed)
+        await emitConversationState(.waiting)
     }
 
     /// 注册自定义业务命令处理器。
@@ -327,6 +375,13 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     /// 主要功能：让 App 根据 server audio session 生命周期切换 UI，而不是自行解析标准协议事件。
     public func onConversationStateChange(_ handler: @escaping ConversationStateHandler) {
         conversationStateHandler = handler
+    }
+
+    /// 注册 SDK 连接状态回调。
+    ///
+    /// 主要功能：让 App 根据 SDK 管理的连接状态决定手动重连、后台重试或展示错误。
+    public func onConnectionStateChange(_ handler: @escaping ConnectionStateHandler) {
+        connectionStateHandler = handler
     }
 
     /// 发送控制事件。
@@ -545,6 +600,29 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private func emitConversationState(_ state: DeviceConversationState) async {
         await debugLog("conversation state \(state.rawValue)")
         await conversationStateHandler?(state)
+    }
+
+    private func emitConnectionState(_ state: DeviceConnectionState) async {
+        connectionState = state
+        await debugLog("connection state \(connectionStateDebugName(state))")
+        await connectionStateHandler?(state)
+    }
+
+    private func connectionStateDebugName(_ state: DeviceConnectionState) -> String {
+        switch state {
+        case .idle:
+            return "idle"
+        case .connecting:
+            return "connecting"
+        case .registering:
+            return "registering"
+        case .registered:
+            return "registered"
+        case let .disconnected(reason):
+            return "disconnected(\(reason.message))"
+        case .closed:
+            return "closed"
+        }
     }
 
     private func registrationPayload() -> [String: Any] {
@@ -1297,13 +1375,20 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         heartbeatTask?.cancel()
         heartbeatTask = Task { [weak self] in
             while !Task.isCancelled {
-                let nanoseconds = UInt64(max(intervalSeconds, 1) * 1_000_000_000)
+                let nanoseconds = UInt64(max(intervalSeconds, 0.01) * 1_000_000_000)
                 try? await Task.sleep(nanoseconds: nanoseconds)
                 guard !Task.isCancelled, let self else { return }
-                try? await self.sendEvent(
-                    name: "control.device.heartbeat.received",
-                    payload: ["connection_state": "online", "client_type": self.device.registrationPayload["client_type"] as? String ?? "ios"]
-                )
+                do {
+                    try await self.sendEvent(
+                        name: "control.device.heartbeat.received",
+                        payload: ["connection_state": "online", "client_type": self.device.registrationPayload["client_type"] as? String ?? "ios"]
+                    )
+                } catch is CancellationError {
+                    return
+                } catch {
+                    await self.handleConnectionLost(reason: .heartbeatFailed(error.localizedDescription))
+                    return
+                }
             }
         }
     }
@@ -1316,8 +1401,10 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                 do {
                     let event = try await self.receiveEvent()
                     _ = try await self.dispatchEvent(event)
+                } catch is CancellationError {
+                    return
                 } catch {
-                    self.recordControlError(error)
+                    await self.handleConnectionLost(reason: .controlReceiveFailed(error.localizedDescription))
                     return
                 }
             }
@@ -1356,6 +1443,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
                     )
                     guard self.shouldRetryStreamReceive(after: consecutiveFailures) else {
                         await self.debugLog("stream receive loop stopped after \(consecutiveFailures) failures")
+                        await self.handleConnectionLost(reason: .streamReceiveFailed(error.localizedDescription))
                         return
                     }
                     self.diagnostics.streamState = "disconnected"
@@ -1400,6 +1488,71 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private func recordStreamError(_ error: Error) {
         diagnostics.streamState = "error"
         diagnostics.lastError = error.localizedDescription
+    }
+
+    private func handleConnectionLost(reason: DeviceDisconnectReason) async {
+        let shouldCleanup = withStateLock {
+            if case .closed = connectionState {
+                return false
+            }
+            if case .disconnected = connectionState {
+                return false
+            }
+            return true
+        }
+        guard shouldCleanup else {
+            return
+        }
+        await debugLog("connection lost reason=\(reason.message)")
+        heartbeatTask?.cancel()
+        controlReceiveTask?.cancel()
+        streamReceiveTask?.cancel()
+        markStreamReceiveLoopStopped()
+        microphoneTask?.cancel()
+        let cleanup = withStateLock {
+            let inputTasks = Array(inputStreamTasks.values)
+            let preparationTasks = Array(speakerPreparationTasks.values)
+            let drainTasks = Array(speakerDrainTasks.values)
+            let finishTasks = Array(speakerFinishTasks.values)
+            let buffers = Array(speakerBuffers.values)
+            inputStreamTasks = [:]
+            speakerPreparationTasks = [:]
+            speakerDrainTasks = [:]
+            speakerFinishTasks = [:]
+            speakerBuffers = [:]
+            speakerReceivedChunkCounts = [:]
+            speakerDrainedChunkCounts = [:]
+            speakerAppendedLastSeq = [:]
+            speakerFirstChunkTimes = [:]
+            speakerPreviousChunkTimes = [:]
+            speakerFirstDrainTimes = [:]
+            speakerPreviousDrainTimes = [:]
+            readyOutputStreams = []
+            startedOutputStreams = []
+            completedOutputStreams = []
+            connectedStreamChannels = []
+            outputSessions = [:]
+            sequenceByStream = [:]
+            return (inputTasks, preparationTasks, drainTasks, finishTasks, buffers)
+        }
+        cleanup.0.forEach { $0.cancel() }
+        cleanup.1.forEach { $0.cancel() }
+        cleanup.2.forEach { $0.cancel() }
+        cleanup.3.forEach { $0.cancel() }
+        for buffer in cleanup.4 {
+            await buffer.cancel()
+        }
+        heartbeatTask = nil
+        controlReceiveTask = nil
+        streamReceiveTask = nil
+        microphoneTask = nil
+        await transport.close()
+        diagnostics.registered = false
+        diagnostics.controlState = "disconnected"
+        diagnostics.streamState = "disconnected"
+        diagnostics.lastError = reason.message
+        await emitConversationState(.waiting)
+        await emitConnectionState(.disconnected(reason))
     }
 
     private func removeSpeakerPlaybackState(

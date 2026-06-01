@@ -453,6 +453,7 @@ class ControlService:
         self._devices: dict[str, Device] = {}
         self._connections: dict[str, DeviceConnection] = {}
         self._registration_failures: dict[str, DeviceSnapshot] = {}
+        self._inactive_devices: dict[str, DeviceSnapshot] = {}
 
     def register_device(self, registration: Event, connection: DeviceConnection | None = None) -> Event:
         auth_mode = str((registration.payload.get("auth") or {}).get("mode") or self.authenticator.mode)
@@ -539,6 +540,8 @@ class ControlService:
                     )
                 )
             self._devices[device_id] = record
+            self._inactive_devices.pop(device_id, None)
+            self._registration_failures.pop(device_id, None)
             if connection is not None:
                 self._connections[device_id] = connection
             event = Event(
@@ -759,15 +762,24 @@ class ControlService:
         self.recorder.record_event(event)
         return event
 
-    def mark_connection_offline(self, device_id: str, *, connection_id: str | None = None, reason: str = "disconnected") -> None:
+    def mark_connection_offline(
+        self,
+        device_id: str,
+        *,
+        connection_id: str | None = None,
+        reason: str = "disconnected",
+    ) -> DeviceSnapshot | None:
         device = self._devices.get(device_id)
         if device is None:
-            return
+            return None
         if connection_id is not None and device.connection_id != connection_id:
-            return
+            return None
         device.connection_state = "offline"
         device.last_seen_at = time.time()
         self._record_device_error(device, "connection_offline", reason)
+        snapshot = self._device_snapshot(device)
+        self._inactive_devices[device_id] = snapshot
+        self._devices.pop(device_id, None)
         self._connections.pop(device_id, None)
         self.recorder.record_event(
             Event(
@@ -782,20 +794,24 @@ class ControlService:
                 },
             )
         )
+        return snapshot
 
     def expire_stale_devices(self, *, now: float | None = None, timeout_seconds: float = 30.0) -> tuple[str, ...]:
         """按心跳超时标记离线设备。"""
 
         current = time.time() if now is None else now
         expired: list[str] = []
-        for device in self._devices.values():
+        for device in list(self._devices.values()):
             if device.connection_state != "online":
                 continue
             if current - device.last_seen_at <= timeout_seconds:
                 continue
             device.connection_state = "offline"
-            self._connections.pop(device.device_id, None)
             self._record_device_error(device, "heartbeat_timeout", "heartbeat timeout")
+            snapshot = self._device_snapshot(device)
+            self._inactive_devices[device.device_id] = snapshot
+            self._devices.pop(device.device_id, None)
+            self._connections.pop(device.device_id, None)
             expired.append(device.device_id)
             self.recorder.record_event(
                 Event(
@@ -1082,6 +1098,9 @@ class ControlService:
         device = self._devices.get(device_id)
         if device is not None:
             return self._device_snapshot(device).to_dict()
+        inactive = self._inactive_devices.get(device_id)
+        if inactive is not None:
+            return inactive.to_dict()
         failure = self._registration_failures.get(device_id)
         return failure.to_dict() if failure is not None else None
 

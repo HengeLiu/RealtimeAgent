@@ -31,6 +31,7 @@ package "Device SDK" {
   [Visual Input Channel]
   [Event Router]
   [Registration Manager]
+  [Connection State Store]
   [Realtime AV Session]
   [Server Event Consumers]
   [Heartbeat Manager]
@@ -49,8 +50,11 @@ package "Server Boundary" {
 [Command Handlers] --> [Server Event Consumers]
 
 [Device Profile] --> [Registration Manager]
+[Registration Manager] --> [Connection State Store]
 [Registration Manager] --> [Control Channel]
 [Heartbeat Manager] --> [Control Channel]
+[Heartbeat Manager] --> [Connection State Store]
+[Control Channel] --> [Connection State Store]
 [Event Router] --> [Realtime AV Session]
 [Event Router] --> [Server Event Consumers]
 [Realtime AV Session] --> [Audio Input Channel]
@@ -73,11 +77,12 @@ SDK 对外需要暴露的抽象能力：
 | Audio Input Channel | 连接 `/ws/stream/audio/input?device_id=...`，发送 `sensor.mic` StreamChunk。 |
 | Audio Output Channel | 连接 `/ws/stream/audio/output?device_id=...`，接收 `actuator.speaker` StreamChunk。 |
 | Visual Input Channel | 连接 `/ws/stream/visual/input?device_id=...`，在 server 请求后发送 `sensor.rgb` 单帧图片 StreamChunk。 |
+| Connection State Store | 维护 idle、connecting、registering、registered、disconnected、closed，并向 App 发布状态。 |
 | Event Router | 按事件名和 stream_type 分发 server 事件。 |
 | Registration Manager | 管理注册、注册失败、重连和心跳启动。 |
 | Realtime AV Session | 管理唤醒、音频会话、麦克风流、视觉单帧采集和 speaker 播放。 |
 | Server Event Consumers | 处理 `stream.control.*`、speaker 专用 `stream.output.*`、`downstream.*`、`custom.*` 并发送回执。 |
-| Heartbeat Manager | 注册成功后按 server 返回间隔发送心跳。 |
+| Heartbeat Manager | 注册成功后按 server 返回间隔发送心跳；发送失败时触发统一断连收口。 |
 
 ### 1.1 本地硬件绑定约定
 
@@ -200,16 +205,80 @@ FUNCTION connectAndRegister(profile):
 FUNCTION heartbeatLoop(interval_seconds):
   LOOP while state.registered and control is open:
     sleep(interval_seconds)
-    control.send(Event(
-      event_name = "control.device.heartbeat.received",
-      user_id = profile.user_id,
-      producer_id = profile.device_id,
-      payload = {
-        connection_state = "online",
-        client_type = profile.client_type
-      }
-    ))
+    TRY:
+      control.send(Event(
+        event_name = "control.device.heartbeat.received",
+        user_id = profile.user_id,
+        producer_id = profile.device_id,
+        payload = {
+          connection_state = "online",
+          client_type = profile.client_type
+        }
+      ))
+    CATCH error:
+      handleConnectionLost(reason = heartbeat_failed(error))
+      STOP heartbeat loop
 ```
+
+### 2.3 断连收口伪代码
+
+Device SDK 必须用本地错误触发断连收口，不能等待 server 下发事件。`control.device.state.changed` 是 server 侧观测事件，不是已断开端侧的可靠通知。
+
+```text
+TYPE DeviceConnectionState:
+  idle
+  connecting
+  registering
+  registered(connection_id)
+  disconnected(reason)
+  closed
+
+FUNCTION controlReceiveLoop():
+  LOOP while state.connection is registered:
+    TRY:
+      event = control.receive()
+      eventRouter.dispatch(event)
+    CATCH error:
+      handleConnectionLost(reason = control_receive_failed(error))
+      STOP receive loop
+
+FUNCTION streamReceiveLoop(channel):
+  failures = 0
+  LOOP while state.connection is registered:
+    TRY:
+      chunk = channel.receiveChunk()
+      failures = 0
+      streamRouter.dispatch(chunk)
+    CATCH error:
+      failures += 1
+      IF reconnectPolicy.allows(failures):
+        channel.reconnect()
+        CONTINUE
+      handleConnectionLost(reason = stream_receive_failed(channel.name, error))
+      STOP receive loop
+
+FUNCTION handleConnectionLost(reason):
+  IF state.connection is closed OR state.connection is disconnected:
+    RETURN
+
+  heartbeat.stop()
+  control.stopReceiveLoop()
+  audioInputChannel.closeLocal()
+  audioOutputChannel.closeLocal()
+  visualInputChannel.closeLocal()
+  realtime.stopMicUpload()
+  realtime.cancelPendingVisualCapture()
+  playback.cancelSink()
+  playback.clearBuffer()
+  playback.cancelStartFinishDrainTasks()
+
+  state.registered = false
+  state.connection_id = null
+  state.connection = disconnected(reason)
+  callbacks.onConnectionStateChange(state.connection)
+```
+
+重新连接必须重新执行 `connectAndRegister(profile)`。SDK 不复用旧 `connection_id`，也不复用旧 stream。
 
 ## 3. 开启实时对话
 
@@ -272,7 +341,7 @@ opt assistant audio output
 end
 
 Server -> SDK: control.audio_session.close.requested
-SDK -> App: waitPlaybackDrain()
+SDK -> SDK: cancel pending playback and clear playback buffer
 SDK -> Server: control.audio_session.closed
 @enduml
 ```
@@ -664,7 +733,8 @@ FUNCTION handleAudioSessionCloseRequested(event):
   micAdapter = adapters.input["sensor.mic"]
   micAdapter.close()
 
-  outputRegistry.waitAllPlaybackDrain()
+  visualRegistry.cancelPendingCaptures()
+  outputRegistry.cancelPendingPlayback()
   control.send(Event(
     event_name = "control.audio_session.closed",
     user_id = profile.user_id,
@@ -944,7 +1014,7 @@ STATE DialogOpen:
   on custom.command.requested:
     dispatch custom command callback
   on audio_session.close.requested:
-    close audio session and drain playback
+    close audio session and cancel pending playback
     move to DialogClosing
 
 STATE DialogClosing:
@@ -964,4 +1034,4 @@ STATE DialogClosing:
 5. 视觉单帧采集：收到 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)` 后，SDK 建立或复用视觉上行链路，回 `stream.input.opened`，上传一个 `final=true` 的 RGB chunk，然后回 `stream.input.closed`。
 6. 输出播放：收到标准 `stream.output.start.requested (actuator.speaker)` 后，SDK 在已建立的音频下行链路和 session 级 speaker runtime 上重置本轮逻辑 output stream 状态，并先回 `stream.output.ready`；server 收到该回执后才能下发音频 chunk。SDK 达到起播水位并开始写 speaker sink 时回 `stream.output.started`；收到 `stream.output.finish.requested` 后，等待本地 drain，再回 `stream.output.finished`。
 7. 自定义命令执行：收到 `custom.command.requested` 后，SDK 调用 App 通过 `on_custom_command(...)` 注册的回调；如需回报业务结果，handler 使用 `ctx.emit("custom.<domain>.<event>", payload)`。
-8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、等待播放 drain、回 `control.audio_session.closed`。
+8. 关闭会话：收到 `control.audio_session.close.requested` 后，SDK 结束本次音频会话、取消未完成播放和待播放 buffer、回 `control.audio_session.closed`。正常播放 drain 只属于 `stream.output.finish.requested/finished`。

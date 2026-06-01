@@ -19,12 +19,13 @@ enum DeviceDemoPhase: String {
 /// Device Demo 的失败阶段。
 ///
 /// 主要功能：记录失败发生在哪个用户可重试步骤，让 UI 能显示明确的重试按钮。
-enum DeviceDemoFailureStage {
+enum DeviceDemoFailureStage: Equatable {
     case launch
     case permission
     case registration
     case startConversation
     case closeConversation
+    case connectionDisconnected
 
     var retryTitle: String {
         switch self {
@@ -38,6 +39,8 @@ enum DeviceDemoFailureStage {
             return "开始失败\n重试"
         case .closeConversation:
             return "结束失败\n重试"
+        case .connectionDisconnected:
+            return "连接断开\n重连"
         }
     }
 }
@@ -272,6 +275,9 @@ final class DeviceDemoRuntime: ObservableObject {
             }
         case .closeConversation:
             await stopConversation()
+        case .connectionDisconnected:
+            client = nil
+            bootstrap()
         case .launch, .permission, .registration, .none:
             bootstrap()
         }
@@ -291,6 +297,9 @@ final class DeviceDemoRuntime: ObservableObject {
         client.onConversationStateChange { [weak self] state in
             await self?.handleConversationState(state)
         }
+        client.onConnectionStateChange { [weak self] state in
+            await self?.handleConnectionState(state)
+        }
         client.onCustomCommand("demo.ping") { [weak self] context in
             await self?.appendLog("custom command <- demo.ping")
             try await context.emit("custom.demo.pong", ["ok": true])
@@ -300,7 +309,52 @@ final class DeviceDemoRuntime: ObservableObject {
         }
     }
 
+    private func handleConnectionState(_ state: DeviceConnectionState) {
+        diagnostics = client?.diagnosticsSnapshot() ?? diagnostics
+        switch state {
+        case .registered:
+            failureStage = nil
+            if phase != .conversation, phase != .startingConversation, phase != .closing {
+                phase = .waiting
+            }
+            appendLog("sdk connection registered")
+        case let .disconnected(reason):
+            diagnosticsTask?.cancel()
+            diagnosticsTask = nil
+            cameraPreview.stop()
+            failureStage = .connectionDisconnected
+            phase = .failed
+            appendLog("sdk connection disconnected: \(describeDisconnectReason(reason))")
+        case .closed:
+            appendLog("sdk connection closed")
+        case .connecting:
+            appendLog("sdk connection connecting")
+        case .registering:
+            appendLog("sdk connection registering")
+        case .idle:
+            appendLog("sdk connection idle")
+        }
+    }
+
+    private func describeDisconnectReason(_ reason: DeviceDisconnectReason) -> String {
+        switch reason {
+        case let .heartbeatFailed(message):
+            return "heartbeat_failed \(message)"
+        case let .controlReceiveFailed(message):
+            return "control_receive_failed \(message)"
+        case let .streamReceiveFailed(message):
+            return "stream_receive_failed \(message)"
+        case let .serverClosed(message):
+            return "server_closed \(message)"
+        case .localClose:
+            return "local_close"
+        }
+    }
+
     private func handleConversationState(_ state: DeviceConversationState) {
+        if failureStage == .connectionDisconnected {
+            return
+        }
         switch state {
         case .waiting:
             cameraPreview.stop()

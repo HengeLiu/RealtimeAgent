@@ -84,6 +84,59 @@ end
 @enduml
 ```
 
+### 2.1 心跳、断连和重新注册
+
+心跳是设备和 server 之间的健康检查。设备注册成功后，server 在 `control.device.registered.payload.heartbeat_interval_seconds` 中返回心跳间隔；Device SDK 按该间隔发送 `control.device.heartbeat.received`。该事件表示“server 收到了设备心跳”，不表示 App 业务层的一次对话动作。
+
+断连分为端侧本地断连和 server 侧断连，两者不依赖同一个事件完成：
+
+- 端侧本地断连：Device SDK 在 heartbeat 发送失败、control WebSocket receive 失败、control WebSocket EOF、必要媒体 stream 超过重试上限等情况下自行判定。端侧不能等待 server 下发断连事件，因为网络断开时它通常收不到任何控制事件。
+- server 侧断连：server 在 control WebSocket 断开或 heartbeat 超时后判定。server 应记录 `control.device.state.changed`，用于 runs、debug API 和其他仍在线观察方；该事件不是通知已断开设备的可靠机制。
+
+端侧 SDK 判定断连后必须执行本地收口：
+
+1. 停止 heartbeat、control receive loop 和媒体 stream receive loop。
+2. 停止 `sensor.mic` 上传和未完成的 `sensor.rgb` 采集。
+3. cancel `actuator.speaker` sink，清空 SDK 播放 buffer，取消待完成的 start/finish/drain 任务。
+4. 清理本地 audio session、stream、output stream 临时状态。
+5. 标记 `registered=false`、control/stream 状态为 `disconnected`。
+6. 向 App 发布 SDK 本地连接状态，例如 `disconnected(reason)`。
+
+server 判定断连后必须执行 server 侧收口：
+
+1. 从 active registered devices 中移除该设备；它不再参与事件路由、设备选择或 output consumer 集合。
+2. 释放该设备关联的 control connection 和 stream connection。
+3. 如果该设备是当前用户的实时音频会话端点，关闭 Agent session、输出流和播放仲裁状态，记录 `audio_session.closed`，原因使用 `control_ws_disconnected` 或 `heartbeat_timeout`。
+4. 失败化该设备上未完成的远程命令、资产请求或等待端侧回执的任务。
+5. 保留必要的绑定关系和最近错误，供 debug API 和重新注册鉴权使用。
+
+重新注册必须走完整注册流程。设备不能复用旧 `connection_id`，也不能假设旧 stream 仍可用。同一 `device_id` 和同一 `user_id` 在断连后重新注册时，server 应允许注册并返回新的 `connection_id`；如果同一 `device_id` 换成其他 `user_id`，仍按绑定策略拒绝或走显式解绑流程。
+
+```plantuml
+@startuml
+participant "Device SDK" as SDK
+participant Server
+
+SDK -> Server: control.device.heartbeat.received
+... network failure ...
+alt SDK detects local failure first
+  SDK -> SDK: heartbeat/control/stream failure
+  SDK -> SDK: release mic, rgb, speaker, streams
+  SDK -> SDK: registered=false, state=disconnected(reason)
+  SDK -> "Device App": onConnectionStateChange(disconnected)
+else Server detects timeout first
+  Server -> Server: heartbeat timeout or control ws disconnected
+  Server -> Server: remove from active registered devices
+  Server -> Server: close agent session and pending outputs
+  Server -> Server: record control.device.state.changed
+end
+... user or app chooses reconnect ...
+SDK -> Server: open new /ws/control
+SDK -> Server: control.device.register.requested
+Server -> SDK: control.device.registered (new connection_id)
+@enduml
+```
+
 ## 3. 开启实时对话
 
 实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、按请求触发的单帧视觉上行、server 音频下行播放。
@@ -126,7 +179,7 @@ sdk.start()
 15. 播放期间麦克风仍持续上行；端侧不判断用户是否开始说话，也不判断是否构成打断。端侧只需要响应 server 下发的 `stream.output.cancel.requested`。
 16. device 收到 `stream.output.cancel.requested` 后立即停止本地 speaker 播放、丢弃 SDK 播放 buffer 中未播放的数据，并发送 `stream.output.cancelled`。
 17. 如果没有被打断，server 写完本轮回复音频后下发 `stream.output.finish.requested`；对 speaker 音频，finish payload 会尽量携带 `output_chunk_count`、`output_last_seq` 和 `output_bytes`，device 先确认最后一帧已经进入 SDK 播放 buffer，再等 buffer 和本地 sink drain 完成后发送 `stream.output.finished`。
-18. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和未完成的视觉采集，等待下行播放 drain 后，发送 `control.audio_session.closed`。
+18. 如果 server 请求关闭会话，会下发 `control.audio_session.close.requested`；device 停止麦克风和未完成的视觉采集，取消尚未完成的 speaker 输出和待播放 buffer，发送 `control.audio_session.closed`。音频会话关闭是会话级资源收口，不等同于某轮 speaker 输出的 `finish`；正常听完一轮回复仍由 `stream.output.finish.requested/finished` 表达。
 
 系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立音频上行链路并发送 `control.audio_session.opened`，再持续发二进制 chunk；server 应等待 `control.audio_session.opened` 后再按本轮会话处理麦克风音频。不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
 
@@ -188,7 +241,7 @@ opt assistant audio output
   end
 end
 Server -> Device: control.audio_session.close.requested
-Device -> Device: close audio session, drain playback
+Device -> Device: close audio session and cancel pending playback
 Device -> Server: control.audio_session.closed
 @enduml
 ```

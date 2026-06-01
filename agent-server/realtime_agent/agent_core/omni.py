@@ -1390,7 +1390,7 @@ class OmniRealtimeAgentCore:
         try:
             provider.open(user_id=user_id, session_id=session_id, callbacks=callbacks)
         except Exception as exc:
-            self._record_system_error(
+            self._mark_session_failed(
                 user_id=user_id,
                 session_id=session_id,
                 message=str(exc),
@@ -1425,7 +1425,12 @@ class OmniRealtimeAgentCore:
         self._closed_audio_streams_by_session.setdefault(chunk.session_id, set()).discard(chunk.stream_id)
         self._cache_replay_audio(chunk)
         self._record_input_audio_level(chunk)
-        self.open(chunk.user_id, chunk.session_id)
+        try:
+            self.open(chunk.user_id, chunk.session_id)
+        except Exception:
+            return
+        if chunk.session_id in self._failed_sessions or chunk.user_id not in self._sessions:
+            return
         _session_id, provider = self._sessions[chunk.user_id]
         has_payload = bool(chunk.payload)
         if has_payload:

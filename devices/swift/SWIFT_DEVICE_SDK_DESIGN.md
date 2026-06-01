@@ -7,6 +7,7 @@
 Swift Device SDK 面向所有 iOS 开发者，负责把设备接入 realtime-agent 的通用能力封装起来：
 
 - 设备注册、心跳和控制通道。
+- 连接状态机、断连检测、断连资源收口和重新注册入口。
 - 显式硬件权限申请和硬件 adapter 绑定。
 - 麦克风、speaker、RGB 单帧输入的标准协议状态机。
 - 音频上行、音频下行、视觉上行三条媒体 WebSocket。
@@ -33,6 +34,8 @@ iOS App 不需要处理协议细节。App 负责：
 7. 端侧不做 VAD 语义裁决。端侧可提供可选本地 gate，但真正对话打断仍应优先由 server/provider 决策，再下发 `stream.output.cancel.requested`。
 8. cancel 优先级最高，必须能抢占 start、playing、finish/drain 任意阶段。
 9. 音频 callback 内只做轻量复制或写 ring buffer，不做网络请求、文件写入和复杂日志格式化。
+10. control WebSocket、heartbeat 或媒体 stream 任一主链路确认断连后，SDK 必须先完成本地资源收口，再把断连状态暴露给 App；App 只决定手动重连、后台重试或展示错误。
+11. 断连不能依赖 server 下发事件，因为网络断开时端侧通常收不到任何控制事件。server 的 `control.device.state.changed` 只用于 server 侧观测、runs 产物和其他仍在线观察方。
 
 ## 3. App 侧目标使用形态
 
@@ -65,6 +68,10 @@ client.onEvent("custom.navigation.route.updated") { event in
 try await client.requestPermissions()
 try await client.register()
 
+client.onConnectionStateChange { state in
+    // App 可选择展示“连接断开，点击重连”，也可以按策略后台重试。
+}
+
 // App 可在注册和授权成功后点亮“开始通话”按钮。
 try await client.startConversation()
 
@@ -81,7 +88,8 @@ App 启动后的推荐阶段：
 5. App 点击“开始通话”后调用 `startConversation()`。
 6. SDK 准备硬件资源，向 server 发送唤醒事件，并按 server 请求打开音频会话。
 7. 对话过程中 SDK 维护 mic、speaker、rgb、control 事件。
-8. 结束对话时，server 下发 `control.audio_session.close.requested`；端侧停止输入、drain 或 cancel 输出、回 `control.audio_session.closed`。
+8. 结束对话时，server 下发 `control.audio_session.close.requested`；端侧停止输入、取消未完成输出和待播放资源、回 `control.audio_session.closed`。正常播完一轮回复仍由 `stream.output.finish.requested/finished` 表达。
+9. 任一控制或媒体主链路断连时，SDK 停止心跳、录音、视觉采集和 speaker 播放，清空待播放资源，标记本地 `registered=false`，通知 App 进入断连态；App 可以调用 SDK 重新注册。
 
 ## 4. 生命周期状态机
 
@@ -95,6 +103,7 @@ PermissionsReady --> Registering : register()
 Registering --> Registered : control.device.registered
 Registering --> RegisterFailed : control.device.register.failed
 Registered --> Waiting : heartbeat started
+Registered --> Disconnected : heartbeat/control failed
 Waiting --> ConversationStarting : startConversation()
 ConversationStarting --> WaitingForAudioSession : control.user.wake.detected sent
 WaitingForAudioSession --> AudioSessionOpening : audio_session.open.requested
@@ -103,12 +112,49 @@ Conversing --> CloseRequestedByApp : requestConversationClose()
 CloseRequestedByApp --> Conversing : control.user.dialog.close.requested sent
 Conversing --> AudioSessionClosing : audio_session.close.requested
 AudioSessionClosing --> Waiting : audio_session.closed
+Waiting --> Disconnected : heartbeat/control failed
+Conversing --> Disconnected : heartbeat/control/stream failed
+AudioSessionClosing --> Disconnected : heartbeat/control failed
+Disconnected --> Registering : register() or reconnect()
 Waiting --> Closed : close()
 Conversing --> Closed : close(force=true)
 @enduml
 ```
 
 `requestConversationClose()` 不直接关闭本地资源。SDK 先发送 `control.user.dialog.close.requested`，server 接受后再下发 `control.audio_session.close.requested`，端侧按标准链路关闭并回执。这样可以保持 server 对会话生命周期的最终仲裁。
+
+`Disconnected` 是 SDK 本地状态，不要求也不等待 server 下发事件。进入该状态时，SDK 必须完成以下动作：
+
+1. 停止 heartbeat、control receive loop、stream receive loop。
+2. 停止麦克风上传和未完成的视觉采集。
+3. cancel speaker sink、清空 SDK playback buffer、取消 start/finish/drain 任务。
+4. 清理本地 stream/session 临时状态，`registered=false`，`controlState=disconnected`，`streamState=disconnected`。
+5. 向 App 发出连接状态回调，并把对话状态收敛为等待或断连展示态。
+
+断连后 App 不直接重用旧 `connection_id`。重新连接必须重新打开 control WebSocket、重新发送 `control.device.register.requested`，以 server 返回的新 `connection_id` 为准。
+
+建议 SDK 暴露独立连接状态：
+
+```swift
+public enum DeviceConnectionState: Sendable, Equatable {
+    case idle
+    case connecting
+    case registering
+    case registered
+    case disconnected(DeviceDisconnectReason)
+    case closed
+}
+
+public enum DeviceDisconnectReason: Sendable, Equatable {
+    case heartbeatFailed(String)
+    case controlReceiveFailed(String)
+    case streamReceiveFailed(String)
+    case serverClosed(String)
+    case localClose
+}
+```
+
+App 通过 `onConnectionStateChange` 消费连接状态。Demo App 推荐手动重连：断连后按钮显示 `连接断开\n重连`，点击后重新执行权限检查和注册；正式 App 可以选择后台自动重试。
 
 建议端侧请求结束事件：
 
@@ -178,7 +224,8 @@ devices/swift/
 | --- | --- | --- |
 | `DeviceClient` | SDK 门面 API，组合注册、会话、媒体、事件语法糖 | 直接处理 WebSocket 字节或 AVAudioEngine 细节 |
 | `RegistrationManager` | 生成 profile、发送注册、处理 registered/failed | 硬件权限和媒体连接 |
-| `HeartbeatManager` | 注册成功后周期发送心跳 | 重连策略 |
+| `ConnectionStateStore` | 维护 idle/connecting/registering/registered/disconnected/closed，向 App 发布状态 | App 重连 UI 策略 |
+| `HeartbeatManager` | 注册成功后周期发送心跳，发送失败时上报断连 | App 是否后台重试 |
 | `ControlChannel` | `/ws/control` JSON 事件收发 | 标准事件业务语义 |
 | `StreamChannel` | audio input/output/visual input 二进制 chunk 收发 | 播放水位线和音频格式转换 |
 | `EventRouter` | 按标准事件或 `custom.*` 分发 | App UI 行为 |
@@ -192,6 +239,19 @@ devices/swift/
 | `InterruptionSignalProvider` | 可选提供本地/远端打断候选信号 | 直接清理播放资源 |
 | `InterruptDecisionGate` | warmup、RMS、去重等过滤策略 | 网络请求和播放器操作 |
 | `PlaybackInterruptionCoordinator` | 可信打断后协调 speaker cancel 和协议回执 | 音频格式转换 |
+
+### 6.1 断连收口职责
+
+所有断连入口必须收敛到同一个 SDK 内部方法，例如 `handleConnectionLost(reason:)`。禁止 heartbeat、control receive loop、stream receive loop 各自只写诊断状态后退出。
+
+断连入口包括：
+
+- heartbeat 发送失败或连续失败达到阈值。
+- control WebSocket receive 抛错、EOF 或被 server 关闭。
+- 必要媒体 stream 在对话中确认不可恢复。
+- App 调用 `close(force:)`；该路径进入 `closed`，不是 `disconnected`。
+
+对话中的 stream 短抖可以先按 `ReconnectPolicy` 重试；一旦超过最大重试次数或 control 已断开，就必须进入统一断连收口。收口完成后，SDK 不再发送旧会话的 `stream.output.finished`、`control.audio_session.closed` 等回执，因为旧 control 连接已不可用；server 侧会通过心跳超时或 control ws 断开完成自己的清理。
 
 ## 7. 设备注册和权限
 
@@ -525,7 +585,7 @@ server 主动结束：
 Server -> SDK: control.audio_session.close.requested
 SDK: stop mic capture
 SDK: stop pending rgb capture
-SDK: finish/drain or cancel speaker according to close policy
+SDK: cancel pending speaker output and clear playback buffer
 SDK -> Server: control.audio_session.closed
 ```
 
@@ -619,6 +679,9 @@ public struct AudioInteractionDiagnostics: Sendable {
 - 注册 payload 不包含旧 `routes/capabilities`。
 - `onEvent` 只接受 `custom.*`。
 - `control.user.dialog.close.requested` 构造正确。
+- heartbeat 发送失败后进入 disconnected，停止录音和 speaker，并允许重新 register。
+- control receive loop 断开后进入 disconnected，`registered=false`。
+- disconnected 后重新 register 必须使用新的 control 连接和 server 返回的新 `connection_id`。
 - `stream.output.start.requested` 后必须先发送 `stream.output.ready`。
 - `stream.output.finish.requested` 等待 `output_last_seq`。
 - finish 等待中收到 cancel，必须发送 `stream.output.cancelled`，不发送 `stream.output.finished`。
@@ -634,7 +697,7 @@ public struct AudioInteractionDiagnostics: Sendable {
 - mic chunk 只走 audio input channel。
 - speaker chunk 只走 audio output channel。
 - RGB 只在请求时走 visual input channel，且 final=true。
-- stream receive loop 断线后按策略重连。
+- stream receive loop 断线后按策略重连；超过重试上限后进入统一 disconnected 收口。
 
 ### 16.3 真机验证
 
@@ -660,15 +723,16 @@ public struct AudioInteractionDiagnostics: Sendable {
 
 1. 搭建 Swift Package 和基础事件 / transport / profile 类型。
 2. 实现注册、权限、心跳、custom 事件语法糖。
-3. 实现 `control.user.wake.detected` 和 `control.user.dialog.close.requested`。
-4. 实现 audio session open/close 状态机。
-5. 实现 mic capture + input voice processing + audio input stream。
-6. 实现 speaker start/finish/cancel 状态机，先只响应 server 下发的 cancel，不接入端侧本地 VAD 打断判断。
-7. 实现 `SpeakerPlaybackBuffer` 和 `AVFoundationSpeakerRenderer`。
-8. 实现 RGB 单帧请求链路。
-9. 实现 diagnostics 和 debug log。
-10. 可选接入 E4 `InterruptionSignalProvider + InterruptDecisionGate` 作为本地诊断，默认不触发 cancel。
-11. 跑 Swift 单元测试、模拟 transport 集成测试，再做真机 E4 口径验证。
+3. 实现连接状态机、断连统一收口和重新注册入口。
+4. 实现 `control.user.wake.detected` 和 `control.user.dialog.close.requested`。
+5. 实现 audio session open/close 状态机。
+6. 实现 mic capture + input voice processing + audio input stream。
+7. 实现 speaker start/finish/cancel 状态机，先只响应 server 下发的 cancel，不接入端侧本地 VAD 打断判断。
+8. 实现 `SpeakerPlaybackBuffer` 和 `AVFoundationSpeakerRenderer`。
+9. 实现 RGB 单帧请求链路。
+10. 实现 diagnostics 和 debug log。
+11. 可选接入 E4 `InterruptionSignalProvider + InterruptDecisionGate` 作为本地诊断，默认不触发 cancel。
+12. 跑 Swift 单元测试、模拟 transport 集成测试，再做真机 E4 口径验证。
 
 ## 18. 需要同步 server / 协议的事项
 
@@ -678,6 +742,7 @@ public struct AudioInteractionDiagnostics: Sendable {
 - speaker 正常结束端侧回 `stream.output.finished`，不再把 `stream.output.closed` 作为 speaker 主成功回执。
 - 保留 `stream.output.cancel.requested/cancelled`。
 - 确认 `control.user.dialog.close.requested` 被 server 接收后，server 下发 `control.audio_session.close.requested`。
+- control WebSocket 断开或心跳超时时，server 必须从 active registered devices 中移除该设备，释放关联音频会话、输出流、未完成命令和资产请求；同一设备同一 user 后续重新注册应创建新的 `connection_id`。
 - 在 server 打断仲裁中接入 E4 迁移逻辑：provider `speech_started` 先进入 warmup/RMS/输出状态检查，通过后才调用 output interrupt 并下发 `stream.output.cancel.requested`。
 - server 需要记录端侧 `stream.output.started` 时间、当前 output stream、mic chunk RMS/peak、provider event 的 `audio_ms` 或 fallback chunk index，用于解释 accepted/rejected interrupt。
 - 协议 schema、`EventName`、协议状态测试、文档需要同步。

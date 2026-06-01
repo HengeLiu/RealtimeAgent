@@ -219,10 +219,10 @@ def test_control_service_public_publish_does_not_accept_target_device_id() -> No
 
 
 def test_heartbeat_and_disconnect_update_debug_snapshot() -> None:
-    """测试目标：验证真实控制连接的心跳和断线状态会反映到 debug snapshot。
+    """测试目标：验证真实控制连接的心跳和断线状态会从 active 列表移除。
 
     测试方法：注册设备后发送 `control.device.heartbeat.received`，再标记连接断开。
-    预期结果：snapshot 包含 connection_id、last_seen_at，并在断开后显示 offline。
+    预期结果：在线 snapshot 包含 connection_id；断开后 active 设备列表为空，单设备 debug 保留 offline 原因。
     """
     service = ControlService()
     connection = FakeConnection("dev-001")
@@ -238,10 +238,11 @@ def test_heartbeat_and_disconnect_update_debug_snapshot() -> None:
     )
     online_snapshot = service.build_devices_snapshot()["devices"][0]
     service.mark_connection_offline("dev-001", connection_id=registered.payload["connection_id"], reason="test")
-    offline_snapshot = service.build_devices_snapshot()["devices"][0]
+    offline_snapshot = service.build_device_snapshot("dev-001")
 
     assert online_snapshot["connection_id"] == registered.payload["connection_id"]
     assert online_snapshot["last_seen_at"] > 0
+    assert service.build_devices_snapshot()["devices"] == []
     assert offline_snapshot["connection_state"] == "offline"
 
 
@@ -427,10 +428,10 @@ def test_signed_token_reports_missing_secret_reason() -> None:
 
 
 def test_heartbeat_timeout_marks_device_offline_and_records_recent_error() -> None:
-    """测试目标：验证 active device set 中的心跳超时会标记设备离线。
+    """测试目标：验证 active device set 中的心跳超时会移除活跃设备并保留 debug 原因。
 
     测试方法：注册设备后把 now 推进超过 timeout，再调用 `expire_stale_devices()`。
-    预期结果：设备从 active set 移除，debug snapshot 中有 `heartbeat_timeout` 最近错误。
+    预期结果：设备从 active set 和 active debug 列表移除，单设备 debug snapshot 中有 `heartbeat_timeout` 最近错误。
     """
 
     service = ControlService()
@@ -441,4 +442,5 @@ def test_heartbeat_timeout_marks_device_offline_and_records_recent_error() -> No
 
     assert expired == ("dev-timeout",)
     assert service.get_active_device_set("user-001").devices == ()
+    assert service.build_devices_snapshot()["devices"] == []
     assert service.build_device_snapshot("dev-timeout")["last_error"]["code"] == "heartbeat_timeout"

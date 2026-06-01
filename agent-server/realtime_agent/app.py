@@ -635,10 +635,16 @@ class RealtimeAgentApp:
         异常情况：无。
         """
 
-        self.control_service.mark_connection_offline(device_id, connection_id=connection_id, reason=reason)
+        snapshot = self.control_service.mark_connection_offline(device_id, connection_id=connection_id, reason=reason)
         broker = getattr(self, "_command_result_broker", None)
         if broker is not None:
             broker.fail_device_commands(device_id=device_id, reason=reason)
+        if snapshot is None:
+            return
+        if self._active_device_by_user.get(snapshot.user_id) != device_id:
+            return
+        self.output_service.interrupt_user(snapshot.user_id, session_id=device_id, reason=reason)
+        self._finalize_audio_session(snapshot.user_id, reason=reason)
 
     def publish_control_event(self, event: Event) -> None:
         if event.event_name == "control.user.wake.detected":
@@ -648,8 +654,8 @@ class RealtimeAgentApp:
             self.control_service.record_heartbeat(event)
             return
         if event.event_name == "stream.input.opened":
-            self._register_endpoint_input_stream(event)
-            if not event.payload.get("request_id"):
+            registered = self._register_endpoint_input_stream(event)
+            if registered and not event.payload.get("request_id"):
                 self.control_service.publish(event)
             return
         if event.event_name == "stream.input.closed":
@@ -705,7 +711,9 @@ class RealtimeAgentApp:
             return
         if event.event_name == "control.audio_session.opened":
             if event.stream_id and event.stream_type:
-                self._register_endpoint_input_stream(event)
+                registered = self._register_endpoint_input_stream(event)
+                if not registered:
+                    return
             self.control_service.publish(event)
             device_id = self._event_device_id(event)
             self._mark_audio_session_opened(event.user_id, device_id)
@@ -1005,11 +1013,55 @@ class RealtimeAgentApp:
         没有 `open()` 时跳过。
         参数：`user_id` 为用户标识，`session_id` 为当前音频会话。
         返回值：无。
-        异常情况：provider 打开失败时异常继续抛出，便于联调时 fail fast。
+        异常情况：provider 打开失败时记录失败并请求端侧关闭当前音频会话，避免
+        控制 WebSocket 和 mic chunk 对同一次建连失败持续刷屏。
         """
         if not session_id or not hasattr(self.agent_core, "open"):
             return
-        self.agent_core.open(user_id, session_id)
+        try:
+            self.agent_core.open(user_id, session_id)
+        except Exception as exc:  # noqa: BLE001 - provider 建连失败要收敛成会话关闭动作
+            self._handle_agent_session_open_failed(user_id, session_id, exc)
+
+    def _handle_agent_session_open_failed(self, user_id: str, session_id: str, exc: Exception) -> None:
+        """把 provider 建连失败收敛为一次会话关闭请求。
+
+        主要逻辑：启动阶段可能由 `control.audio_session.opened`、`stream.input.opened`
+        和首个 mic chunk 同时触发 provider open。这里用设备会话状态做幂等保护，只
+        记录一次失败并只下发一次 close.requested。
+        参数：`user_id/session_id` 定位设备会话；`exc` 为 provider 打开异常。
+        返回值：无。
+        异常情况：无。
+        """
+
+        state = self._device_dialogs_by_user.setdefault(
+            user_id,
+            DeviceDialogState(user_id=user_id, device_id=session_id),
+        )
+        if state.state == "failed" and state.close_reason == "agent_session_open_failed":
+            return
+        state.state = "failed"
+        state.close_reason = "agent_session_open_failed"
+        state.close_pending = True
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "pipeline.session_open.failed",
+                "user_id": user_id,
+                "session_id": session_id,
+                "error_type": type(exc).__name__,
+                "error_message": str(exc),
+            },
+        )
+        self.control_service.publish(
+            Event(
+                event_name="control.audio_session.close.requested",
+                user_id=user_id,
+                producer_id=SERVER_PRODUCER_ID,
+                session_id=session_id,
+                payload={"reason": "agent_session_open_failed", "close_mode": "close_now"},
+            )
+        )
 
     def _close_agent_session(self, user_id: str, *, reason: str) -> None:
         """关闭当前 Agent Core 的会话。
@@ -1062,12 +1114,12 @@ class RealtimeAgentApp:
             return event.producer_id
         raise ValueError("event requires device_id via producer_id")
 
-    def _register_endpoint_input_stream(self, event: Event) -> None:
+    def _register_endpoint_input_stream(self, event: Event) -> bool:
         device_id = self._event_device_id(event)
         if not event.stream_id or not event.stream_type:
             raise ValueError("stream.input.opened requires stream_id and stream_type")
         if self.stream_service.registry.has(event.stream_id):
-            return
+            return True
         raw_format = dict(event.payload.get("format") or {})
         consumer_device_ids = () if event.payload.get("request_id") else None
         handle = self.stream_service.open_stream(
@@ -1085,11 +1137,16 @@ class RealtimeAgentApp:
             DeviceDialogState(user_id=event.user_id, device_id=handle.session_id, state="opened"),
         ).touch()
         if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_opened"):
-            self.agent_core.on_audio_input_opened(
-                user_id=handle.user_id,
-                session_id=handle.session_id,
-                stream_id=handle.stream_id,
-            )
+            try:
+                self.agent_core.on_audio_input_opened(
+                    user_id=handle.user_id,
+                    session_id=handle.session_id,
+                    stream_id=handle.stream_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - provider 建连失败在会话层收敛
+                self._handle_agent_session_open_failed(handle.user_id, handle.session_id, exc)
+                return False
+        return True
 
     def _register_endpoint_input_stream_from_chunk(self, chunk: StreamChunk) -> None:
         """根据先到达的上行 chunk 补注册输入 stream。
@@ -1136,11 +1193,14 @@ class RealtimeAgentApp:
             },
         )
         if handle.stream_type == "sensor.mic" and hasattr(self.agent_core, "on_audio_input_opened"):
-            self.agent_core.on_audio_input_opened(
-                user_id=handle.user_id,
-                session_id=handle.session_id,
-                stream_id=handle.stream_id,
-            )
+            try:
+                self.agent_core.on_audio_input_opened(
+                    user_id=handle.user_id,
+                    session_id=handle.session_id,
+                    stream_id=handle.stream_id,
+                )
+            except Exception as exc:  # noqa: BLE001 - provider 建连失败在会话层收敛
+                self._handle_agent_session_open_failed(handle.user_id, handle.session_id, exc)
 
     def _mark_endpoint_input_closed(self, event: Event) -> None:
         if not event.stream_id:
@@ -1385,13 +1445,20 @@ class RealtimeAgentApp:
             now=current,
             timeout_seconds=self.config.control_heartbeat_timeout_seconds,
         )
+        closed_sessions: list[str] = []
         broker = getattr(self, "_command_result_broker", None)
         if broker is not None:
             for device_id in expired_devices:
                 broker.fail_device_commands(device_id=device_id, reason="heartbeat_timeout")
+        for device_id in expired_devices:
+            for user_id, active_device_id in list(self._active_device_by_user.items()):
+                if active_device_id != device_id:
+                    continue
+                self.output_service.interrupt_user(user_id, session_id=device_id, reason="heartbeat_timeout")
+                self._finalize_audio_session(user_id, reason="heartbeat_timeout")
+                closed_sessions.append(device_id)
         closed_streams = self.stream_service.close_idle_streams(now=current)
         output_ack_timeouts = self.output_service.sweep_endpoint_ack_timeouts(now=current)
-        closed_sessions: list[str] = []
         if self.config.audio_session_idle_timeout_seconds > 0:
             for user_id, state in list(self._device_dialogs_by_user.items()):
                 if state.close_pending or state.state != "opened":

@@ -13,6 +13,8 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
     var streamInbox: [Data] = []
     var streamInboxByChannel: [RealtimeAgentStreamChannel: [Data]] = [:]
     var streamReceiveResults: [Result<Data, Error>] = []
+    var controlSendResults: [Result<Void, Error>] = []
+    var waitWhenControlInboxEmpty = false
     var streamConnectCount = 0
 
     func connectControl(url: URL) async throws {
@@ -26,10 +28,18 @@ final class MockRealtimeAgentTransport: RealtimeAgentWebSocketTransport, @unchec
     }
 
     func sendControl(text: String) async throws {
+        if !controlSendResults.isEmpty {
+            try controlSendResults.removeFirst().get()
+        }
         sentControlTexts.append(text)
     }
 
     func receiveControl() async throws -> String {
+        if waitWhenControlInboxEmpty, controlInbox.isEmpty {
+            while controlInbox.isEmpty {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+        }
         guard !controlInbox.isEmpty else {
             throw RealtimeAgentDeviceError.transportClosed("empty control inbox")
         }
@@ -83,6 +93,18 @@ actor ConversationStateRecorder {
     }
 
     func snapshot() -> [DeviceConversationState] {
+        states
+    }
+}
+
+actor ConnectionStateRecorder {
+    private var states: [DeviceConnectionState] = []
+
+    func append(_ state: DeviceConnectionState) {
+        states.append(state)
+    }
+
+    func snapshot() -> [DeviceConnectionState] {
         states
     }
 }
@@ -307,6 +329,92 @@ func waitForSentEvent(
     #expect(properties?["realtime_agent.custom_command_consumer"] as? Bool == true)
     #expect(properties?["realtime_agent.custom_commands"] as? [String] == ["haptic.vibrate"])
     #expect(properties?["realtime_agent.custom_event_subscriptions"] as? [String] == ["custom.navigation.route.updated"])
+}
+
+@Test func heartbeatFailureDisconnectsAndAllowsReregister() async throws {
+    // 测试目标：验证 heartbeat 发送失败后 SDK 进入断连态并允许重新注册。
+    // 测试方法：注册成功后让第一轮 heartbeat 发送抛错，再补充下一次注册成功事件重新调用 register。
+    // 预期结果：SDK 发布 disconnected 状态、registered=false；再次 register 使用新的 control 连接并恢复 registered。
+    let transport = MockRealtimeAgentTransport()
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 0.01]
+        ),
+    ]
+    transport.controlSendResults = [
+        .success(()),
+        .failure(RealtimeAgentDeviceError.transportClosed("heartbeat write failed")),
+    ]
+    let recorder = ConnectionStateRecorder()
+    let client = makeClient(transport: transport)
+    client.onConnectionStateChange { state in
+        await recorder.append(state)
+    }
+
+    _ = try await client.register()
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    let disconnectedDiagnostics = client.diagnosticsSnapshot()
+    #expect(!disconnectedDiagnostics.registered)
+    #expect(disconnectedDiagnostics.controlState == "disconnected")
+    let states = await recorder.snapshot()
+    #expect(states.contains { state in
+        if case .disconnected(.heartbeatFailed) = state {
+            return true
+        }
+        return false
+    })
+
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-002", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    transport.controlSendResults = [.success(())]
+    _ = try await client.register(startHeartbeat: false)
+
+    #expect(client.diagnosticsSnapshot().registered)
+    #expect(client.diagnosticsSnapshot().controlState == "registered")
+    let sentNames = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0).eventName }
+    #expect(sentNames.filter { $0 == "control.device.register.requested" }.count == 2)
+}
+
+@Test func controlReceiveFailureReleasesConversationResources() async throws {
+    // 测试目标：验证 control 接收循环断开后由 SDK 统一释放会话资源并通知 App。
+    // 测试方法：注册并启动 control receive loop，mock control inbox 为空使 receive 抛错。
+    // 预期结果：SDK 进入 disconnected，清除注册状态，并把对话状态回调到 waiting。
+    let transport = MockRealtimeAgentTransport()
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    let connectionRecorder = ConnectionStateRecorder()
+    let conversationRecorder = ConversationStateRecorder()
+    let client = makeClient(transport: transport)
+    client.onConnectionStateChange { state in
+        await connectionRecorder.append(state)
+    }
+    client.onConversationStateChange { state in
+        await conversationRecorder.append(state)
+    }
+
+    try await client.connectAndRegister(startHeartbeat: false)
+    try await Task.sleep(nanoseconds: 80_000_000)
+
+    #expect(!client.diagnosticsSnapshot().registered)
+    #expect(client.diagnosticsSnapshot().controlState == "disconnected")
+    let connectionStates = await connectionRecorder.snapshot()
+    #expect(connectionStates.contains { state in
+        if case .disconnected(.controlReceiveFailed) = state {
+            return true
+        }
+        return false
+    })
+    #expect(await conversationRecorder.snapshot().contains(.waiting))
 }
 
 @Test func startConversationRegistersPreparesStreamsAndSendsWake() async throws {
@@ -747,6 +855,7 @@ struct DelayedMicrophoneSource: RealtimeAgentMicrophoneSource {
             payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
         ),
     ]
+    transport.waitWhenControlInboxEmpty = true
     let sink = RecordingSpeakerSink()
     let recorder = LogRecorder()
     let client = makeClient(
