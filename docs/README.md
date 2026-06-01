@@ -38,7 +38,7 @@
 
 ### Community
 
-- [贡献指南](community/contributing.md)
+- [贡献指南](../CONTRIBUTING.md)
 
 ## 内部设计文档
 

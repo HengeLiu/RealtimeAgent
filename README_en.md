@@ -285,7 +285,9 @@ These artifacts are part of the project model: a realtime Agent should not only 
 
 ## Contributing
 
-Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the repository development notes in [AGENTS.md](AGENTS.md).
+Contributions are welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Developers are also welcome to try an AI Coding workflow for this project. [AGENTS.md](AGENTS.md) is the repository development guide for AI coding agents; it records project boundaries, protocol rules, testing expectations, and documentation conventions. When using AI-generated changes, please review code quality, architecture boundaries, protocol compatibility, test coverage, and documentation consistency before treating the work as accepted.
 
 Before submitting changes, run the narrowest relevant tests for your change. For Device Demo and Swift Device SDK entrypoint changes, the following contract test is a lightweight smoke test:
 

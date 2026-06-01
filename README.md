@@ -93,7 +93,6 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```bash
    uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
    ```
-
 2. 打开浏览器眼镜模拟组件：
 
    ```bash
@@ -101,7 +100,6 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```
 
    浏览器组件会作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
-
 3. 可选打开 Swift 真机 demo：
 
    ```bash
@@ -109,7 +107,6 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```
 
    真机运行时，在 iOS App 调试面板里把 server 地址改成 Mac 在同一局域网下可访问的地址，例如 `http://192.168.x.x:8765`。
-
 4. 观察设备、播放和运行产物：
 
    ```bash
@@ -285,9 +282,11 @@ examples/device_demo/agent-server/runs
 
 ## 贡献
 
-欢迎贡献。先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 和仓库开发说明 [AGENTS.md](AGENTS.md)。
+欢迎贡献。先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-提交变更前，运行和改动范围最相关的测试。对于 Device Demo 和 Swift Device SDK 入口改动，下面的契约测试可以作为一个轻量 smoke test：
+也欢迎开发者尝试 AI Coding 范式来参与本项目。[AGENTS.md](AGENTS.md) 是给 AI 编程代理使用的仓库开发说明，记录了项目边界、协议规则、测试要求和文档约定。使用 AI 生成或修改代码后，请开发者重点审查代码质量、架构边界、协议兼容性、测试覆盖和文档一致性，不要把 AI 产出的代码直接视为已经完成审查。
+
+本项目将持续完善自动测试和审查能力，提交变更前，运行和改动范围最相关的测试。对于 Device Demo 和 Swift Device SDK 入口改动，下面的契约测试可以作为一个轻量 smoke test：
 
 ```bash
 uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
