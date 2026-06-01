@@ -99,6 +99,14 @@ final class DeviceDemoRuntime: ObservableObject {
         phase == .waiting || phase == .failed
     }
 
+    /// 调试面板中的停止按钮是否可用。
+    ///
+    /// 主要逻辑：只有真正处于对话启动中或对话中时允许发起停止，避免等待态重复点击
+    /// 把页面推进到“结束中”。
+    var isStopConversationEnabled: Bool {
+        phase == .startingConversation || phase == .conversation
+    }
+
     init() {
         serverURL = UserDefaults.standard.string(forKey: Self.serverURLKey) ?? Self.defaultServerURL
         let documentsURL = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first
@@ -169,6 +177,10 @@ final class DeviceDemoRuntime: ObservableObject {
     /// server 后续下发标准 close 事件时，SDK 继续负责资源清理。
     func stopConversation() async {
         appendLog("stop conversation")
+        guard isStopConversationEnabled else {
+            appendLog("stop ignored phase=\(phase.rawValue)")
+            return
+        }
         guard let client else {
             cameraPreview.stop()
             phase = .waiting

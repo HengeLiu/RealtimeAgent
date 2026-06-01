@@ -445,16 +445,51 @@ func waitForSentEvent(
 
 @Test func requestConversationCloseSendsAppCloseIntent() async throws {
     // 测试目标：确认 App 主动结束对话时走 SDK 新增的请求结束事件。
-    // 测试方法：直接调用 requestConversationClose 并检查发送的 control 事件。
+    // 测试方法：先启动对话并接收 audio session open，再调用 requestConversationClose。
     // 预期结果：SDK 发送 control.user.dialog.close.requested，不直接伪造 server close 事件。
     let transport = MockRealtimeAgentTransport()
-    let client = makeClient(transport: transport)
+    transport.controlInbox = [
+        try eventJSON(
+            "control.device.registered",
+            payload: ["device_id": "dev-ios-001", "connection_id": "conn-001", "heartbeat_interval_seconds": 60]
+        ),
+    ]
+    let client = makeClient(
+        transport: transport,
+        audioInput: .enabled(source: ArrayMicrophoneSource(chunks: []))
+    )
+
+    try await client.startConversation(reason: "unit_start")
+    #expect(try await client.dispatchEvent(RealtimeAgentEvent(
+        eventName: "control.audio_session.open.requested",
+        userID: "user-001",
+        producerID: "server-main",
+        payload: [:],
+        sessionID: "session-001"
+    )))
 
     try await client.requestConversationClose(reason: "unit_test")
 
-    let sent = try RealtimeAgentEvent(jsonString: transport.sentControlTexts[0])
-    #expect(sent.eventName == "control.user.dialog.close.requested")
-    #expect(sent.payload["reason"] as? String == "unit_test")
+    let sent = try transport.sentControlTexts.map { try RealtimeAgentEvent(jsonString: $0) }.last
+    #expect(sent?.eventName == "control.user.dialog.close.requested")
+    #expect(sent?.payload["reason"] as? String == "unit_test")
+}
+
+@Test func requestConversationCloseIsNoopWhenAlreadyWaiting() async throws {
+    // 测试目标：确认已结束后的重复停止不会让 App 卡在 closing。
+    // 测试方法：在 waiting 状态直接调用 requestConversationClose。
+    // 预期结果：SDK 不发送 close intent，并回调 waiting 状态。
+    let transport = MockRealtimeAgentTransport()
+    let recorder = ConversationStateRecorder()
+    let client = makeClient(transport: transport)
+    client.onConversationStateChange { state in
+        await recorder.append(state)
+    }
+
+    try await client.requestConversationClose(reason: "unit_duplicate_close")
+
+    #expect(transport.sentControlTexts.isEmpty)
+    #expect(await recorder.snapshot() == [.waiting])
 }
 
 @Test func conversationStateCallbackFollowsAudioSessionLifecycle() async throws {

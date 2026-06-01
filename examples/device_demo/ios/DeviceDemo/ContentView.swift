@@ -192,6 +192,7 @@ private struct DebugSheet: View {
                     Button("停止对话", role: .destructive) {
                         Task { await runtime.stopConversation() }
                     }
+                    .disabled(!runtime.isStopConversationEnabled)
                 }
 
                 Section("日志") {

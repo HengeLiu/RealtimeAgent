@@ -98,6 +98,7 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var conversationStateHandler: ConversationStateHandler?
     private var connectionStateHandler: ConnectionStateHandler?
     private var connectionState: DeviceConnectionState = .idle
+    private var conversationState: DeviceConversationState = .waiting
     private var audioInput: AudioInput = .disabled()
     private var camera: Camera = .disabled()
     private var speaker: Speaker = .disabled()
@@ -285,7 +286,18 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     /// 主要逻辑：SDK 只发送端侧关闭意图，等待 server 下发 `control.audio_session.close.requested`
     /// 后再走标准资源清理链路，避免 App 和 server 同时争抢会话生命周期。
     public func requestConversationClose(reason: String = "app_requested") async throws {
-        await emitConversationState(.closing)
+        let currentState = withStateLock { conversationState }
+        switch currentState {
+        case .starting, .active:
+            await emitConversationState(.closing)
+        case .closing:
+            await debugLog("conversation close ignored state=closing")
+            return
+        case .waiting:
+            await debugLog("conversation close ignored state=waiting")
+            await emitConversationState(.waiting)
+            return
+        }
         try await sendEvent(
             name: "control.user.dialog.close.requested",
             payload: ["reason": reason]
@@ -598,6 +610,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     }
 
     private func emitConversationState(_ state: DeviceConversationState) async {
+        withStateLock {
+            conversationState = state
+        }
         await debugLog("conversation state \(state.rawValue)")
         await conversationStateHandler?(state)
     }
