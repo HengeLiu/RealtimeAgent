@@ -82,6 +82,11 @@ http://192.168.10.10:8777/vad/analyze
 调试时优先使用 App 内的“复制日志”和“复制摘要”按钮，把水位线、chunk 拉取、打断清理、
 实时 VAD/ASR 结果、WAV 和本地产物路径一起带回排查。D2 会在实时 `speech_started`
 后触发 cancel；D3 会在 cancel 后继续录音，直到实时 `speech_stopped` 到达或等待超时。
+E1/E2 沿用 D3 流程，用来比较不同 iOS AEC 配置下 `vad_upload.wav` 的外放残留。
+E3 在 DashScope `speech_started` 之后增加本地低能量门限，专门验证小声回放残留过滤。
+E4 在 E3 基础上增加播放开始后 1500ms 的 warmup 忽略窗口，用来验证 AEC 收敛期误触发。
+当前真机结果中，E4 是相对可用的候选方案：先保持 `min_rms=0.025`，通过日志中的
+`max_rms/max_peak/chunks` 继续收集真人插话和误触发样本，再决定是否下调门限。
 
 ## 本地检查
 

@@ -15,6 +15,10 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
     case userSpeechNoCancel
     case userSpeechWithCancel
     case userSpeechCancelThenTailCapture
+    case aecOutputVoiceProcessingTailCapture
+    case aecEchoCancelledInputTailCapture
+    case localEnergyGateTailCapture
+    case localEnergyGateWarmupTailCapture
 
     var id: String { rawValue }
 
@@ -40,6 +44,14 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
             return "D2 真人插话后cancel"
         case .userSpeechCancelThenTailCapture:
             return "D3 cancel后继续录音"
+        case .aecOutputVoiceProcessingTailCapture:
+            return "E1 输出VP cancel后录音"
+        case .aecEchoCancelledInputTailCapture:
+            return "E2 EchoInput cancel后录音"
+        case .localEnergyGateTailCapture:
+            return "E3 本地能量门限"
+        case .localEnergyGateWarmupTailCapture:
+            return "E4 启动延迟+能量门限"
         }
     }
 
@@ -65,6 +77,14 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
             return "播放开始后请真人说“打断一下”，实时 VAD 触发后 cancel；验证真实 VAD 打断链路。"
         case .userSpeechCancelThenTailCapture:
             return "播放开始后请持续说一句话，自动 cancel 后继续录音；验证停播后的用户语音是否恢复清晰。"
+        case .aecOutputVoiceProcessingTailCapture:
+            return "D3 流程 + 记录 output node voice processing 兼容性；避免直接调用导致底层 NSException。"
+        case .aecEchoCancelledInputTailCapture:
+            return "D3 流程 + iOS echo-cancelled input 偏好；验证新系统 AEC 输入路径对回声残留的影响。"
+        case .localEnergyGateTailCapture:
+            return "D3 流程 + 本地低能量过滤；DashScope 触发后还要回查对应上传 chunk 的 RMS。"
+        case .localEnergyGateWarmupTailCapture:
+            return "D3 流程 + 播放开始后 1500ms 忽略打断 + 本地低能量过滤；验证 AEC 收敛期误触发。"
         }
     }
 
@@ -117,7 +137,8 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
 
     var waitsForRealtimeSpeechStopAfterCancel: Bool {
         switch self {
-        case .userSpeechCancelThenTailCapture:
+        case .userSpeechCancelThenTailCapture, .aecOutputVoiceProcessingTailCapture, .aecEchoCancelledInputTailCapture,
+             .localEnergyGateTailCapture, .localEnergyGateWarmupTailCapture:
             return true
         default:
             return false
@@ -126,7 +147,8 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
 
     var speechStopWaitTimeoutMS: Int {
         switch self {
-        case .userSpeechCancelThenTailCapture:
+        case .userSpeechCancelThenTailCapture, .aecOutputVoiceProcessingTailCapture, .aecEchoCancelledInputTailCapture,
+             .localEnergyGateTailCapture, .localEnergyGateWarmupTailCapture:
             return 8_000
         default:
             return 0
@@ -139,6 +161,14 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
             return "请在听到播放开始后约 1 秒说：打断一下"
         case .userSpeechCancelThenTailCapture:
             return "请在听到播放开始后持续说一句话，cancel 后继续说完整句子"
+        case .aecOutputVoiceProcessingTailCapture:
+            return "E1：请按 D3 方式说话；重点对比 vad_upload.wav 的喇叭残留"
+        case .aecEchoCancelledInputTailCapture:
+            return "E2：请按 D3 方式说话；重点对比 echo-cancelled input 下的 vad_upload.wav"
+        case .localEnergyGateTailCapture:
+            return "E3：请按 D3 方式说话；本地低能量门限会过滤小声回放残留"
+        case .localEnergyGateWarmupTailCapture:
+            return "E4：播放开始后 1.5 秒内忽略 VAD 打断，再启用本地能量门限"
         default:
             return nil
         }
@@ -146,10 +176,47 @@ enum PlaybackExperimentScenario: String, CaseIterable, Identifiable, Sendable {
 
     var usesRealtimeVADInterrupt: Bool {
         switch self {
-        case .userSpeechWithCancel, .userSpeechCancelThenTailCapture:
+        case .userSpeechWithCancel, .userSpeechCancelThenTailCapture, .aecOutputVoiceProcessingTailCapture,
+             .aecEchoCancelledInputTailCapture, .localEnergyGateTailCapture, .localEnergyGateWarmupTailCapture:
             return true
         default:
             return false
+        }
+    }
+
+    var rendererVoiceProcessingEnabled: Bool? {
+        switch self {
+        case .aecOutputVoiceProcessingTailCapture:
+            return false
+        default:
+            return nil
+        }
+    }
+
+    var prefersEchoCancelledInput: Bool {
+        switch self {
+        case .aecEchoCancelledInputTailCapture:
+            return true
+        default:
+            return false
+        }
+    }
+
+    var vadInterruptMinRMS: Double? {
+        switch self {
+        case .localEnergyGateTailCapture, .localEnergyGateWarmupTailCapture:
+            return 0.025
+        default:
+            return nil
+        }
+    }
+
+    var vadInterruptWarmupIgnoreMS: Int {
+        switch self {
+        case .localEnergyGateWarmupTailCapture:
+            return 1_500
+        default:
+            return 0
         }
     }
 }
@@ -359,6 +426,12 @@ struct RealtimeVADEventResponse: Codable, Sendable {
     }
 }
 
+struct RealtimeVADChunkLevel: Sendable {
+    let index: Int
+    let rms: Double
+    let peak: Double
+}
+
 /// 单次实验结果。
 struct PlaybackExperimentResult: Sendable {
     let runID: String
@@ -453,12 +526,17 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
         let audioController = AudioSessionController()
         let audioProfile = scenario.audioSessionProfile
         progress("配置音频会话 profile=\(audioProfile.rawValue) mode=\(audioProfile.mode.rawValue)")
-        let route = try audioController.configure(profile: audioProfile)
+        let route = try audioController.configure(
+            profile: audioProfile,
+            prefersEchoCancelledInput: scenario.prefersEchoCancelledInput,
+            progress: progress
+        )
         timeline.set("route", route)
         timeline.mark("audio_session_configured", fields: [
             "profile": audioProfile.rawValue,
             "mode": audioProfile.mode.rawValue,
             "voice_processing": scenario.voiceProcessingEnabled,
+            "prefers_echo_cancelled_input": scenario.prefersEchoCancelledInput,
         ])
         if let prompt = scenario.userSpeechPrompt {
             progress(prompt)
@@ -482,6 +560,8 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
             ? RealtimeVADInterruptMonitor(
                 vadURL: vadURL,
                 continueAfterInterrupt: scenario.waitsForRealtimeSpeechStopAfterCancel,
+                interruptMinRMS: scenario.vadInterruptMinRMS,
+                warmupIgnoreMS: scenario.vadInterruptWarmupIgnoreMS,
                 progress: progress,
                 onInterrupt: { [weak self] reason in
                     self?.requestCancel(reason: reason)
@@ -502,7 +582,7 @@ final class PlaybackExperimentRunner: @unchecked Sendable {
 
         let renderer = RingBufferPlaybackRenderer()
         progress("启动播放 renderer sample_rate=\(session.format.sampleRate) chunk_ms=\(session.format.chunkMS)")
-        try renderer.prepare(format: session.format)
+        try renderer.prepare(format: session.format, voiceProcessingEnabled: scenario.rendererVoiceProcessingEnabled, progress: progress)
         timeline.mark("renderer_prepared")
         progress("播放 renderer 已启动")
 
@@ -982,6 +1062,8 @@ struct RealtimeVADClient: Sendable {
 final class RealtimeVADInterruptMonitor: @unchecked Sendable {
     private let client: RealtimeVADClient
     private let continueAfterInterrupt: Bool
+    private let interruptMinRMS: Double?
+    private let warmupIgnoreMS: Int
     private let progress: @Sendable (String) -> Void
     private let onInterrupt: @Sendable (String) -> Void
     private let lock = NSLock()
@@ -991,21 +1073,27 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
     private var triggered = false
     private var speechStopped = false
     private var sessionID: String?
+    private var activatedAt: UInt64?
     private var samples: [Float] = []
     private var inputSampleRate: Double = 48_000
     private var lastEventSeq = -1
     private var sentChunkCount = 0
     private var uploadedPCM = Data()
+    private var chunkLevels: [RealtimeVADChunkLevel] = []
     private let chunkMS = 100
 
     init(
         vadURL: URL,
         continueAfterInterrupt: Bool,
+        interruptMinRMS: Double? = nil,
+        warmupIgnoreMS: Int = 0,
         progress: @escaping @Sendable (String) -> Void,
         onInterrupt: @escaping @Sendable (String) -> Void
     ) {
         self.client = RealtimeVADClient(vadAnalyzeURL: vadURL)
         self.continueAfterInterrupt = continueAfterInterrupt
+        self.interruptMinRMS = interruptMinRMS
+        self.warmupIgnoreMS = warmupIgnoreMS
         self.progress = progress
         self.onInterrupt = onInterrupt
     }
@@ -1014,8 +1102,13 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
         lock.lock()
         active = true
         stopped = false
+        activatedAt = DispatchTime.now().uptimeNanoseconds
         lock.unlock()
-        progress("实时 VAD 启动中")
+        if warmupIgnoreMS > 0 {
+            progress("实时 VAD 启动中 warmup_ignore_ms=\(warmupIgnoreMS)")
+        } else {
+            progress("实时 VAD 启动中")
+        }
         Task.detached(priority: .utility) { [weak self] in
             await self?.startSessionIfNeeded()
         }
@@ -1120,6 +1213,10 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
             lock.lock()
             sentChunkCount += 1
             let chunkCount = sentChunkCount
+            chunkLevels.append(RealtimeVADChunkLevel(index: chunkCount, rms: level.rms, peak: level.peak))
+            if chunkLevels.count > 240 {
+                chunkLevels.removeFirst(chunkLevels.count - 240)
+            }
             lock.unlock()
             if !response.events.isEmpty || chunkCount <= 3 || chunkCount % 10 == 0 || level.rms >= 0.01 {
                 progress(
@@ -1127,7 +1224,7 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
                     "rms=\(String(format: "%.4f", level.rms)) peak=\(String(format: "%.4f", level.peak))"
                 )
             }
-            handle(events: response.events)
+            handle(events: response.events, fallbackChunkIndex: chunkCount)
         } catch {
             progress("实时 VAD chunk 发送失败：\(error.localizedDescription)")
         }
@@ -1151,28 +1248,54 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
         return true
     }
 
-    private func handle(events: [RealtimeVADEvent]) {
+    private func handle(events: [RealtimeVADEvent], fallbackChunkIndex: Int) {
         for event in events {
             lock.lock()
             lastEventSeq = max(lastEventSeq, event.seq)
             lock.unlock()
             switch event.type {
             case "speech_started":
+                let energyGate = interruptEnergyGate(event: event, fallbackChunkIndex: fallbackChunkIndex)
+                if let warmupElapsedMS = interruptWarmupGateElapsedMS() {
+                    progress(
+                        "忽略 warmup speech_started event_seq=\(event.seq) audio_ms=\(event.audioMS.map(String.init) ?? "-") " +
+                        "elapsed_ms=\(warmupElapsedMS) warmup_ms=\(warmupIgnoreMS)" +
+                        formatEnergyGateSuffix(energyGate)
+                    )
+                    continue
+                }
+                if let gate = energyGate, !gate.accepted {
+                    progress(
+                        "忽略低能量 speech_started event_seq=\(event.seq) audio_ms=\(event.audioMS.map(String.init) ?? "-") " +
+                        formatEnergyGate(gate)
+                    )
+                    continue
+                }
                 lock.lock()
                 let shouldInterrupt = !triggered && !stopped
                 triggered = true
                 active = continueAfterInterrupt
                 lock.unlock()
                 if shouldInterrupt {
-                    progress("实时 VAD speech_started，触发打断 event_seq=\(event.seq) audio_ms=\(event.audioMS.map(String.init) ?? "-")")
+                    progress(
+                        "实时 VAD speech_started，触发打断 event_seq=\(event.seq) audio_ms=\(event.audioMS.map(String.init) ?? "-")" +
+                        formatEnergyGateSuffix(energyGate)
+                    )
                     onInterrupt("vad_interrupt")
                 }
             case "speech_stopped":
                 lock.lock()
-                speechStopped = true
-                active = false
+                let hasAcceptedSpeechStart = triggered
+                if hasAcceptedSpeechStart {
+                    speechStopped = true
+                    active = false
+                }
                 lock.unlock()
-                progress("实时 VAD speech_stopped")
+                if hasAcceptedSpeechStart {
+                    progress("实时 VAD speech_stopped")
+                } else {
+                    progress("忽略未接受 speech_started 对应的 speech_stopped event_seq=\(event.seq)")
+                }
             case "asr_text":
                 if let text = event.text, !text.isEmpty {
                     progress("实时 ASR 文本：\(text)")
@@ -1183,6 +1306,53 @@ final class RealtimeVADInterruptMonitor: @unchecked Sendable {
                 break
             }
         }
+    }
+
+    private func interruptWarmupGateElapsedMS() -> Int? {
+        guard warmupIgnoreMS > 0 else { return nil }
+        lock.lock()
+        let activatedAt = activatedAt
+        lock.unlock()
+        guard let activatedAt else { return nil }
+        let elapsedMS = Int((DispatchTime.now().uptimeNanoseconds - activatedAt) / 1_000_000)
+        return elapsedMS < warmupIgnoreMS ? elapsedMS : nil
+    }
+
+    private func interruptEnergyGate(
+        event: RealtimeVADEvent,
+        fallbackChunkIndex: Int
+    ) -> (accepted: Bool, maxRMS: Double, maxPeak: Double, minRMS: Double, chunkRange: String, levelCount: Int)? {
+        guard let interruptMinRMS else { return nil }
+        let center: Int
+        if let audioMS = event.audioMS {
+            center = max(1, Int(ceil(Double(audioMS) / Double(chunkMS))))
+        } else {
+            center = fallbackChunkIndex
+        }
+        let start = max(1, center - 2)
+        let end = center + 2
+        lock.lock()
+        let levels = chunkLevels.filter { start...end ~= $0.index }
+        lock.unlock()
+        let maxRMS = levels.map(\.rms).max() ?? 0
+        let maxPeak = levels.map(\.peak).max() ?? 0
+        return (maxRMS >= interruptMinRMS, maxRMS, maxPeak, interruptMinRMS, "\(start)-\(end)", levels.count)
+    }
+
+    private func formatEnergyGate(
+        _ gate: (accepted: Bool, maxRMS: Double, maxPeak: Double, minRMS: Double, chunkRange: String, levelCount: Int)
+    ) -> String {
+        "max_rms=\(String(format: "%.4f", gate.maxRMS)) " +
+        "max_peak=\(String(format: "%.4f", gate.maxPeak)) " +
+        "min_rms=\(String(format: "%.4f", gate.minRMS)) " +
+        "chunks=\(gate.chunkRange) level_count=\(gate.levelCount)"
+    }
+
+    private func formatEnergyGateSuffix(
+        _ gate: (accepted: Bool, maxRMS: Double, maxPeak: Double, minRMS: Double, chunkRange: String, levelCount: Int)?
+    ) -> String {
+        guard let gate else { return "" }
+        return " " + formatEnergyGate(gate)
     }
 
     private func markSendCompleted() {
@@ -1218,13 +1388,28 @@ final class AudioSessionController: @unchecked Sendable {
         }
     }
 
-    func configure(profile: AudioSessionProfile) throws -> String {
+    func configure(
+        profile: AudioSessionProfile,
+        prefersEchoCancelledInput: Bool,
+        progress: @Sendable (String) -> Void
+    ) throws -> String {
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: profile.mode, options: [.defaultToSpeaker, .allowBluetoothHFP])
+        if prefersEchoCancelledInput {
+            if #available(iOS 18.2, *) {
+                progress("设置 prefersEchoCancelledInput=true begin")
+                try session.setPrefersEchoCancelledInput(true)
+                progress("设置 prefersEchoCancelledInput=true done")
+            } else {
+                progress("当前 iOS 不支持 prefersEchoCancelledInput，跳过")
+            }
+        }
         try session.setPreferredSampleRate(16_000)
         try session.setPreferredIOBufferDuration(0.02)
         try session.setActive(true)
-        return Self.routeSummary(session.currentRoute)
+        let echoSummary = Self.echoCancellationSummary(session)
+        progress("音频会话 AEC 状态 \(echoSummary)")
+        return "\(Self.routeSummary(session.currentRoute)) \(echoSummary)"
     }
 
     func deactivate() throws {
@@ -1235,6 +1420,15 @@ final class AudioSessionController: @unchecked Sendable {
         let inputs = route.inputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
         let outputs = route.outputs.map { "\($0.portType.rawValue):\($0.portName)" }.joined(separator: ",")
         return "inputs[\(inputs)] outputs[\(outputs)]"
+    }
+
+    private static func echoCancellationSummary(_ session: AVAudioSession) -> String {
+        if #available(iOS 18.2, *) {
+            return "echo_cancelled_input_available=\(session.isEchoCancelledInputAvailable) " +
+                "enabled=\(session.isEchoCancelledInputEnabled) " +
+                "preferred=\(session.prefersEchoCancelledInput)"
+        }
+        return "echo_cancelled_input_unavailable_api"
     }
 }
 
@@ -1387,7 +1581,11 @@ final class RingBufferPlaybackRenderer: @unchecked Sendable {
     private var underrunEvents = 0
     private var droppedFrames = 0
 
-    func prepare(format audioFormat: ExperimentAudioFormat) throws {
+    func prepare(
+        format audioFormat: ExperimentAudioFormat,
+        voiceProcessingEnabled: Bool? = nil,
+        progress: @Sendable (String) -> Void = { _ in }
+    ) throws {
         guard audioFormat.codec == "pcm16le" else {
             throw PlaybackExperimentError.audio("不支持的播放 codec：\(audioFormat.codec)")
         }
@@ -1414,6 +1612,15 @@ final class RingBufferPlaybackRenderer: @unchecked Sendable {
         sourceNode = node
         engine.attach(node)
         engine.connect(node, to: engine.mainMixerNode, format: playbackFormat)
+        if let voiceProcessingEnabled {
+            if voiceProcessingEnabled {
+                progress(
+                    "跳过播放 output voice processing：AVAudioEngine 24k/mono source 直接调用会触发底层 NSException"
+                )
+            } else {
+                progress("播放 output voice processing 探测场景：保持关闭，避免底层格式断言")
+            }
+        }
         engine.prepare()
         try engine.start()
     }

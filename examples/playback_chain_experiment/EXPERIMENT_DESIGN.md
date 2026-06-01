@@ -438,6 +438,33 @@ ASR 文本，便于判断识别到的是用户语音还是外放回声。
 | D2 | VoiceProcessing 开；默认水位线；启用实时 VAD/ASR 打断 | 播放开始后真人说“打断一下” | 验证 `speech_started -> cancel -> 清理播放资源` 的实时打断链路 | 打印实时 ASR 文本；收到 speech_started 后进入 cancel；旧播放快速停止 |
 | D3 | VoiceProcessing 开；默认水位线；启用实时 VAD/ASR 打断和 speech stop 等待 | 播放开始后真人持续说完整句子 | 验证 cancel 后仍继续捕获用户后续语音，直到 `speech_stopped` 再停止录音 | speech_started 触发 cancel；cancel 后继续录音；打印 ASR 文本；speech_stopped 后停止录音，超时才兜底 |
 
+### 7.5 E 组：iOS AEC 配置对照
+
+E 组沿用 D3 的交互流程，只改变 iOS 系统 AEC 配置。每轮必须同时保存 `mic.wav` 和
+`vad_upload.wav`，并优先比较 `vad_upload.wav` 中的外放残留强度，而不是只看 DashScope
+是否触发 `speech_started`。
+
+| 编号 | 配置 | 操作 | 目的 | 预期观察 |
+| --- | --- | --- | --- | --- |
+| E1 | D3 + 播放 output voice processing 兼容性探测 | 播放开始后持续说一句话 | 记录 `AVAudioEngine` 当前 24k/mono renderer 不安全调用边界，避免 `setVoiceProcessingEnabled(true)` 触发底层 NSException | App 不崩溃；日志说明 output VP 已跳过；`vad_upload.wav` 可作为 D3 对照 |
+| E2 | D3 + `AVAudioSession.setPrefersEchoCancelledInput(true)`（仅支持系统生效） | 播放开始后持续说一句话 | 验证 echo-cancelled input 偏好对输入端回声抑制的影响 | 日志打印 echo-cancelled input available/enabled/preferred；`vad_upload.wav` 外放残留应与 D3/E1 对比 |
+| E3 | D3 + 本地低能量门限 `min_rms=0.025` | 播放开始后持续说一句话 | DashScope 返回 `speech_started` 后，按事件 `audio_ms` 回查对应上传 chunk 附近 RMS，过滤小声回放残留 | 低能量误触发会打印“忽略低能量 speech_started”；真人插话 RMS 足够高时仍触发 cancel |
+| E4 | D3 + warmup 忽略 1500ms + 本地低能量门限 `min_rms=0.025` | 播放开始后持续说一句话 | 验证播放刚开始 AEC 收敛期的误触发是否可通过 warmup gate 隔离 | 前 1500ms 内触发会打印“忽略 warmup speech_started”；之后仍按 E3 能量门限判断 |
+
+### 7.6 当前阶段结论
+
+截至当前真机测试，E4 是可用性相对最好的候选方案。它不把 DashScope 的 `speech_started`
+直接等同为用户插话，而是在服务端 VAD 之后增加两层端侧判定：
+
+1. 播放开始后的 1500ms warmup 窗口内忽略打断，用于避开播放初期 AEC 收敛不稳定带来的误触发。
+2. warmup 结束后按 `speech_started` 对应上传 chunk 附近的本地 RMS 做二次过滤，当前门限保持
+   `min_rms=0.025`。
+
+当前样本中，正常说话触发打断时 `max_rms` 约为 `0.1014`，较大声说话约为 `0.1252`；
+未说话误触发样本被本地门限过滤，`max_rms` 约为 `0.0091` 到 `0.0145`。因此暂时不下调
+`min_rms=0.025`，后续如果出现真人小声插话无法触发，再基于带 `max_rms/max_peak/chunks`
+的日志决定是否调整到 `0.018` 或 `0.020`。
+
 ## 8. 关键时间线
 
 每轮实验必须记录：

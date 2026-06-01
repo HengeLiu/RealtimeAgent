@@ -43,7 +43,7 @@ final class ExperimentLogStore: @unchecked Sendable {
 /// 主要功能：保存服务地址、场景、运行状态、结果路径和日志，并把耗时音频实验放入后台任务。
 @MainActor
 final class ExperimentViewModel: ObservableObject {
-    private static let appBuildMarker = "playback-chain-exp-20260601-vad-upload-wav"
+    private static let appBuildMarker = "playback-chain-exp-20260601-warmup-energy-gate"
     @Published var audioServerURL: String {
         didSet { UserDefaults.standard.set(audioServerURL, forKey: Self.audioURLKey) }
     }
