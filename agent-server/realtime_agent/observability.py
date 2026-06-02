@@ -571,6 +571,8 @@ class RunRecorder:
             return
         if _is_quiet_agent_turn_state(record):
             return
+        if event == "omni.provider_input_audio.saved" and not record.get("final") and int(record.get("chunk_count") or 0) != 1:
+            return
         log_info(self.logger, f"Agent事件 {event}", context)
 
     def record_timeline_checkpoint(

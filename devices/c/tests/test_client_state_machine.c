@@ -7,8 +7,10 @@
 typedef struct {
     int connect_count;
     int send_count;
+    int binary_count;
     char last_url[256];
     char last_text[4096];
+    char last_binary_header[1024];
 } mock_transport_t;
 
 static int mock_connect(void *ctx, ra_transport_channel_t channel, const char *url) {
@@ -25,6 +27,16 @@ static int mock_send_text(void *ctx, ra_transport_channel_t channel, const char 
     assert(size < sizeof(mock->last_text));
     memcpy(mock->last_text, text, size);
     mock->last_text[size] = '\0';
+    return RA_OK;
+}
+
+static int mock_send_binary(void *ctx, ra_transport_channel_t channel, const uint8_t *data, size_t size) {
+    (void)channel;
+    mock_transport_t *mock = (mock_transport_t *)ctx;
+    mock->binary_count++;
+    size_t written = 0;
+    assert(ra_stream_chunk_decode_header_json(data, size, mock->last_binary_header, sizeof(mock->last_binary_header), &written) == RA_OK);
+    mock->last_binary_header[written] = '\0';
     return RA_OK;
 }
 
@@ -96,6 +108,24 @@ static void encode_output_chunk(int seq, uint8_t *out, size_t capacity, size_t *
 static int mock_speaker_cancel(void *ctx) {
     ((mock_speaker_t *)ctx)->cancelled++;
     return RA_OK;
+}
+
+typedef struct {
+    int captured;
+    int released;
+} mock_camera_t;
+
+static int mock_camera_capture_jpeg(void *ctx, const uint8_t **data, size_t *size) {
+    static const uint8_t jpeg[] = {0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9};
+    ((mock_camera_t *)ctx)->captured++;
+    *data = jpeg;
+    *size = sizeof(jpeg);
+    return RA_OK;
+}
+
+static void mock_camera_release_jpeg(void *ctx, const uint8_t *data) {
+    (void)data;
+    ((mock_camera_t *)ctx)->released++;
 }
 
 /*
@@ -263,10 +293,68 @@ static void test_send_heartbeat_after_registered(void) {
     ra_device_client_destroy(client);
 }
 
+/*
+ * 测试目标：验证 RGB 请求不会复用服务端下行音频 stream id，并声明 JPEG 图片格式。
+ * 测试方法：投递一个顶层 stream_id 为 `stream_out_*` 的 sensor.rgb 控制事件，使用
+ * mock camera 和 mock binary transport 捕获端侧发出的 opened 事件与图片 chunk。
+ * 预期结果：控制事件 payload 包含 JPEG/1/1 format，图片 chunk 使用新的 `rgb_*` stream_id，
+ * metadata 保留 request_id，避免服务端把图片写入扬声器流或按 PCM 校验。
+ */
+static void test_rgb_request_uses_image_stream_format_and_id(void) {
+    mock_transport_t mock = {0};
+    ra_transport_t transport = {
+        .ctx = &mock,
+        .connect = mock_connect,
+        .send_text = mock_send_text,
+        .send_binary = mock_send_binary,
+        .close = mock_close,
+    };
+    mock_camera_t camera_ctx = {0};
+    ra_camera_source_t camera = {
+        .ctx = &camera_ctx,
+        .codec = "jpeg",
+        .capture_jpeg = mock_camera_capture_jpeg,
+        .release_jpeg = mock_camera_release_jpeg,
+    };
+    ra_device_client_config_t config = {
+        .server_url = "http://127.0.0.1:8765",
+        .device_id = "dev-001",
+        .user_id = "user-001",
+        .name = "C Test Device",
+        .client_type = "test-c",
+        .camera = &camera,
+        .transport = &transport,
+        .log_level = RA_LOG_DISABLED,
+    };
+    ra_device_client_t *client = ra_device_client_create(&config);
+    assert(client != NULL);
+    assert(ra_device_client_handle_event(
+               client,
+               "{\"event_name\":\"stream.control.open.requested\","
+               "\"user_id\":\"user-001\",\"producer_id\":\"server-main\","
+               "\"session_id\":\"dev-001\",\"stream_id\":\"stream_out_bad\",\"stream_type\":\"sensor.rgb\","
+               "\"payload\":{\"stream_type\":\"sensor.rgb\",\"request_id\":\"asset_req_001\"}}"
+           ) == RA_OK);
+    assert(camera_ctx.captured == 1);
+    assert(camera_ctx.released == 1);
+    assert(mock.binary_count == 1);
+    assert(strstr(mock.last_text, "stream.input.closed") != NULL);
+    assert(strstr(mock.last_text, "\"codec\":\"jpeg\"") != NULL);
+    assert(strstr(mock.last_text, "\"sample_rate\":1") != NULL);
+    assert(strstr(mock.last_binary_header, "\"stream_id\":\"rgb_") != NULL);
+    assert(strstr(mock.last_binary_header, "\"stream_id\":\"stream_out_bad\"") == NULL);
+    assert(strstr(mock.last_binary_header, "\"stream_type\":\"sensor.rgb\"") != NULL);
+    assert(strstr(mock.last_binary_header, "\"codec\":\"jpeg\"") != NULL);
+    assert(strstr(mock.last_binary_header, "\"sample_rate\":1") != NULL);
+    assert(strstr(mock.last_binary_header, "\"request_id\":\"asset_req_001\"") != NULL);
+    ra_device_client_destroy(client);
+}
+
 int main(void) {
     test_start_sends_registration();
     test_handle_core_events();
     test_send_heartbeat_after_registered();
+    test_rgb_request_uses_image_stream_format_and_id();
     puts("test_client_state_machine passed");
     return 0;
 }

@@ -7,6 +7,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 
 struct ra_esp32_speaker {
@@ -17,9 +18,22 @@ struct ra_esp32_speaker {
     size_t chunks_written;
     int prepared_sample_rate;
     bool enabled;
+    SemaphoreHandle_t mutex;
 };
 
 static const char *TAG = "ra_esp32_speaker";
+
+static void speaker_lock(ra_esp32_speaker_t *speaker) {
+    if (speaker != NULL && speaker->mutex != NULL) {
+        xSemaphoreTake(speaker->mutex, portMAX_DELAY);
+    }
+}
+
+static void speaker_unlock(ra_esp32_speaker_t *speaker) {
+    if (speaker != NULL && speaker->mutex != NULL) {
+        xSemaphoreGive(speaker->mutex);
+    }
+}
 
 static int speaker_delete_channel(ra_esp32_speaker_t *speaker) {
     if (speaker->tx_channel == NULL) {
@@ -150,11 +164,13 @@ static int speaker_write_stereo_32bit(
 
 static int speaker_prepare(void *ctx, const ra_audio_format_t *format) {
     ra_esp32_speaker_t *speaker = (ra_esp32_speaker_t *)ctx;
+    speaker_lock(speaker);
     speaker->bytes_written = 0;
     speaker->expanded_bytes_written = 0;
     speaker->chunks_written = 0;
     int sample_rate = format != NULL && format->sample_rate > 0 ? format->sample_rate : speaker->config.sample_rate;
     if (speaker_init_channel(speaker, sample_rate) != 0 || speaker_enable(speaker) != 0) {
+        speaker_unlock(speaker);
         return -1;
     }
     ESP_LOGI(TAG, "speaker.prepare codec=%s sample_rate=%d pins bclk=%d lrck=%d dout=%d mode=%s",
@@ -164,12 +180,15 @@ static int speaker_prepare(void *ctx, const ra_audio_format_t *format) {
              speaker->config.lrck,
              speaker->config.dout,
              speaker->config.stereo_32bit_output ? "std_tx_stereo_32bit" : "std_tx_mono_16bit");
+    speaker_unlock(speaker);
     return 0;
 }
 
 static int speaker_write(void *ctx, const uint8_t *pcm, size_t size, int duration_ms) {
     ra_esp32_speaker_t *speaker = (ra_esp32_speaker_t *)ctx;
+    speaker_lock(speaker);
     if (speaker->tx_channel == NULL || !speaker->enabled || pcm == NULL || size == 0) {
+        speaker_unlock(speaker);
         return -1;
     }
     uint32_t timeout_ms = duration_ms > 0 ? (uint32_t)duration_ms + 500 : 1000;
@@ -178,6 +197,7 @@ static int speaker_write(void *ctx, const uint8_t *pcm, size_t size, int duratio
         ? speaker_write_stereo_32bit(speaker, pcm, size, timeout_ms, &expanded_size)
         : speaker_write_raw(speaker, pcm, size, timeout_ms);
     if (rc != 0) {
+        speaker_unlock(speaker);
         return rc;
     }
     speaker->bytes_written += size;
@@ -191,11 +211,13 @@ static int speaker_write(void *ctx, const uint8_t *pcm, size_t size, int duratio
                  (unsigned)speaker->chunks_written,
                  (unsigned)speaker->bytes_written);
     }
+    speaker_unlock(speaker);
     return 0;
 }
 
 static int speaker_drain(void *ctx) {
     ra_esp32_speaker_t *speaker = (ra_esp32_speaker_t *)ctx;
+    speaker_lock(speaker);
     ESP_LOGI(TAG, "speaker.drain chunks=%u bytes_written=%u expanded_bytes=%u",
              (unsigned)speaker->chunks_written,
              (unsigned)speaker->bytes_written,
@@ -205,15 +227,18 @@ static int speaker_drain(void *ctx) {
         esp_err_t err = i2s_channel_disable(speaker->tx_channel);
         if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
             ESP_LOGW(TAG, "speaker.i2s drain disable failed err=%s", esp_err_to_name(err));
+            speaker_unlock(speaker);
             return -1;
         }
         speaker->enabled = false;
     }
+    speaker_unlock(speaker);
     return 0;
 }
 
 static int speaker_cancel(void *ctx) {
     ra_esp32_speaker_t *speaker = (ra_esp32_speaker_t *)ctx;
+    speaker_lock(speaker);
     ESP_LOGI(TAG, "speaker.cancel chunks=%u bytes_written=%u expanded_bytes=%u",
              (unsigned)speaker->chunks_written,
              (unsigned)speaker->bytes_written,
@@ -228,6 +253,7 @@ static int speaker_cancel(void *ctx) {
     speaker->bytes_written = 0;
     speaker->expanded_bytes_written = 0;
     speaker->chunks_written = 0;
+    speaker_unlock(speaker);
     return 0;
 }
 
@@ -240,12 +266,20 @@ ra_esp32_speaker_t *ra_esp32_speaker_create(const esp32s3_speaker_board_config_t
         return NULL;
     }
     speaker->config = *config;
+    speaker->mutex = xSemaphoreCreateMutex();
+    if (speaker->mutex == NULL) {
+        free(speaker);
+        return NULL;
+    }
     return speaker;
 }
 
 void ra_esp32_speaker_destroy(ra_esp32_speaker_t *speaker) {
     if (speaker != NULL) {
         speaker_delete_channel(speaker);
+        if (speaker->mutex != NULL) {
+            vSemaphoreDelete(speaker->mutex);
+        }
     }
     free(speaker);
 }

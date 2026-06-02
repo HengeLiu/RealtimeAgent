@@ -163,6 +163,54 @@ def test_default_stream_limit_accepts_browser_jpeg_asset(tmp_path) -> None:
     assert Path(asset.uri).read_bytes() == payload
 
 
+def test_rgb_input_opened_with_esp32_jpeg_format(tmp_path) -> None:
+    """测试目标：验证 ESP32 端侧按标准 JPEG 格式上传 `sensor.rgb` 单帧。
+
+    测试方法：发布携带 `jpeg/1/1` format 的 `stream.input.opened`，随后写入同格式图片 chunk。
+    预期结果：服务端按 JPEG 图片流接收该 chunk，资产能正常进入缓存。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    app.publish_control_event(
+        Event(
+            event_name="stream.input.opened",
+            user_id="user-esp32-photo",
+            producer_id="dev-esp32-s3-001",
+            session_id="dev-esp32-s3-001",
+            stream_id="rgb_1000",
+            stream_type="sensor.rgb",
+            payload={
+                "stream_type": "sensor.rgb",
+                "request_id": "asset_req_esp32",
+                "format": {"codec": "jpeg", "sample_rate": 1, "channels": 1, "chunk_ms": 1},
+            },
+        )
+    )
+    payload = b"\xff\xd8" + b"esp32-photo" + b"\xff\xd9"
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-esp32-photo",
+            session_id="dev-esp32-s3-001",
+            stream_id="rgb_1000",
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=payload,
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"request_id": "asset_req_esp32"},
+        )
+    )
+
+    asset = app.asset_service.query_assets(user_id="user-esp32-photo", stream_type="sensor.rgb")[-1]
+    assert asset.metadata["request_id"] == "asset_req_esp32"
+    assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
+    assert Path(asset.uri).read_bytes() == payload
+
+
 def test_sensor_chunk_before_open_event_auto_registers_input_stream(tmp_path) -> None:
     """测试目标：验证 stream chunk 先于 opened 控制事件到达时不会被误判为 unknown stream。
 

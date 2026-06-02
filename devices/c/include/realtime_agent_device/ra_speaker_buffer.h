@@ -7,6 +7,11 @@
 
 #include "ra_error.h"
 
+#if defined(ESP_PLATFORM)
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -30,6 +35,9 @@ typedef struct {
 typedef struct {
     ra_speaker_buffer_config_t config;
     ra_speaker_buffer_chunk_t *chunks;
+#if defined(ESP_PLATFORM)
+    SemaphoreHandle_t mutex;
+#endif
     int next_seq;
     int chunk_count;
     int buffered_ms;

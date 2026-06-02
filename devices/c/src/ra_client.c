@@ -647,11 +647,23 @@ static int send_input_stream_lifecycle_event(
     const char *stream_id,
     const char *request_id
 ) {
-    char payload[256];
+    char payload[384];
     if (has_text(request_id)) {
-        snprintf(payload, sizeof(payload), "{\"stream_type\":\"sensor.rgb\",\"request_id\":\"%s\"}", request_id);
+        snprintf(
+            payload,
+            sizeof(payload),
+            "{\"stream_type\":\"sensor.rgb\",\"request_id\":\"%s\","
+            "\"format\":{\"codec\":\"jpeg\",\"sample_rate\":1,\"channels\":1,\"chunk_ms\":1}}",
+            request_id
+        );
     } else {
-        snprintf(payload, sizeof(payload), "%s", "{\"stream_type\":\"sensor.rgb\"}");
+        snprintf(
+            payload,
+            sizeof(payload),
+            "%s",
+            "{\"stream_type\":\"sensor.rgb\","
+            "\"format\":{\"codec\":\"jpeg\",\"sample_rate\":1,\"channels\":1,\"chunk_ms\":1}}"
+        );
     }
     ra_event_t event;
     ra_event_init(&event, name, client->user_id, client->device_id, payload);
@@ -674,6 +686,10 @@ static int send_input_stream_lifecycle_event(
     client->diagnostics.sent_events++;
     copy_text(client->diagnostics.last_event_name, sizeof(client->diagnostics.last_event_name), name);
     return RA_OK;
+}
+
+static bool is_server_output_stream_id(const char *stream_id) {
+    return stream_id != NULL && strncmp(stream_id, "stream_out_", strlen("stream_out_")) == 0;
 }
 
 static void update_session_from_event(ra_device_client_t *client, const ra_event_t *event) {
@@ -826,9 +842,9 @@ static int handle_rgb_request(ra_device_client_t *client, const ra_event_t *even
         return send_simple_event(client, "stream.input.failed", "{\"stream_type\":\"sensor.rgb\",\"reason\":\"capture_failed\"}");
     }
     char stream_id[RA_MAX_ID_LEN];
-    if (event->stream_id[0] != '\0') {
-        copy_text(stream_id, sizeof(stream_id), event->stream_id);
-    } else if (ra_event_extract_payload_string(event, "stream_id", stream_id, sizeof(stream_id)) != RA_OK) {
+    stream_id[0] = '\0';
+    if (ra_event_extract_payload_string(event, "stream_id", stream_id, sizeof(stream_id)) != RA_OK ||
+        is_server_output_stream_id(stream_id)) {
         snprintf(stream_id, sizeof(stream_id), "rgb_%lld", (long long)ra_now_ms());
     }
     char request_id[RA_MAX_ID_LEN];
@@ -848,9 +864,9 @@ static int handle_rgb_request(ra_device_client_t *client, const ra_event_t *even
     } else {
         snprintf(metadata, sizeof(metadata), "%s", "{}");
     }
-    chunk.sample_rate = 0;
-    chunk.channels = 0;
-    chunk.duration_ms = 0;
+    chunk.sample_rate = 1;
+    chunk.channels = 1;
+    chunk.duration_ms = 1;
     chunk.final = true;
     chunk.metadata_json = metadata;
     chunk.payload = jpeg;
