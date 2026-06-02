@@ -6,7 +6,7 @@ import pytest
 from pydantic import BaseModel, Field
 
 from realtime_agent import RealtimeAgentApp, RealtimeAgentConfig, BaseTool, ToolContext, ToolError, ToolResult, ToolSpec
-from realtime_agent.tools import TOOL_DEFAULT_TIMEOUT_SECONDS, TOOL_MAX_TIMEOUT_SECONDS
+from realtime_agent.tools import CloseAudioSessionTool, TOOL_DEFAULT_TIMEOUT_SECONDS, TOOL_MAX_TIMEOUT_SECONDS
 
 
 class WeatherInput(BaseModel):
@@ -54,6 +54,18 @@ class OverlongTool(BaseTool):
         """测试不会实际运行。"""
 
         return ToolResult.success({})
+
+
+class FakeOutput:
+    """测试用输出门面，记录 close_audio_session 是否被调用。"""
+
+    def __init__(self) -> None:
+        self.close_calls: list[dict] = []
+
+    async def close_audio_session(self, *, reason: str = "model_requested", close_mode: str = "close_now") -> None:
+        """记录关闭请求参数。"""
+
+        self.close_calls.append({"reason": reason, "close_mode": close_mode})
 
 
 def test_tool_spec_pydantic_model_generates_provider_schema_and_validates_input(tmp_path) -> None:
@@ -139,3 +151,46 @@ def test_tool_registry_rejects_timeout_over_short_action_limit(tmp_path) -> None
 
     with pytest.raises(ToolError, match="max short-action timeout"):
         app.tool_registry.register(OverlongTool())
+
+
+def test_close_audio_session_rejects_default_model_requested_without_user_phrase() -> None:
+    """测试目标：防止模型把普通插话误判为关闭连续对话。
+
+    测试方法：直接调用 close_audio_session Tool，只传默认 reason，不提供用户明确关闭短语。
+    预期结果：Tool 返回 invalid_argument，且不会调用 output.close_audio_session。
+    """
+
+    output = FakeOutput()
+    tool = CloseAudioSessionTool()
+    context = ToolContext(user_id="user-a", session_id="session-a", devices=None, output=output)
+
+    result = asyncio.run(tool.run(context, {"reason": "model_requested"}))
+
+    assert result.ok is False
+    assert result.error["code"] == "invalid_argument"
+    assert output.close_calls == []
+
+
+def test_close_audio_session_accepts_explicit_user_close_phrase() -> None:
+    """测试目标：保留用户明确要求结束语音会话时的关闭能力。
+
+    测试方法：直接调用 close_audio_session Tool，并提供用户原话里的“结束对话”短语。
+    预期结果：Tool 成功，且 output.close_audio_session 收到 close_now 请求。
+    """
+
+    output = FakeOutput()
+    tool = CloseAudioSessionTool()
+    context = ToolContext(user_id="user-a", session_id="session-a", devices=None, output=output)
+
+    result = asyncio.run(
+        tool.run(
+            context,
+            {
+                "reason": "user_requested",
+                "user_close_phrase": "结束对话",
+            },
+        )
+    )
+
+    assert result.ok is True
+    assert output.close_calls == [{"reason": "user_requested", "close_mode": "close_now"}]

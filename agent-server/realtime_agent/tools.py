@@ -2213,12 +2213,20 @@ class CloseAudioSessionTool(BaseTool):
 
     class Input(BaseModel):
         reason: str = Field(default="model_requested", description="关闭连续对话的原因。")
+        user_close_phrase: str = Field(
+            default="",
+            description=(
+                "用户原话中明确要求结束本次连续语音会话的短语，例如“结束对话”、"
+                "“退出语音会话”、“关闭连接”。普通插话、换话题、取消上一句或“算了”不能填写。"
+            ),
+        )
 
     spec = ToolSpec(
         name="close_audio_session",
         description=(
-            "当用户明确表示结束连续对话、先不用了、可以停止、退出语音会话或关闭连接时调用。"
-            "本工具只请求服务器关闭当前 audio session，不用于普通回答。"
+            "仅当用户明确要求结束本次连续语音会话、退出语音会话或关闭连接时调用。"
+            "不要因为用户插话、取消上一句、说“算了”、换话题、暂停某个回答或表达否定而调用。"
+            "调用时必须在 user_close_phrase 中填入用户原话里的明确关闭短语。"
         ),
         input_model=Input,
         capability_type="tool",
@@ -2227,6 +2235,15 @@ class CloseAudioSessionTool(BaseTool):
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         reason = str(input_data.get("reason") or "model_requested").strip() or "model_requested"
+        phrase = str(input_data.get("user_close_phrase") or "").strip()
+        if not _is_explicit_audio_session_close_phrase(phrase):
+            return ToolResult.failed(
+                ToolError(
+                    "close_audio_session requires an explicit user close phrase; ordinary interruption must not close the audio session",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={"user_close_phrase": phrase or None, "reason": reason},
+                )
+            )
         if context.output is None or not hasattr(context.output, "close_audio_session"):
             return ToolResult.failed(ToolError("audio session close is not configured", code=ErrorCode.PROTOCOL_ERROR))
         await context.output.close_audio_session(reason=reason, close_mode="close_now")
@@ -2234,6 +2251,33 @@ class CloseAudioSessionTool(BaseTool):
             data={"requested": True, "reason": reason},
             message="已请求关闭连续对话。",
         )
+
+
+def _is_explicit_audio_session_close_phrase(phrase: str) -> bool:
+    """判断模型提供的用户原话是否包含明确关闭语音会话意图。
+
+    主要逻辑：只接受包含“对话/语音/会话/连接/聊天”等会话对象，且同时包含
+    “结束/退出/关闭/停止”等关闭动作的短语；排除“算了”等普通插话。
+    参数：`phrase` 为模型从用户原话中抽取的关闭短语。
+    返回值：明确关闭当前连续语音会话时返回 True。
+    异常情况：无。
+    """
+
+    normalized = "".join(str(phrase or "").split())
+    if not normalized:
+        return False
+    object_tokens = ("对话", "语音", "会话", "连接", "聊天", "通话", "麦克风", "录音")
+    action_tokens = ("结束", "退出", "关闭", "停止", "停掉", "断开")
+    if any(action in normalized for action in action_tokens) and any(target in normalized for target in object_tokens):
+        return True
+    exact_phrases = {
+        "不聊了",
+        "先不聊了",
+        "不说了",
+        "先不说了",
+        "到此为止",
+    }
+    return normalized in exact_phrases
 
 
 class TaskStartTool(BaseTool):
