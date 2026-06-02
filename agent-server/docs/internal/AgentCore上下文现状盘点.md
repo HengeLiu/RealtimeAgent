@@ -16,7 +16,7 @@
 | 长期记忆片段 | `MemoryService.build_prompt_fragment()` | `VisionRealtimeAgentCore._build_prompt()` / `OmniRealtimeAgentCore._build_prompt()` 追加到 system prompt | 有记忆时生效 | “以下是已保存的用户信息...” + basic / personalized 记忆条目 | 每类最多 6 条；personalized 仍建议必要时调用 `memory_search` 精查。 |
 | 更早历史摘要片段 | `ConversationMemory.build_summary_prompt_fragment()` | vision/omni prompt 末尾追加 | 有压缩摘要时生效 | “以下是更早历史对话的压缩摘要，回答时应保持一致：...” | active messages 超阈值压缩后才出现。 |
 | Active 历史消息 | `messages.jsonl` 中筛选后的 user/assistant 文本 | Vision: `_build_runtime_messages()`；Realtime: `_load_runtime_messages()` 的等价请求视图 | 有历史时生效 | 最近 user/assistant 文本消息 | tool 消息不作为孤立历史回灌，只用于审计和当前工具循环内回填。 |
-| 当前用户输入 | Vision ASR final transcript / Omni PCM stream | Vision 作为最后一条 user message；Omni 在 `model-request.json` 中表达为 `input_audio_stream`，真实 provider 收 PCM | 是 | Vision 看见转写文本；Omni 接收音频流 | Realtime 的 `input_audio_stream` 是排障等价视图，不是实际 Chat Completions payload。 |
+| 当前用户输入 | Vision ASR final_text / Omni PCM stream | Vision 作为最后一条 user message；Omni 在 `model-request.json` 中表达为 `input_audio_stream`，真实 provider 收 PCM | 是 | Vision 看见 ASR 文本；Omni 接收音频流 | Realtime 的 `input_audio_stream` 是排障等价视图，不是实际 Chat Completions payload。 |
 | Tool schema | `ToolGateway.provider_schemas()` | Vision 模型请求 `tools`；Omni `session.update.tools` | 是 | 工具名、description、Pydantic 字段 JSON schema | 只暴露通过 allowlist/denylist/Skill policy 的工具。 |
 | Tool 调用结果回填 | Vision `_provider_tool_result_message()`；Realtime `_submit_tool_result()` | Vision 当前工具循环内作为 `role=tool`；Omni 创建 `function_call_output` | 工具被调用后生效 | 结构化 `ToolResult`：ok/data/message/assets/artifacts/tasks/meta/error | Vision 下一轮模型能直接读到；Realtime 由 provider tool result injection 继续生成。 |
 | Task 启动结果指令 | `TaskRunResult.instructions` | 作为 Task 工具结果的一部分返回给主 Agent | 任务启动后生效 | 例如“请只告诉用户已经开始寻找...不要说已经找到...” | 依赖模型遵守工具结果内容。 |
@@ -57,7 +57,7 @@
 
 | 链路 | system | active history | 当前输入 | tool message | 记录位置 |
 | --- | --- | --- | --- | --- | --- |
-| VisionRealtimeAgentCore | `vision_prompt + memory instructions + memory fragment + summary fragment` | 最近 `max_context_messages` 条 `user/assistant` 文本 | ASR final transcript 作为最后 user message | 当前工具循环内追加 assistant tool_calls 和 tool result；历史 tool 消息不回灌 | `model-request.json` 记录完整等价请求 |
+| VisionRealtimeAgentCore | `vision_prompt + memory instructions + memory fragment + summary fragment` | 最近 `max_context_messages` 条 `user/assistant` 文本 | ASR final_text 作为最后 user message | 当前工具循环内追加 assistant tool_calls 和 tool result；历史 tool 消息不回灌 | `model-request.json` 记录完整等价请求 |
 | OmniRealtimeAgentCore | `omni_prompt + memory instructions + omni tool rule + memory fragment + summary fragment` | 打开 provider session 时读取 `user/assistant` 文本，写入等价 `model-request.messages` | 实际发送 PCM；排障视图是 `input_audio_stream` | provider function_call_output 注入；同时写 `messages.jsonl` 审计 | `model-request.json` 是等价请求视图，真实 payload 是 Omni session/update/audio |
 | 视觉子 Agent | 固定视觉解读 system prompt | 无主 Agent 历史 | `用户问题：...` + image_url | 无 | ToolResult 回到主 Agent |
 | 会话摘要子 Agent | 固定摘要 system prompt | previous_summary | archived_messages JSON | 无 | 摘要文本落盘，未来注入主 Agent |

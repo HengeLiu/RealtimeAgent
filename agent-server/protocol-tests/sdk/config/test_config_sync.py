@@ -251,3 +251,40 @@ agent:
     assert runtime_config.visual_realtime_video_frame_ttl_seconds == 6
     assert runtime_config.visual_realtime_video_max_frames_per_turn == 3
     assert runtime_config.visual_realtime_video_direction == "front"
+
+
+def test_agent_conversation_runtime_defaults_to_legacy_and_can_be_configured(tmp_path) -> None:
+    """测试目标：确认 conversation runtime 配置默认不改变旧链路且可显式读取。
+
+    测试方法：分别加载空配置和包含 `agent.conversation.runtime=conversation` 的
+    server.yaml。
+    预期结果：空配置运行态为 `legacy`；显式配置会进入 RealtimeAgentConfig，
+    但不影响 agent.mode 的解析。
+    """
+
+    default_config_path = tmp_path / "default" / "server.yaml"
+    default_config_path.parent.mkdir()
+    default_config_path.write_text("", encoding="utf-8")
+
+    explicit_config_path = tmp_path / "explicit" / "server.yaml"
+    explicit_config_path.parent.mkdir()
+    explicit_config_path.write_text(
+        """
+agent:
+  mode: omni
+  conversation:
+    runtime: conversation
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    default_loaded = load_yaml_config(default_config_path)
+    default_runtime_config = RealtimeAgentConfig.from_loaded_config(default_loaded)
+    explicit_loaded = load_yaml_config(explicit_config_path)
+    explicit_runtime_config = RealtimeAgentConfig.from_loaded_config(explicit_loaded)
+
+    assert default_loaded.agent.conversation.runtime == "legacy"
+    assert default_runtime_config.conversation_runtime == "legacy"
+    assert explicit_loaded.agent.conversation.runtime == "conversation"
+    assert explicit_runtime_config.conversation_runtime == "conversation"
+    assert explicit_runtime_config.agent_mode == "omni"

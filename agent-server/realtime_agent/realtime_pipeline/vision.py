@@ -220,13 +220,14 @@ class VisionResponseEngine:
 
 
 class VisionRealtimePipeline:
-    """Vision realtime 音频对话 pipeline。
+    """Vision legacy realtime 音频对话 pipeline。
 
-    主要功能：实现 `RealtimeAgentRealtimePipeline` 设计中的 Vision 链路，把现有
-    `VisionRealtimeAgentCore`、ASR、视觉语言模型、TTS 和 OutputService 组合成真实 pipeline 组件。
-    主要方法：对外提供 AgentCore 兼容生命周期方法和 pipeline 专用方法。
+    主要功能：作为 `agent.conversation.runtime=legacy` 时的 Vision 链路兼容包装，
+    把现有 `VisionRealtimeAgentCore`、ASR、视觉语言模型、TTS 和 OutputService
+    组合成旧 pipeline 组件。新能力应优先落在 `conversation/` 目录。
+    主要方法：对外提供 AgentCore 兼容生命周期方法和旧 pipeline 专用方法。
     主要属性：`core/input_boundary/response_engine/output_controller/emitter` 分别对应
-    设计时序图中的真实组件。
+    旧 pipeline 设计时序图中的真实组件。
     """
 
     _LOCAL_ATTRS = {

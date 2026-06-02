@@ -1599,6 +1599,88 @@ class VisionRealtimeAgentCore:
             return
         self._handle_final_transcript(chunk=chunk, transcript=transcript)
 
+    def on_conversation_speech_stopped(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict | None = None,
+    ) -> None:
+        """处理 conversation runtime 已识别的语音结束。
+
+        主要逻辑：ASR-backed SpeechInputBoundary 已经负责提交 ASR 并产出
+        `turn_ended(final_text)`，因此这里只记录统一 speech stopped 状态、刷新用户活动
+        和停止本轮视觉采样，不再调用内部 ASR commit。
+        参数：`user_id/session_id/stream_id` 定位音频会话；`reason` 标识触发来源；
+        `diagnostics` 是 ASR 句边界诊断。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._record_event(
+            "vision.conversation_speech.stopped",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            diagnostics=diagnostics or {},
+        )
+        self._mark_user_activity(user_id, session_id)
+        self._stop_visual_sampler(user_id=user_id, session_id=session_id, reason=reason)
+
+    def on_conversation_asr_text_delta(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        text: str,
+        diagnostics: dict | None = None,
+    ) -> None:
+        """记录 conversation runtime 接收到的 ASR 文本增量。"""
+
+        self._record_event(
+            "vision.conversation_asr_text.delta",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            text=text,
+            diagnostics=diagnostics or {},
+        )
+
+    def handle_conversation_final_text(self, *, chunk: StreamChunk, final_text: str, reason: str) -> None:
+        """用 conversation runtime 产出的最终 ASR 文本触发 Vision 回复。
+
+        主要逻辑：复用旧 `VisionRealtimeAgentCore` 的 echo guard、上下文拼接、工具调用、
+        视觉资产 append、TTS 输出和消息落盘逻辑。该入口只负责把新输入模型的
+        `turn_ended(final_text)` 接回现有核心实现。
+        参数：`chunk` 为本轮最后一片音频；`final_text` 为 ASR 最终文本；`reason` 标识来源。
+        返回值：无。
+        异常情况：模型或输出异常沿用 `_handle_final_transcript()` 内部恢复逻辑。
+        """
+
+        text = final_text.strip()
+        if not text:
+            self._record_event(
+                "vision.conversation_final_text.empty",
+                user_id=chunk.user_id,
+                session_id=chunk.session_id,
+                stream_id=chunk.stream_id,
+                reason=reason,
+            )
+            return
+        self._record_event(
+            "vision.conversation_final_text.received",
+            user_id=chunk.user_id,
+            session_id=chunk.session_id,
+            stream_id=chunk.stream_id,
+            reason=reason,
+            text_chars=len(text),
+        )
+        self._handle_final_transcript(chunk=chunk, transcript=text)
+
     def _start_visual_sampler(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> None:
         """启动 Vision 当前语音 turn 的视觉采样。
 

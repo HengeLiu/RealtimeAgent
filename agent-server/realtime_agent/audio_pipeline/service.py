@@ -321,10 +321,13 @@ class ServerVadProcessor:
 
 
 class AudioPipeline:
-    """服务器音频预处理与路由。
+    """服务器共享音频预处理与路由入口。
 
-    主要功能：只接收 sensor.mic，做最小格式校验后交给当前 Agent Core。
-    主要属性：`agent_core` 可以是 VisionRealtimeAgentCore，也可以是 OmniRealtimeAgentCore。
+    主要功能：只接收 sensor.mic，执行格式校验、重采样、音量诊断和可选本地 VAD，
+    再交给当前 Agent Core 或 conversation runtime。该组件仍是新旧链路共享的
+    上行音频预处理入口，不属于 legacy-only。
+    主要属性：`agent_core` 可以是 legacy realtime pipeline，也可以是新的
+    Omni/VL conversation runtime。
     """
 
     def __init__(

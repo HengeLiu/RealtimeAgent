@@ -21,6 +21,7 @@ from realtime_agent.agent_core.omni import (
 )
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.asset.service import AssetRef
+from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.realtime_pipeline import create_omni_realtime_pipeline
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
@@ -87,6 +88,25 @@ def register_speaker_and_rgb(app: RealtimeAgentApp, connection: Connection, user
     )
 
 
+def mark_output_ready(app: RealtimeAgentApp, connection: Connection, *, user_id: str = "user-001") -> None:
+    """模拟端侧收到 output start 后回 ready，冲刷服务端暂存音频。"""
+
+    for event in list(connection.events):
+        if event.event_name != "stream.output.start.requested":
+            continue
+        app.publish_control_event(
+            Event(
+                event_name="stream.output.ready",
+                user_id=user_id,
+                producer_id=connection.device_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                stream_type=event.stream_type,
+                payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+            )
+        )
+
+
 class FakeRealtimeProvider:
     """测试用 fake realtime provider。
 
@@ -99,6 +119,7 @@ class FakeRealtimeProvider:
         self.callbacks: RealtimeProviderCallbacks | None = None
         self.appended: list[StreamChunk] = []
         self.images: list[tuple[bytes, dict]] = []
+        self.responses: list[dict] = []
         self.cancelled = False
         self.closed = False
 
@@ -143,6 +164,24 @@ class FakeRealtimeProvider:
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         """记录输入提交并模拟 provider 输出完成。"""
         self.emit_done()
+
+    def create_response(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        reason: str,
+        instructions: str | None = None,
+    ) -> None:
+        """记录显式响应创建请求。"""
+        self.responses.append(
+            {
+                "user_id": user_id,
+                "session_id": session_id,
+                "reason": reason,
+                "instructions": instructions,
+            }
+        )
 
     def append_image(self, image: bytes, *, user_id: str, session_id: str, metadata: dict | None = None) -> None:
         """记录追加到 fake provider 的图片。"""
@@ -431,6 +470,7 @@ def test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream(t
 
     assert len(instances) == 1
     assert instances[0].appended[0].final is False
+    mark_output_ready(app, connection)
     assert connection.chunks
     assert connection.chunks[0].stream_type == "actuator.speaker"
     assert connection.chunks[0].sample_rate == 24000
@@ -500,6 +540,7 @@ def test_omni_audio_done_closes_current_output_stream(tmp_path) -> None:
             final=False,
         )
     )
+    mark_output_ready(app, connection)
     instances[0].emit_done()
 
     assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
@@ -532,6 +573,7 @@ def test_realtime_provider_speech_started_publishes_control_event_after_output_f
             final=False,
         )
     )
+    mark_output_ready(app, connection)
     instances[0].emit_done()
     finish_event = next(event for event in connection.events if event.event_name == "stream.output.finish.requested")
     app.publish_control_event(
@@ -1592,6 +1634,7 @@ def test_realtime_mode_uses_builtin_mock_provider_for_local_chain(tmp_path) -> N
         )
     )
 
+    mark_output_ready(app, connection)
     assert connection.chunks
     assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
     assert any(event.event == "session.opened" for event in app.agent_core.events())
@@ -1631,9 +1674,222 @@ def test_realtime_commit_input_forwards_to_provider_and_records_event(tmp_path) 
     )
 
     app.agent_core.commit_input("user-001", handle.session_id, reason="unit_commit")
+    mark_output_ready(app, connection)
 
     assert any(event.event_name == "stream.output.finish.requested" for event in connection.events)
     assert any(event.event == "input.committed" for event in app.agent_core.events())
+
+
+def test_realtime_create_response_forwards_to_provider_and_records_event(tmp_path) -> None:
+    """测试目标：验证 OmniRealtimeAgentCore 支持显式创建 provider 响应。
+
+    测试方法：注入 fake provider，先 append 音频打开会话，再调用
+    `create_response()`。
+    预期结果：fake provider 收到请求，core events 记录 response.create.requested。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+
+    app.agent_core.create_response("user-001", handle.session_id, reason="unit_manual_response", instructions="只回答一句话")
+
+    assert instances[0].responses[-1]["reason"] == "unit_manual_response"
+    assert instances[0].responses[-1]["instructions"] == "只回答一句话"
+    assert any(
+        event.event == "response.create.requested" and event.payload.get("reason") == "unit_manual_response"
+        for event in app.agent_core.events()
+    )
+
+
+def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path) -> None:
+    """测试目标：验证 conversation runtime 下 Omni Manual 最小音频链路可运行。
+
+    测试方法：用 `conversation_runtime=conversation` 和 mock Omni provider 创建 App，
+    输入一片有效语音和足够长静音。
+    预期结果：App 使用 OmniManualConversationRuntime；speech 边界事件下发给端侧；
+    provider 收到 commit 和显式 create_response。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="omni",
+            conversation_runtime="conversation",
+            omni_provider="mock",
+            audio_pipeline_vad_rms_threshold=10,
+            audio_pipeline_vad_silence_timeout_ms=40,
+        )
+    )
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=(1000).to_bytes(2, "little", signed=True) * 320,
+        )
+    )
+    for seq in (1, 2):
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-001",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.mic",
+                seq=seq,
+                payload=b"\x00\x00" * 320,
+            )
+        )
+
+    event_names = [event.event for event in app.agent_core.events()]
+    control_names = [event.event_name for event in connection.events]
+
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    assert app.agent_core.core.omni_config.turn_detection == "manual"
+    assert "input.committed" in event_names
+    assert "response.create.requested" in event_names
+    assert "mock_omni.input.committed" in event_names
+    assert "mock_omni.response.create.requested" in event_names
+    assert "audio.speech.started" in control_names
+    assert "audio.speech.stopped" in control_names
+
+
+def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path) -> None:
+    """测试目标：验证 Omni Manual conversation runtime 能用 turn_started 驱动视觉采样。
+
+    测试方法：启用 conversation runtime 和 mock Omni provider，注入 fake asset
+    service，写入一片有效语音后等待视觉采样线程追加图片，再写入静音结束 turn。
+    预期结果：视觉帧被请求并追加到 provider；turn 结束后执行 commit 和 response
+    create，runs 中能看到 conversation speech 与视觉采样事件。
+    """
+
+    image_path = tmp_path / "conversation-turn-frame.jpg"
+    image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
+    asset_service = FakeAssetService(image_path)
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="omni",
+            conversation_runtime="conversation",
+            omni_provider="mock",
+            audio_pipeline_vad_rms_threshold=10,
+            audio_pipeline_vad_silence_timeout_ms=40,
+            visual_realtime_video_enabled=True,
+            visual_realtime_video_frame_interval_seconds=0.05,
+            visual_realtime_video_frame_timeout_seconds=0.1,
+            visual_realtime_video_frame_ttl_seconds=5,
+        )
+    )
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    app.agent_core.core.asset_service = asset_service  # type: ignore[assignment]
+    connection = Connection("dev-web")
+    register_speaker_and_rgb(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=(1000).to_bytes(2, "little", signed=True) * 320,
+        )
+    )
+    deadline = time.time() + 1
+    while time.time() < deadline and not any(
+        event.event == "mock_omni.input_image.appended" for event in app.agent_core.events()
+    ):
+        time.sleep(0.02)
+    for seq in (1, 2):
+        app.write_input_chunk(
+            StreamChunk(
+                user_id="user-001",
+                session_id=handle.session_id,
+                stream_id=handle.stream_id,
+                stream_type="sensor.mic",
+                seq=seq,
+                payload=b"\x00\x00" * 320,
+            )
+        )
+
+    event_names = [event.event for event in app.agent_core.events()]
+    request_params = asset_service.requests[0]["params"]
+    agent_events = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+
+    assert asset_service.request_count >= 1
+    assert request_params["capture_reason"] == "realtime_video"
+    assert request_params["turn_id"]
+    assert "mock_omni.input_image.appended" in event_names
+    assert "mock_omni.input.committed" in event_names
+    assert "mock_omni.response.create.requested" in event_names
+    assert "omni.conversation_speech.started" in agent_events
+    assert "omni.conversation_speech.stopped" in agent_events
+    assert "omni.visual_sampler.started" in agent_events
+    assert "omni.visual_sampler.stopped" in agent_events
+    assert asset_service.clears
+
+
+def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path) -> None:
+    """测试目标：验证 Omni Manual conversation runtime 不把打断逻辑放进 VAD。
+
+    测试方法：使用 mock Omni provider 写入一片有效语音；`audio_chunk` 先触发
+    provider 音频输出，随后 `turn_started` 由 runtime 判断当前输出状态并发出取消请求。
+    预期结果：App 统一处理 `output_cancel_requested`，最终调用 provider cancel；
+    `VoiceActivityBoundary` 仍只负责 speech 边界。
+    """
+
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="omni",
+            conversation_runtime="conversation",
+            omni_provider="mock",
+            audio_pipeline_vad_rms_threshold=10,
+            audio_pipeline_vad_silence_timeout_ms=40,
+        )
+    )
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=(1000).to_bytes(2, "little", signed=True) * 320,
+        )
+    )
+
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    provider = app.agent_core.core._sessions["user-001"][1]
+    assert isinstance(provider, MockRealtimeProviderAdapter)
+    assert provider.cancelled is True
+    assert any(event.event_name == "audio.speech.started" for event in connection.events)
 
 
 def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(tmp_path) -> None:
@@ -1842,6 +2098,142 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert conversation.responses[0]["instructions"] == "继续回答"
     assert any(record.get("event") == "omni.tool_followup_response.created" for record in records)
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
+
+
+def test_qwen_omni_manual_turn_detection_disables_provider_vad(monkeypatch) -> None:
+    """测试目标：验证 Qwen Omni manual 模式关闭 provider turn detection。
+
+    测试方法：注入 fake DashScope SDK，使用 `turn_detection=manual` 打开 provider。
+    预期结果：session update 中 `enable_turn_detection=False`，且不发送 provider
+    VAD 的类型、阈值、静音窗口和前缀 padding 参数。
+    """
+
+    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+
+    class FakeAudioFormat:
+        """测试用音频格式常量。"""
+
+        PCM_16000HZ_MONO_16BIT = "pcm16le/16000/mono"
+        PCM_24000HZ_MONO_16BIT = "pcm16le/24000/mono"
+
+    class FakeMultiModality:
+        """测试用输出模态常量。"""
+
+        TEXT = "text"
+        AUDIO = "audio"
+
+    class FakeCallback:
+        """测试用 DashScope callback 基类。"""
+
+    class FakeConversation:
+        """测试用 DashScope conversation。"""
+
+        instances: list["FakeConversation"] = []
+
+        def __init__(self, *, model: str, callback: FakeCallback, url: str, api_key: str) -> None:
+            self.model = model
+            self.callback = callback
+            self.session_kwargs: dict = {}
+            FakeConversation.instances.append(self)
+
+        def connect(self) -> None:
+            """模拟连接成功。"""
+
+        def update_session(self, **kwargs) -> None:
+            """记录 session update 参数并回调更新完成。"""
+            self.session_kwargs = kwargs
+            self.callback.on_event({"type": "session.updated"})
+
+        def close(self) -> None:
+            """模拟关闭。"""
+
+    dashscope_module = types.ModuleType("dashscope")
+    dashscope_audio_module = types.ModuleType("dashscope.audio")
+    qwen_omni_module = types.ModuleType("dashscope.audio.qwen_omni")
+    qwen_omni_module.AudioFormat = FakeAudioFormat
+    qwen_omni_module.MultiModality = FakeMultiModality
+    qwen_omni_module.OmniRealtimeCallback = FakeCallback
+    qwen_omni_module.OmniRealtimeConversation = FakeConversation
+    monkeypatch.setitem(sys.modules, "dashscope", dashscope_module)
+    monkeypatch.setitem(sys.modules, "dashscope.audio", dashscope_audio_module)
+    monkeypatch.setitem(sys.modules, "dashscope.audio.qwen_omni", qwen_omni_module)
+    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+
+    records: list[dict] = []
+    callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+    config = RealtimeProviderConfig(
+        provider="qwen",
+        model="fake-omni-manual-test",
+        websocket_url="wss://example.invalid/realtime-manual-test",
+        turn_detection="manual",
+        turn_detection_threshold=0.75,
+        turn_detection_silence_duration_ms=800,
+        turn_detection_prefix_padding_ms=500,
+    )
+
+    provider = QwenOmniRealtimeAdapter(config)
+    provider.open(user_id="user-001", session_id="session-001", callbacks=callbacks)
+
+    session_kwargs = FakeConversation.instances[0].session_kwargs
+    assert session_kwargs["enable_turn_detection"] is False
+    assert "turn_detection_type" not in session_kwargs
+    assert "turn_detection_threshold" not in session_kwargs
+    assert "turn_detection_silence_duration_ms" not in session_kwargs
+    assert "prefix_padding_ms" not in session_kwargs
+    assert any(record.get("event") == "omni.session.opened" and record.get("turn_detection") == "manual" for record in records)
+
+    provider.close(user_id="user-001", reason="test_done")
+
+
+def test_qwen_omni_create_response_records_manual_request() -> None:
+    """测试目标：验证 Qwen Omni adapter 支持显式创建响应。
+
+    测试方法：绕过网络注入 fake conversation，调用 `create_response()`。
+    预期结果：conversation 收到 output_modalities 和 instructions，provider event
+    记录创建请求。
+    """
+
+    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 create_response 调用。"""
+
+        def __init__(self) -> None:
+            self.responses = []
+
+        def create_response(self, **kwargs) -> None:
+            """保存响应创建参数。"""
+            self.responses.append(kwargs)
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider.create_response(
+        user_id="user-001",
+        session_id="session-001",
+        reason="manual_turn_ended",
+        instructions="只回答一句话",
+    )
+
+    assert conversation.responses == [{"output_modalities": ["text", "audio"], "instructions": "只回答一句话"}]
+    assert any(
+        record.get("event") == "omni.response.create.requested" and record.get("reason") == "manual_turn_ended"
+        for record in records
+    )
 
 
 def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> None:

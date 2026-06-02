@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from .case_schema import load_case, load_suite
+from .conversation_regression import DEFAULT_TARGETS, run_conversation_regression
 from .recorder import RecordOptions, record_case
 from .report import write_summary_report
 from .runner import run_case_sync, run_suite_sync
@@ -32,10 +33,18 @@ def main(argv: list[str] | None = None) -> int:
     record_parser.add_argument("--case-id", default="")
     record_parser.add_argument("--name", default="")
     record_parser.add_argument("--out", required=True)
+    regression_parser = subparsers.add_parser("conversation-regression")
+    regression_parser.add_argument("--base-config", default="examples/device_app_demo/agent-server/server.yaml")
+    regression_parser.add_argument("--case", default="examples/dev-support/devices/python-playback-glass/cases/smoke/who_are_you.yaml")
+    regression_parser.add_argument("--work-root", default="runs/python-playback-glass/conversation-regression")
+    regression_parser.add_argument("--report", default="runs/python-playback-glass/conversation-regression/report.json")
+    regression_parser.add_argument("--target", choices=[target.name for target in DEFAULT_TARGETS], action="append", default=[])
     args = parser.parse_args(argv)
     if args.command == "run":
         return _run(args)
-    return _record(args)
+    if args.command == "record":
+        return _record(args)
+    return _conversation_regression(args)
 
 
 def _run(args: argparse.Namespace) -> int:
@@ -68,3 +77,22 @@ def _record(args: argparse.Namespace) -> int:
     data = record_case(RecordOptions(runs_root=Path(args.runs_root), user_id=args.user_id, device_id=args.device_id, session_id=args.session_id, audio=args.audio, images=images, case_id=args.case_id, name=args.name, out=Path(args.out)))
     print(f"recorded case {data['id']} -> {Path(args.out).resolve()}")
     return 0
+
+
+def _conversation_regression(args: argparse.Namespace) -> int:
+    """执行 conversation-regression 子命令。"""
+
+    selected = {name for name in args.target}
+    targets = [target for target in DEFAULT_TARGETS if not selected or target.name in selected]
+    summary = run_conversation_regression(
+        base_config=args.base_config,
+        case_path=args.case,
+        work_root=args.work_root,
+        report_path=args.report,
+        targets=targets,
+    )
+    print(
+        "python-playback-glass conversation-regression: "
+        f"targets={len(targets)} passed={summary['passed']} failed={summary['failed']} report={Path(args.report).expanduser().resolve()}"
+    )
+    return 0 if summary["ok"] else 1

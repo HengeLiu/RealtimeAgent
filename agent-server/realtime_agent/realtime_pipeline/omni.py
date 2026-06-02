@@ -87,20 +87,19 @@ class OmniInputBoundary:
                         "energy_gate": energy_gate,
                     },
                 )
-                if interruptible:
-                    emitter.emit(
-                        "output_cancel_requested",
-                        user_id=user_id,
-                        session_id=session_id,
-                        stream_id=active_stream_id or "",
-                        reason="provider_speech_started",
-                        output_stream_id=active_stream_id,
-                        state=state,
-                        has_active_output=has_active_output,
-                        interruptible_state=interruptible_state,
-                        interruptible=interruptible,
-                        energy_gate=energy_gate,
-                    )
+                emitter.emit(
+                    "output_cancel_requested",
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=active_stream_id or "",
+                    reason="provider_speech_started",
+                    output_stream_id=active_stream_id,
+                    state=state,
+                    has_active_output=has_active_output,
+                    interruptible_state=interruptible_state,
+                    interruptible=interruptible,
+                    energy_gate=energy_gate,
+                )
             elif event == "omni.input_audio_buffer.speech_stopped":
                 emitter.emit(
                     "speech_stopped",
@@ -247,12 +246,13 @@ class OmniResponseEngine:
 
 
 class OmniRealtimePipeline:
-    """Omni realtime 音频对话 pipeline。
+    """Omni legacy realtime 音频对话 pipeline。
 
-    主要功能：实现 `RealtimeAgentRealtimePipeline` 设计中的 Omni 链路，把 Omni provider
-    的 VAD、ASR、LLM、TTS 细节封装在 pipeline 内部，对外只暴露统一事件和统一接口。
+    主要功能：作为 `agent.conversation.runtime=legacy` 时的 Omni 链路兼容包装，
+    把 Omni provider 的 VAD、ASR、LLM、TTS 细节封装在旧 pipeline 内部，对外
+    保留统一事件和统一接口。新 Manual 模式能力应优先落在 `conversation/` 目录。
     主要属性：`core/input_boundary/response_engine/output_controller/emitter` 分别对应
-    设计时序图中的真实组件。
+    旧 pipeline 设计时序图中的真实组件。
     """
 
     _LOCAL_ATTRS = {

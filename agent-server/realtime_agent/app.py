@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
-from realtime_agent.agent_core import AgentCoreRouter
+from realtime_agent.agent_core import LegacyAgentCoreRouter
 from realtime_agent.agent_core.context import PromptRegistry
 from realtime_agent.agent_core.multimodal import MultimodalMessagePolicy
 from realtime_agent.agent_core.providers import AsrProviderConfig, VisionModelProviderConfig
@@ -14,6 +14,11 @@ from realtime_agent.asset import AssetService
 from realtime_agent.audio_pipeline import AudioPipeline, AudioPipelineConfig as RuntimeAudioPipelineConfig
 from realtime_agent.config import RealtimeAgentYamlConfig, load_yaml_config, resolve_config_path
 from realtime_agent.conversation import ConversationMemoryService, LlmMessageSummarizer
+from realtime_agent.conversation.runtime import (
+    ConversationRuntimeBuildConfig,
+    ConversationRuntimeDependencies,
+    build_conversation_runtime,
+)
 from realtime_agent.control import ControlService, DeviceAuthenticator, DeviceConnection
 from realtime_agent.mcp import McpGateway
 from realtime_agent.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService
@@ -141,6 +146,7 @@ class RealtimeAgentConfig:
     output_tool_progress_ttl_seconds: int = 10
     output_endpoint_ack_timeout_seconds: float = 5.0
     agent_mode: str = "omni"
+    conversation_runtime: str = "legacy"
     omni_provider: str = "qwen"
     omni_model: str = "qwen3.5-omni-plus-realtime"
     omni_turn_detection: str = "provider"
@@ -295,6 +301,7 @@ class RealtimeAgentConfig:
             output_tool_progress_ttl_seconds=loaded.output.tool_progress_ttl_seconds,
             output_endpoint_ack_timeout_seconds=loaded.output.endpoint_ack_timeout_seconds,
             agent_mode=_normalize_agent_mode(loaded.agent.mode),
+            conversation_runtime=str(loaded.agent.conversation.runtime or "legacy"),
             omni_provider=omni.provider,
             omni_model=omni.model,
             omni_turn_detection=omni.turn_detection,
@@ -513,76 +520,113 @@ class RealtimeAgentApp:
             recorder=self.recorder,
             skill_service=self.skill_service,
         )
-        self.agent_core = AgentCoreRouter.build(
-            mode=_normalize_agent_mode(self.config.agent_mode),
-            control_service=self.control_service,
-            asset_service=self.asset_service,
-            output_service=self.output_service,
-            recorder=self.recorder,
-            omni_config=RealtimeProviderConfig(
-                provider=self.config.omni_provider,
-                model=self.config.omni_model,
-                turn_detection=self.config.omni_turn_detection,
-                turn_detection_threshold=self.config.omni_turn_detection_threshold,
-                turn_detection_silence_duration_ms=self.config.omni_turn_detection_silence_duration_ms,
-                turn_detection_prefix_padding_ms=self.config.omni_turn_detection_prefix_padding_ms,
-                voice=self.config.omni_voice,
-                prompt=getattr(self.config, "omni_prompt", "你是中文语音助手。请用简短口语回答用户。"),
-                session_idle_timeout_seconds=self.config.omni_session_idle_timeout_seconds,
-                max_concurrent_sessions=self.config.omni_max_concurrent_sessions,
+        omni_config = self._build_omni_provider_config()
+        if self.config.conversation_runtime == "conversation":
+            self.agent_core = build_conversation_runtime(
+                config=ConversationRuntimeBuildConfig(
+                    agent_mode=_normalize_agent_mode(self.config.agent_mode),
+                    omni_config=omni_config,
+                    asr_config=AsrProviderConfig(
+                        provider=self.config.asr_provider,
+                        model=self.config.asr_model,
+                        allow_mock_fallback=self.config.allow_mock_fallback,
+                        realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
+                        max_sentence_silence_ms=self.config.asr_max_sentence_silence_ms,
+                        disfluency_removal_enabled=self.config.asr_disfluency_removal_enabled,
+                        max_retries=self.config.provider_max_retries,
+                    ),
+                    vision_model_config=VisionModelProviderConfig(
+                        provider=self.config.vision_provider,
+                        model=self.config.vision_model,
+                        prompt=self.config.vision_prompt,
+                        allow_mock_fallback=self.config.allow_mock_fallback,
+                        request_timeout_seconds=self.config.provider_request_timeout_seconds,
+                        max_retries=self.config.provider_max_retries,
+                    ),
+                    vision_multimodal_enabled=self.config.vision_multimodal_enabled,
+                    vision_multimodal_attach_visual_assets=self.config.vision_multimodal_attach_visual_assets,
+                    vision_multimodal_max_images_per_turn=self.config.vision_multimodal_max_images_per_turn,
+                    vision_multimodal_image_freshness_seconds=self.config.vision_multimodal_image_freshness_seconds,
+                    vision_multimodal_max_image_base64_bytes=self.config.vision_multimodal_max_image_base64_bytes,
+                    vision_multimodal_max_capture_photo_calls_per_turn=self.config.vision_multimodal_max_capture_photo_calls_per_turn,
+                    vision_multimodal_video_enabled=self.config.vision_multimodal_video_enabled,
+                    vision_multimodal_video_prefer_native_video=self.config.vision_multimodal_video_prefer_native_video,
+                    vision_multimodal_video_max_inline_bytes=self.config.vision_multimodal_video_max_inline_bytes,
+                    vision_multimodal_video_max_duration_seconds=self.config.vision_multimodal_video_max_duration_seconds,
+                    vision_multimodal_video_sample_fps=self.config.vision_multimodal_video_sample_fps,
+                    vision_multimodal_video_max_frames=self.config.vision_multimodal_video_max_frames,
+                    vision_multimodal_video_frame_jpeg_quality=self.config.vision_multimodal_video_frame_jpeg_quality,
+                    max_context_messages=self.config.vision_max_context_messages,
+                    audio_vad_rms_threshold=self.config.audio_pipeline_vad_rms_threshold,
+                    audio_vad_silence_timeout_ms=self.config.audio_pipeline_vad_silence_timeout_ms,
+                    visual_realtime_video_enabled=self.config.visual_realtime_video_enabled,
+                    visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
+                    visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
+                    visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
+                    visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
+                    visual_direction=self.config.visual_realtime_video_direction,
+                ),
+                dependencies=ConversationRuntimeDependencies(
+                    control_service=self.control_service,
+                    asset_service=self.asset_service,
+                    output_service=self.output_service,
+                    recorder=self.recorder,
+                    tool_gateway=self.tool_gateway,
+                    memory_service=self.memory_service,
+                    on_user_activity=self._mark_user_audio_activity,
+                ),
+            )
+        else:
+            self.agent_core = LegacyAgentCoreRouter.build(
+                mode=_normalize_agent_mode(self.config.agent_mode),
+                control_service=self.control_service,
+                asset_service=self.asset_service,
+                output_service=self.output_service,
+                recorder=self.recorder,
+                omni_config=omni_config,
+                asr_config=AsrProviderConfig(
+                    provider=self.config.asr_provider,
+                    model=self.config.asr_model,
+                    allow_mock_fallback=self.config.allow_mock_fallback,
+                    realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
+                    max_sentence_silence_ms=self.config.asr_max_sentence_silence_ms,
+                    disfluency_removal_enabled=self.config.asr_disfluency_removal_enabled,
+                    max_retries=self.config.provider_max_retries,
+                ),
+                vision_model_config=VisionModelProviderConfig(
+                    provider=self.config.vision_provider,
+                    model=self.config.vision_model,
+                    prompt=self.config.vision_prompt,
+                    allow_mock_fallback=self.config.allow_mock_fallback,
+                    request_timeout_seconds=self.config.provider_request_timeout_seconds,
+                    max_retries=self.config.provider_max_retries,
+                ),
+                multimodal_policy=MultimodalMessagePolicy(
+                    enabled=self.config.vision_multimodal_enabled,
+                    attach_visual_assets=self.config.vision_multimodal_attach_visual_assets,
+                    max_images_per_turn=self.config.vision_multimodal_max_images_per_turn,
+                    image_freshness_seconds=self.config.vision_multimodal_image_freshness_seconds,
+                    max_image_base64_bytes=self.config.vision_multimodal_max_image_base64_bytes,
+                    max_capture_photo_calls_per_turn=self.config.vision_multimodal_max_capture_photo_calls_per_turn,
+                    video_enabled=self.config.vision_multimodal_video_enabled,
+                    video_prefer_native_video=self.config.vision_multimodal_video_prefer_native_video,
+                    video_max_inline_bytes=self.config.vision_multimodal_video_max_inline_bytes,
+                    video_max_duration_seconds=self.config.vision_multimodal_video_max_duration_seconds,
+                    video_sample_fps=self.config.vision_multimodal_video_sample_fps,
+                    video_max_frames=self.config.vision_multimodal_video_max_frames,
+                    video_frame_jpeg_quality=self.config.vision_multimodal_video_frame_jpeg_quality,
+                ),
+                max_context_messages=self.config.vision_max_context_messages,
+                tool_gateway=self.tool_gateway,
+                memory_service=self.memory_service,
+                on_user_activity=self._mark_user_audio_activity,
                 realtime_video_enabled=self.config.visual_realtime_video_enabled,
                 visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
                 visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
                 visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
                 visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
                 visual_direction=self.config.visual_realtime_video_direction,
-                provider_speech_min_rms=self.config.audio_pipeline_vad_rms_threshold
-                if self.config.audio_pipeline_vad == "provider"
-                else 0,
-            ),
-            asr_config=AsrProviderConfig(
-                provider=self.config.asr_provider,
-                model=self.config.asr_model,
-                allow_mock_fallback=self.config.allow_mock_fallback,
-                realtime_timeout_seconds=self.config.provider_request_timeout_seconds,
-                max_sentence_silence_ms=self.config.asr_max_sentence_silence_ms,
-                disfluency_removal_enabled=self.config.asr_disfluency_removal_enabled,
-                max_retries=self.config.provider_max_retries,
-            ),
-            vision_model_config=VisionModelProviderConfig(
-                provider=self.config.vision_provider,
-                model=self.config.vision_model,
-                prompt=self.config.vision_prompt,
-                allow_mock_fallback=self.config.allow_mock_fallback,
-                request_timeout_seconds=self.config.provider_request_timeout_seconds,
-                max_retries=self.config.provider_max_retries,
-            ),
-            multimodal_policy=MultimodalMessagePolicy(
-                enabled=self.config.vision_multimodal_enabled,
-                attach_visual_assets=self.config.vision_multimodal_attach_visual_assets,
-                max_images_per_turn=self.config.vision_multimodal_max_images_per_turn,
-                image_freshness_seconds=self.config.vision_multimodal_image_freshness_seconds,
-                max_image_base64_bytes=self.config.vision_multimodal_max_image_base64_bytes,
-                max_capture_photo_calls_per_turn=self.config.vision_multimodal_max_capture_photo_calls_per_turn,
-                video_enabled=self.config.vision_multimodal_video_enabled,
-                video_prefer_native_video=self.config.vision_multimodal_video_prefer_native_video,
-                video_max_inline_bytes=self.config.vision_multimodal_video_max_inline_bytes,
-                video_max_duration_seconds=self.config.vision_multimodal_video_max_duration_seconds,
-                video_sample_fps=self.config.vision_multimodal_video_sample_fps,
-                video_max_frames=self.config.vision_multimodal_video_max_frames,
-                video_frame_jpeg_quality=self.config.vision_multimodal_video_frame_jpeg_quality,
-            ),
-            max_context_messages=self.config.vision_max_context_messages,
-            tool_gateway=self.tool_gateway,
-            memory_service=self.memory_service,
-            on_user_activity=self._mark_user_audio_activity,
-            realtime_video_enabled=self.config.visual_realtime_video_enabled,
-            visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
-            visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
-            visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
-            visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
-            visual_direction=self.config.visual_realtime_video_direction,
-        )
+            )
         if hasattr(self.agent_core, "bind_tool_gateway"):
             self.agent_core.bind_tool_gateway(self.tool_gateway)
         if hasattr(self.agent_core, "bind_user_activity_callback"):
@@ -607,6 +651,37 @@ class RealtimeAgentApp:
         self._active_device_by_user: dict[str, str] = {}
         self._device_dialogs_by_user: dict[str, DeviceDialogState] = {}
         self.output_service.add_output_finished_listener(self._handle_output_finished)
+
+    def _build_omni_provider_config(self) -> RealtimeProviderConfig:
+        """构造 Omni Realtime provider 配置。
+
+        主要逻辑：集中生成 legacy pipeline 和 conversation runtime 共用的 provider
+        配置，避免两条装配路径字段不一致。
+        返回值：`RealtimeProviderConfig`。
+        异常情况：无。
+        """
+
+        return RealtimeProviderConfig(
+            provider=self.config.omni_provider,
+            model=self.config.omni_model,
+            turn_detection=self.config.omni_turn_detection,
+            turn_detection_threshold=self.config.omni_turn_detection_threshold,
+            turn_detection_silence_duration_ms=self.config.omni_turn_detection_silence_duration_ms,
+            turn_detection_prefix_padding_ms=self.config.omni_turn_detection_prefix_padding_ms,
+            voice=self.config.omni_voice,
+            prompt=getattr(self.config, "omni_prompt", "你是中文语音助手。请用简短口语回答用户。"),
+            session_idle_timeout_seconds=self.config.omni_session_idle_timeout_seconds,
+            max_concurrent_sessions=self.config.omni_max_concurrent_sessions,
+            realtime_video_enabled=self.config.visual_realtime_video_enabled,
+            visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
+            visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,
+            visual_frame_ttl_seconds=self.config.visual_realtime_video_frame_ttl_seconds,
+            visual_max_frames_per_turn=self.config.visual_realtime_video_max_frames_per_turn,
+            visual_direction=self.config.visual_realtime_video_direction,
+            provider_speech_min_rms=self.config.audio_pipeline_vad_rms_threshold
+            if self.config.audio_pipeline_vad == "provider"
+            else 0,
+        )
 
     def _extension_tool_enabled(self, tool_name: str) -> bool:
         """判断 C 线内置扩展工具是否启用。"""

@@ -190,12 +190,24 @@ class AgentVisualConfig:
 
 
 @dataclass(frozen=True)
+class AgentConversationConfig:
+    """conversation runtime 配置。
+
+    主要功能：控制音视频对话链路使用旧 runtime 还是新 conversation runtime。
+    主要属性：`runtime` 默认为 `legacy`，保证新增配置不改变现有运行行为。
+    """
+
+    runtime: str = "legacy"
+
+
+@dataclass(frozen=True)
 class AgentConfig:
     mode: str = "omni"
     custom_core: str = ""
     omni: AgentOmniConfig = field(default_factory=AgentOmniConfig)
     vision: AgentVisionConfig = field(default_factory=AgentVisionConfig)
     visual: AgentVisualConfig = field(default_factory=AgentVisualConfig)
+    conversation: AgentConversationConfig = field(default_factory=AgentConversationConfig)
 
 
 @dataclass(frozen=True)
@@ -336,6 +348,7 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
     vision_multimodal = _vision_multimodal_config(vision.pop("multimodal", {}))
     omni = dict(agent_data.get("omni", {}))
     visual = _agent_visual_config(agent_data.get("visual", {}))
+    conversation = AgentConversationConfig(**_known(agent_data.get("conversation", {}), {"runtime"}))
     agent_mode = str(agent_data.get("mode") or "").strip() or "omni"
     return RealtimeAgentYamlConfig(
         app_name=str(data.get("app_name") or data.get("app-name") or ""),
@@ -354,6 +367,7 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
             omni=AgentOmniConfig(**omni),
             vision=AgentVisionConfig(**vision, multimodal=vision_multimodal),
             visual=visual,
+            conversation=conversation,
         ),
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),

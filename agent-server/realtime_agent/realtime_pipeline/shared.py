@@ -87,10 +87,12 @@ class PipelineEventEmitter:
 
 
 class RealtimeAudioNormalizer:
-    """Realtime pipeline 内部音频归一化组件。
+    """legacy realtime pipeline 内部音频归一化组件。
 
-    主要功能：提供设计文档中的 `RealtimeAudioNormalizer` 真实实现，复用现有格式校验、
-    重采样和音量探针；不执行 VAD，也不决定用户 turn boundary。
+    主要功能：供 `realtime_pipeline/vision.py` 和 `realtime_pipeline/omni.py` 的
+    legacy 包装使用，复用现有格式校验、重采样和音量探针；不执行 VAD，也不决定
+    用户 turn boundary。新 conversation runtime 当前通过外层 `AudioPipeline` 完成
+    上行音频预处理。
     主要方法：`process()` 返回归一化后的音频片和诊断信息。
     主要属性：`processors` 是实际执行的音频处理器列表。
     """

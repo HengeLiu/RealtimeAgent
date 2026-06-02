@@ -9,12 +9,13 @@ from realtime_agent.realtime_pipeline import RealtimeOutputController, VisionRea
 
 
 @dataclass
-class AgentCoreRouter:
-    """Agent Core 路由器。
+class LegacyAgentCoreRouter:
+    """legacy Agent Core 路由器。
 
     主要功能：
-    1. 根据 `agent.mode` 选择内置 Agent Core 实现。
+    1. 根据 `agent.mode` 选择旧 Vision/Omni realtime pipeline 实现。
     2. 允许业务或测试注册 custom factory，而不改 SDK 内部 core。
+    3. 作为 `agent.conversation.runtime=legacy` 的回退入口。
 
     主要方法：
     1. `register_factory()`：注册自定义 core 工厂。
@@ -87,12 +88,15 @@ class AgentCoreRouter:
     def build(*, mode: str, custom_factories: dict[str, Callable[..., AgentCore]] | None = None, **kwargs) -> AgentCore:
         """历史调用方式的静态构建入口。"""
 
-        router = AgentCoreRouter()
+        router = LegacyAgentCoreRouter()
         for name, factory in dict(custom_factories or {}).items():
             router.register_factory(name, factory)
         if mode == "custom" and not custom_factories:
             raise NotImplementedError("agent.mode=custom requires an app-module custom core factory")
         return router.create(mode=mode, **kwargs)
+
+
+AgentCoreRouter = LegacyAgentCoreRouter
 
 
 def _vision_kwargs(kwargs: dict) -> dict:

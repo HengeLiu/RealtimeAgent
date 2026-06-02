@@ -1,5 +1,6 @@
 import json
 import asyncio
+import time
 from threading import Event as ThreadEvent
 from pathlib import Path
 
@@ -8,6 +9,7 @@ from realtime_agent.agent_core import VisionRealtimeAgentCore
 from realtime_agent.agent_core.providers import TranscriptEvent
 from realtime_agent.audio_pipeline import AudioPipeline, FormatNormalizer
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.conversation.core.vision import VisionConversationRuntime
 from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
 from realtime_agent.server import NetworkDeviceConnection
 
@@ -545,6 +547,126 @@ def test_vision_agent_core_final_mic_chunk_emits_output() -> None:
 
     assert any(event.event_name == "stream.output.start.requested" for event in connection.events)
     assert connection.chunks
+
+
+def test_vision_conversation_runtime_uses_asr_sentence_end_for_response(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 VL conversation runtime 使用 ASR 句边界触发 VLM 和 TTS。
+
+    测试方法：配置 `conversation_runtime=conversation` 和 vision 模式，替换 ASR provider
+    让一片非 final 音频返回 sentence_begin、partial、sentence_end/final，并注册自动
+    ready 的扬声器端侧。
+    预期结果：App 使用 VisionConversationRuntime；runs 记录 speech started/stopped；
+    用户 final text 只写入一次 messages，模型响应进入 TTS 输出。
+    """
+
+    class SentenceAsrProvider:
+        provider_name = "sentence-asr"
+        model = "sentence-asr"
+
+        def __init__(self) -> None:
+            self.emitted = False
+
+        def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+            if self.emitted:
+                return []
+            self.emitted = True
+            return [
+                TranscriptEvent(text="", sentence_id=7, sentence_begin=True, begin_time_ms=0),
+                TranscriptEvent(text="你是谁", sentence_id=7),
+                TranscriptEvent(text="你是谁", final=True, sentence_id=7, sentence_end=True, end_time_ms=300),
+            ]
+
+        def cancel(self) -> None:
+            self.emitted = True
+
+    monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (SentenceAsrProvider(), None))
+    app = RealtimeAgentApp(
+        RealtimeAgentConfig(
+            runs_root=str(tmp_path / "runs"),
+            agent_mode="vision",
+            conversation_runtime="conversation",
+            asr_provider="sentence-asr",
+            asr_model="sentence-asr",
+        )
+    )
+
+    class Connection:
+        device_id = "dev-vl-conversation"
+
+        def __init__(self) -> None:
+            self.events = []
+            self.chunks = []
+
+        def push_event(self, event: Event) -> None:
+            self.events.append(event)
+            if event.event_name == "stream.output.start.requested":
+                app.publish_control_event(
+                    Event(
+                        event_name="stream.output.ready",
+                        user_id=event.user_id,
+                        producer_id=self.device_id,
+                        session_id=event.session_id,
+                        stream_id=event.stream_id,
+                        stream_type=event.stream_type,
+                        payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+                    )
+                )
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            self.chunks.append(chunk)
+
+    connection = Connection()
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-vl-conversation",
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {
+                    "sensors": [{"type": "mic"}],
+                    "actuators": [{"type": "speaker"}],
+                },
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    handle = app.open_input_stream(user_id="user-vl-conversation", producer_id=connection.device_id)
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-vl-conversation",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x01\x00" * 320,
+            final=False,
+        )
+    )
+    agent_events_path = tmp_path / "runs" / "user-vl-conversation" / handle.session_id / "agent-events.jsonl"
+    deadline = time.time() + 1
+    while time.time() < deadline:
+        agent_events = agent_events_path.read_text(encoding="utf-8") if agent_events_path.exists() else ""
+        if "response.done" in agent_events:
+            break
+        time.sleep(0.02)
+
+    messages_path = app.recorder.session_file(handle.session_id, "messages.jsonl")
+    messages = [json.loads(line) for line in messages_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    user_messages = [message["content"] for message in messages if message["role"] == "user"]
+    events_path = tmp_path / "runs" / "user-vl-conversation" / handle.session_id / "events.jsonl"
+    event_records = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    event_names = [event["event_name"] for event in event_records]
+    agent_events = agent_events_path.read_text(encoding="utf-8")
+
+    assert isinstance(app.agent_core, VisionConversationRuntime)
+    assert "audio.speech.started" in event_names
+    assert "audio.speech.stopped" in event_names
+    assert user_messages == ["你是谁"]
+    assert "assistant_audio.delta" in agent_events
 
 
 def test_vision_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_path) -> None:

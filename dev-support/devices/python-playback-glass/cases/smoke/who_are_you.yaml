@@ -12,6 +12,10 @@ inputs:
     path: testdata/audio-sample/你是谁呀.wav
     mode: realtime_chunks
     chunk_ms: 20
+  sensors:
+    sensor.rgb:
+      fixtures:
+        - path: testdata/image-sample/刚子看电脑.jpeg
 
 expect:
   events:
@@ -22,7 +26,11 @@ expect:
   streams:
     includes:
       - sensor.mic
+      - sensor.rgb
       - actuator.speaker
+  assets:
+    sensor.rgb:
+      min_count: 1
   output:
     min_audio_chunks: 1
   errors:

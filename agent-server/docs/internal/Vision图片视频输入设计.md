@@ -328,7 +328,7 @@ ContextCompiler 继续负责 system prompt、历史消息、工具 schema、memo
 多模态拼接主要发生在工具返回后的同轮 follow-up 阶段：
 
 ```text
-ASR final transcript
+ASR final_text
   -> ContextCompiler.compile(...)
   -> provider.stream_messages(messages=[system, history..., current text user], tools=[capture_photo...])
   -> provider returns capture_photo tool_call

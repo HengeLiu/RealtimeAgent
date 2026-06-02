@@ -112,11 +112,13 @@ async def run_case(case: PlaybackCase, *, server_url: str, runs_root: str | Path
 async def _drain_stream(client: PlaybackProtocolClient, *, stream_id: str) -> None:
     """后台接收 speaker chunk，直到超时。"""
 
+    timeout = 8
     while True:
         try:
-            chunk = await client.receive_stream_chunk(timeout=1)
+            chunk = await client.receive_stream_chunk(timeout=timeout)
         except Exception:
             return
+        timeout = 1
         if chunk.get("stream_id") == stream_id and chunk.get("final"):
             await client.close_output(stream_id)
             return

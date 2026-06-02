@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ast
-import importlib
 import re
 from pathlib import Path
 import tomllib
@@ -10,7 +8,9 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-ARCHITECTURE_DOC = ROOT / "agent-server" / "docs" / "internal" / "agent-server-architecture-design.md"
+ARCHITECTURE_DOC = ROOT / "agent-server" / "docs" / "internal" / "realtime-agent抽象架构设计.md"
+CONVERSATION_PLAN_DOC = ROOT / "agent-server" / "docs" / "internal" / "conversation音视频链路重构实施计划.md"
+SERVER_DOCS_README = ROOT / "agent-server" / "docs" / "README.md"
 NEXT_PLAN_DOC = ROOT / "docs" / "next-stage-parallel-development-plan.md"
 CLI_PATTERN = re.compile(
     r"\brealtime-agent\.(?:server|config|dev|playback|phone|sdk|web|ios|esp32|mock)[a-z0-9.-]*"
@@ -26,38 +26,36 @@ def _entry_points() -> set[str]:
     return set(data["project"]["scripts"])
 
 
-def test_architecture_doc_has_current_status_matrix() -> None:
-    """测试目标：确认架构文档把已实现、部分实现和未实现能力分开说明。
+def test_architecture_doc_defines_current_abstraction_layers() -> None:
+    """测试目标：确认当前架构文档以抽象层级作为权威入口。
 
-    测试方法：读取架构文档的状态矩阵，检查核心模块和状态标记。
-    预期结果：开发者不会把 roadmap 能力误判成当前可用能力。
+    测试方法：读取 `realtime-agent抽象架构设计.md`，检查六层分层和核心抽象名。
+    预期结果：开发者从抽象概念进入设计，而不是继续依赖旧 router/pipeline 文档。
     """
 
     document = _read(ARCHITECTURE_DOC)
     required_terms = [
-        "Control Service",
-        "Stream Service",
-        "Audio Pipeline",
-        "Asset Service",
-        "Agent Core",
-        "Output Service",
-        "Task Engine",
+        "Transport Layer",
+        "Input Layer",
+        "Agent Layer",
+        "Capability Layer",
+        "Output Layer",
+        "Observability & Config Layer",
+        "AgentCoreABC",
+        "AgentLoopABC",
+        "SpeechInputDelta",
+        "AgentOutputDelta",
         "ToolGateway",
     ]
     for term in required_terms:
         assert term in document
 
-    assert re.search(r"\|\s*Control Service\s*\|\s*已实现\s*\|", document)
-    assert re.search(r"\|\s*Stream Service\s*\|\s*已实现\s*\|", document)
-    assert re.search(r"\|\s*Audio Pipeline\s*\|\s*部分实现\s*\|", document)
-    assert re.search(r"\|\s*Memory / Skill / MCP\s*\|\s*已实现\s*\|", document)
-
 
 def test_architecture_and_readme_cli_commands_are_real_or_roadmap() -> None:
     """测试目标：确认文档中的 CLI 命令不和 pyproject entry point 分叉。
 
-    测试方法：扫描 README 和架构文档里的 `realtime-agent.*` 命令；README 必须全是
-    当前入口，架构文档里的未来命令必须在上下文窗口中标注 roadmap。
+    测试方法：扫描 README、抽象架构文档和实施计划里的 `realtime-agent.*` 命令；
+    README 必须全是当前入口，未来命令必须在上下文窗口中标注 roadmap。
     预期结果：开发者复制 README 命令时不会遇到不存在的入口。
     """
 
@@ -67,7 +65,7 @@ def test_architecture_and_readme_cli_commands_are_real_or_roadmap() -> None:
 
     roadmap_markers = ("roadmap", "后续目标", "未实现", "未来", "建议", "下一阶段", "可选增强")
     offenders: list[str] = []
-    docs_to_scan = [ARCHITECTURE_DOC]
+    docs_to_scan = [ARCHITECTURE_DOC, CONVERSATION_PLAN_DOC]
     if NEXT_PLAN_DOC.exists():
         docs_to_scan.append(NEXT_PLAN_DOC)
     for path in docs_to_scan:
@@ -82,39 +80,50 @@ def test_architecture_and_readme_cli_commands_are_real_or_roadmap() -> None:
     assert offenders == []
 
 
-def test_documented_public_classes_are_importable() -> None:
-    """测试目标：确认文档列出的公开扩展类可以从 `realtime_agent` 顶层导入。
+def test_conversation_plan_lists_final_acceptance_commands() -> None:
+    """测试目标：确认 conversation 实施计划包含最终验收命令。
 
-    测试方法：读取架构文档中的 public API 代码块并逐项 `hasattr(realtime_agent, name)`。
-    预期结果：迁移样板和业务开发文档不依赖内部模块路径。
+    测试方法：读取实施计划的最终验收章节，检查 unit/protocol/provider、回归入口
+    和 diff 检查命令。
+    预期结果：计划不是只描述阶段，而是能指导完成最终验收。
     """
 
-    document = _read(ARCHITECTURE_DOC)
-    match = re.search(r"```python\nfrom realtime_agent import (?P<body>.*?)\n```", document, flags=re.S)
-    assert match is not None
-    names = [
-        item.strip()
-        for item in match.group("body").replace("\n", " ").split(",")
-        if item.strip()
-    ]
-    realtime_agent = importlib.import_module("realtime_agent")
-    missing = [name for name in names if not hasattr(realtime_agent, name)]
-    assert missing == []
+    document = _read(CONVERSATION_PLAN_DOC)
+    section = document.split("最终验收命令：", 1)[1].split("\n## ", 1)[0]
+    for command in [
+        "uv run python -m pytest agent-server/unit-tests -q",
+        "uv run python -m pytest agent-server/protocol-tests -q",
+        "uv run python -m pytest agent-server/model-provider-tests -q",
+        "uv run python -m pytest examples/dev-support/unit-tests/python_playback_glass -q",
+        "uv run python -m realtime_agent_python_playback_glass conversation-regression",
+        "git diff --check",
+    ]:
+        assert command in section
 
 
-def test_implemented_status_items_have_acceptance_backing() -> None:
-    """测试目标：确认架构文档标记为已实现的核心能力有测试或契约支撑。
+def test_server_docs_readme_does_not_index_deprecated_audio_video_docs() -> None:
+    """测试目标：确认 server docs 索引不再指向过期音视频链路文档。
 
-    测试方法：读取文档中的“已实现能力验收索引”表，检查每条引用的测试或契约文件存在。
-    预期结果：文档状态更新必须和自动验收材料同步。
+    测试方法：读取 `agent-server/docs/README.md`，检查只索引新的抽象、统一链路
+    和实施计划，不再索引已移动到 deprecated 的重复文档。
+    预期结果：维护者从 README 进入新文档体系。
     """
 
-    document = _read(ARCHITECTURE_DOC)
-    section = document.split("### 3.6 已实现能力验收索引", 1)[1].split("\n## ", 1)[0]
-    references = re.findall(r"`([^`]*(?:tests|testdata|examples)[^`]*)`", section)
-    assert references
-    missing = [ref for ref in references if not (ROOT / ref).exists()]
-    assert missing == []
+    readme = _read(SERVER_DOCS_README)
+    for expected in [
+        "internal/realtime-agent抽象架构设计.md",
+        "internal/音视频对话统一链路设计.md",
+        "internal/conversation音视频链路重构实施计划.md",
+    ]:
+        assert expected in readme
+    for deprecated_name in [
+        "实时音频Pipeline设计.md",
+        "Vision实时语音链路设计.md",
+        "Vision实时服务器侧标准.md",
+        "AgentCore设计.md",
+        "服务端SDK总体架构设计.md",
+    ]:
+        assert deprecated_name not in readme
 
 
 def test_next_stage_h_plan_lists_same_contract_categories() -> None:

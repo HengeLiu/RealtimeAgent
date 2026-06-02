@@ -49,7 +49,7 @@ def test_dashscope_asr_provider_transcribes_expected_sample() -> None:
             provider="dashscope",
             model=model,
             allow_mock_fallback=False,
-            realtime_timeout_seconds=2,
+            realtime_timeout_seconds=float(os.getenv("REALTIME_AGENT_ASR_TIMEOUT", "5")),
         )
     )
 
@@ -198,7 +198,7 @@ def test_dashscope_compatible_vision_model_tool_call_smoke() -> None:
     """
 
     model = os.getenv("REALTIME_AGENT_VISION_MODEL", "qwen-plus")
-    timeout_seconds = 15
+    timeout_seconds = float(os.getenv("REALTIME_AGENT_VISION_TOOL_TIMEOUT", "30"))
     max_retries = 1
     provider, downgrade = build_vision_model(
         VisionModelProviderConfig(
@@ -270,9 +270,10 @@ def test_dashscope_compatible_vision_model_tool_call_smoke() -> None:
 
 
 def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
-    """测试目标：验证 Omni Realtime provider 真实会话最小 smoke。
+    """测试目标：验证 Omni Manual Realtime provider 真实会话最小 smoke。
 
-    测试方法：用 DashScope SDK 打开 Qwen Omni realtime 会话，追加一段固定 PCM 并等待音频输出。
+    测试方法：用 DashScope SDK 打开 Qwen Omni realtime manual turn detection
+    会话，追加一段固定 PCM，显式提交输入并创建响应。
     预期结果：至少记录 provider 事件和输出音频；失败报告 provider、model、endpoint 和 timeout。
     """
 
@@ -283,6 +284,7 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
         provider="qwen",
         model=os.getenv("REALTIME_AGENT_REALTIME_MODEL", "qwen3.5-omni-plus-realtime"),
         voice=os.getenv("REALTIME_AGENT_REALTIME_VOICE", "Tina"),
+        turn_detection="manual",
     )
     provider = QwenOmniRealtimeAdapter(config)
     callbacks = RealtimeProviderCallbacks(
@@ -309,6 +311,7 @@ def test_qwen_omni_realtime_provider_smoke_opens_and_closes_session() -> None:
                 final=True,
             )
         )
+        provider.create_response(user_id="integration-user", session_id="integration-omni", reason="manual_smoke")
         deadline = time.monotonic() + float(os.getenv("REALTIME_AGENT_REALTIME_SMOKE_TIMEOUT", "12"))
         while time.monotonic() < deadline and not audio_outputs and not _has_provider_error(records):
             time.sleep(0.25)

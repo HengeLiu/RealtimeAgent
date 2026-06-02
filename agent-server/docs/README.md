@@ -14,6 +14,9 @@
 
 内部文档只作为维护 `agent-server/realtime_agent` 时的设计参考；开发和联调以 How-to 与 Reference 为准。
 
+- [realtime-agent 抽象架构设计](internal/realtime-agent抽象架构设计.md)
+- [音视频对话统一链路设计](internal/音视频对话统一链路设计.md)
+- [conversation 音视频链路重构实施计划](internal/conversation音视频链路重构实施计划.md)
 - [SDK 照片资产处理链路设计](internal/照片资产处理链路设计.md)
 - [SDK 照片资产处理链路开发计划](internal/照片资产处理链路实施计划.md)
 - [Vision 图片和视频输入设计](internal/Vision图片视频输入设计.md)

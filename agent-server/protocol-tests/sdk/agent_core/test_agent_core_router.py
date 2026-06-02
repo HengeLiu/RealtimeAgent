@@ -6,7 +6,7 @@ import pytest
 
 from realtime_agent.agent_core.base import AgentCoreEvent
 from realtime_agent.agent_core.providers import OpenAICompatibleVisionModelAdapter, TranscriptEvent
-from realtime_agent.agent_core.router import AgentCoreRouter
+from realtime_agent.agent_core.router import AgentCoreRouter, LegacyAgentCoreRouter
 from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.output import AssistantTextDelta
@@ -31,6 +31,44 @@ from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 pytestmark = pytest.mark.sdk
 
 
+def _mark_output_ready(app: RealtimeAgentApp, connection, *, user_id: str) -> None:
+    """模拟端侧收到 output start 后回 ready。"""
+
+    for event in list(connection.events):
+        if event.event_name != "stream.output.start.requested":
+            continue
+        ready_event = Event(
+            event_name="stream.output.ready",
+            user_id=user_id,
+            producer_id=connection.device_id,
+            session_id=event.session_id,
+            stream_id=event.stream_id,
+            stream_type=event.stream_type,
+            payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+        )
+        app.publish_control_event(ready_event)
+        connection.events.append(ready_event)
+
+
+def _mark_output_cancelled(app: RealtimeAgentApp, connection, *, user_id: str) -> None:
+    """模拟端侧收到 cancel request 后回 cancelled。"""
+
+    for event in list(connection.events):
+        if event.event_name != "stream.output.cancel.requested":
+            continue
+        cancelled_event = Event(
+            event_name="stream.output.cancelled",
+            user_id=user_id,
+            producer_id=connection.device_id,
+            session_id=event.session_id,
+            stream_id=event.stream_id,
+            stream_type=event.stream_type,
+            payload={"stream_type": event.stream_type, "reason": "test_endpoint_cancelled"},
+        )
+        app.publish_control_event(cancelled_event)
+        connection.events.append(cancelled_event)
+
+
 def test_agent_mode_text_builds_text_core(tmp_path) -> None:
     """测试目标：验证 `agent.mode=vision` 构建 VisionRealtimePipeline。
 
@@ -42,6 +80,17 @@ def test_agent_mode_text_builds_text_core(tmp_path) -> None:
     assert isinstance(app.agent_core, VisionRealtimePipeline)
     assert isinstance(app.agent_core.core, VisionRealtimeAgentCore)
     assert hasattr(app.agent_core, "append_audio_event")
+
+
+def test_agent_core_router_is_legacy_compat_alias() -> None:
+    """测试目标：验证旧 `AgentCoreRouter` 名称只是 legacy router 兼容别名。
+
+    测试方法：从 router 模块同时导入 `AgentCoreRouter` 和 `LegacyAgentCoreRouter`。
+    预期结果：两个名称指向同一个类，后续新链路应通过 conversation runtime builder
+    进入，不再扩展该 legacy router。
+    """
+
+    assert AgentCoreRouter is LegacyAgentCoreRouter
 
 
 def test_agent_mode_omni_audio_builds_realtime_core(tmp_path) -> None:
@@ -1160,6 +1209,7 @@ def test_vision_agent_server_vad_cancels_active_output(tmp_path) -> None:
             intent=OutputItem(user_id=user_id, session_id=session_id, priority="normal"),
         )
     )
+    _mark_output_ready(app, connection, user_id=user_id)
 
     app.audio_pipeline.process(
         StreamChunk(
@@ -1177,6 +1227,8 @@ def test_vision_agent_server_vad_cancels_active_output(tmp_path) -> None:
     event_names = [event.event_name for event in connection.events]
     assert "audio.speech.started" in event_names
     assert "stream.output.cancel.requested" in event_names
+    _mark_output_cancelled(app, connection, user_id=user_id)
+    event_names = [event.event_name for event in connection.events]
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "vision.vad.speech_started" in agent_events_text
@@ -1376,6 +1428,7 @@ def test_vision_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) 
             intent=OutputItem(user_id=user_id, session_id=session_id, priority="normal"),
         )
     )
+    _mark_output_ready(app, connection, user_id=user_id)
     app.agent_core.asr_pipeline._providers[stream_id] = SentenceBeginAsrProvider()
 
     app.agent_core.append_audio_event(
@@ -1393,6 +1446,8 @@ def test_vision_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) 
     event_names = [event.event_name for event in connection.events]
     assert event_names.count("audio.speech.started") == 1
     assert "stream.output.cancel.requested" in event_names
+    _mark_output_cancelled(app, connection, user_id=user_id)
+    event_names = [event.event_name for event in connection.events]
     assert "stream.output.cancelled" in event_names
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "vision.vad.speech_started" in agent_events_text
@@ -1456,6 +1511,7 @@ def test_vision_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_p
     )
     assert connection.chunks == []
 
+    _mark_output_ready(app, connection, user_id=user_id)
     app.agent_core.resume_downstream(user_id, session_id)
     assert connection.chunks
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")

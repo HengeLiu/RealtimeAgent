@@ -46,6 +46,25 @@ def register_speaker(app: RealtimeAgentApp, connection: Connection, user_id: str
     )
 
 
+def mark_output_ready(app: RealtimeAgentApp, connection: Connection, *, user_id: str) -> None:
+    """模拟端侧 output ready 回执。"""
+
+    for event in list(connection.events):
+        if event.event_name != "stream.output.start.requested":
+            continue
+        app.publish_control_event(
+            Event(
+                event_name="stream.output.ready",
+                user_id=user_id,
+                producer_id=connection.device_id,
+                session_id=event.session_id,
+                stream_id=event.stream_id,
+                stream_type=event.stream_type,
+                payload={"stream_type": event.stream_type, "reason": "test_connection_ready"},
+            )
+        )
+
+
 class RealtimeCityTool(BaseTool):
     """测试用 Realtime Tool。
 
@@ -177,4 +196,5 @@ def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) 
     assert "handled_by_provider_adapter" in model_events
     assert "tool.progress_message.emitted" not in model_events
     assert "tool_progress_audio" not in model_events
+    mark_output_ready(app, connection, user_id="user-rt")
     assert connection.chunks

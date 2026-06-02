@@ -295,7 +295,7 @@ class DashScopeAsrProviderAdapter:
         if self._closed:
             return []
         if chunk.payload:
-            self._recognition.send_audio_frame(bytes(chunk.payload))
+            self._send_audio_payload(bytes(chunk.payload), final=chunk.final)
         events = self._drain_events()
         if chunk.final:
             self._closed = True
@@ -324,6 +324,32 @@ class DashScopeAsrProviderAdapter:
                 events.append(self._events.get_nowait())
             except queue.Empty:
                 return events
+
+    def _send_audio_payload(self, payload: bytes, *, final: bool) -> None:
+        """向 DashScope ASR 发送音频数据。
+
+        主要逻辑：真实 Paraformer realtime 更稳定的输入形态是连续小帧。端侧实时上行
+        本来就是小 chunk，但 provider 测试和离线回放可能一次传入完整 final PCM。
+        这里在 adapter 内拆帧，避免一帧大音频紧接 stop 时 provider 还没开始产出识别事件。
+        参数：`payload` 为 16k 单声道 PCM，`final` 表示当前输入是否为最终片段。
+        返回值：无。
+        异常情况：底层 SDK 发送失败时向上传播。
+        """
+
+        frame_size = 16000 * 2 // 10
+        if not final or len(payload) <= frame_size:
+            self._recognition.send_audio_frame(payload)
+            if final:
+                for _ in range(6):
+                    self._recognition.send_audio_frame(b"\x00" * frame_size)
+                    time.sleep(0.02)
+            return
+        for offset in range(0, len(payload), frame_size):
+            self._recognition.send_audio_frame(payload[offset : offset + frame_size])
+            time.sleep(0.02)
+        for _ in range(6):
+            self._recognition.send_audio_frame(b"\x00" * frame_size)
+            time.sleep(0.02)
 
 
 class VisionModelAdapter(Protocol):

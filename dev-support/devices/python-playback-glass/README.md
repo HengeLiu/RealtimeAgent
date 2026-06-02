@@ -20,6 +20,25 @@ uv run python -m realtime_agent_python_playback_glass run \
   --report runs/python-playback-glass/smoke/report.json
 ```
 
+## conversation 回归
+
+`conversation-regression` 会从正式示例 `server.yaml` 派生临时配置，分别启动 Omni Manual conversation runtime 和 VL conversation runtime，再使用同一个回放 case 通过真实 WebSocket 验收链路。
+
+```bash
+uv run python -m realtime_agent_python_playback_glass conversation-regression \
+  --base-config examples/device_app_demo/agent-server/server.yaml \
+  --case examples/dev-support/devices/python-playback-glass/cases/smoke/who_are_you.yaml \
+  --work-root runs/python-playback-glass/conversation-regression \
+  --report runs/python-playback-glass/conversation-regression/report.json
+```
+
+单独验收某条链路：
+
+```bash
+uv run python -m realtime_agent_python_playback_glass conversation-regression \
+  --target omni-manual
+```
+
 ## 生成 Case 草稿
 
 先用 `browser-glass` 手动跑一次，再从 runs 产物生成 YAML：

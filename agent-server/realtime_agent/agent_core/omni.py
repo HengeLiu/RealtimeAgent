@@ -60,6 +60,19 @@ def _normalize_realtime_provider_max_concurrent_sessions(value: int | None) -> i
     return limit if limit > 0 else DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS
 
 
+def _is_manual_turn_detection(value: str | None) -> bool:
+    """判断 realtime provider 是否使用手动 turn detection。
+
+    主要逻辑：兼容大小写和空白；只有 `manual` 明确表示关闭 provider VAD，其余
+    取值仍按旧 provider VAD 语义处理。
+    参数：`value` 为配置中的 turn detection 名称。
+    返回值：是否为 manual 模式。
+    异常情况：无。
+    """
+
+    return str(value or "").strip().lower() == "manual"
+
+
 def _realtime_provider_limiter(
     *, provider: str, model: str, websocket_url: str, max_concurrent_sessions: int
 ) -> threading.BoundedSemaphore:
@@ -221,6 +234,16 @@ class RealtimeProviderAdapter(Protocol):
     def commit_input(self, *, user_id: str, session_id: str, reason: str) -> None:
         ...
 
+    def create_response(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        reason: str,
+        instructions: str | None = None,
+    ) -> None:
+        ...
+
     def cancel(self, *, user_id: str, reason: str) -> None:
         ...
 
@@ -306,6 +329,7 @@ class QwenOmniRealtimeAdapter:
                 api_key=api_key,
             )
             self._conversation.connect()
+            manual_turn_detection = _is_manual_turn_detection(self.config.turn_detection)
             turn_detection_type = "semantic_vad" if self.config.turn_detection in {"provider", "semantic_vad"} else "server_vad"
             self._output_modalities = [MultiModality.TEXT, MultiModality.AUDIO]
             session_update_kwargs: dict[str, Any] = {
@@ -315,15 +339,16 @@ class QwenOmniRealtimeAdapter:
                 "output_audio_format": AudioFormat.PCM_24000HZ_MONO_16BIT,
                 "enable_input_audio_transcription": True,
                 "input_audio_transcription_model": "paraformer-realtime-v2",
-                "enable_turn_detection": True,
-                "turn_detection_type": turn_detection_type,
+                "enable_turn_detection": not manual_turn_detection,
                 "instructions": self.config.prompt,
             }
-            if self.config.turn_detection_threshold is not None:
+            if not manual_turn_detection:
+                session_update_kwargs["turn_detection_type"] = turn_detection_type
+            if not manual_turn_detection and self.config.turn_detection_threshold is not None:
                 session_update_kwargs["turn_detection_threshold"] = self.config.turn_detection_threshold
-            if self.config.turn_detection_silence_duration_ms is not None:
+            if not manual_turn_detection and self.config.turn_detection_silence_duration_ms is not None:
                 session_update_kwargs["turn_detection_silence_duration_ms"] = self.config.turn_detection_silence_duration_ms
-            if self.config.turn_detection_prefix_padding_ms is not None:
+            if not manual_turn_detection and self.config.turn_detection_prefix_padding_ms is not None:
                 session_update_kwargs["prefix_padding_ms"] = self.config.turn_detection_prefix_padding_ms
             if self.config.tools:
                 session_update_kwargs["tools"] = self.config.tools
@@ -338,7 +363,7 @@ class QwenOmniRealtimeAdapter:
                     "voice": self.config.voice,
                     "input_audio": "pcm16le/16000/mono",
                     "output_audio": "pcm16le/24000/mono",
-                    "turn_detection": turn_detection_type,
+                    "turn_detection": "manual" if manual_turn_detection else turn_detection_type,
                     "tool_count": len(self.config.tools),
                     "session_updated": session_updated,
                     "max_concurrent_sessions": _normalize_realtime_provider_max_concurrent_sessions(
@@ -439,6 +464,58 @@ class QwenOmniRealtimeAdapter:
         except Exception as exc:  # noqa: BLE001
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.input.commit.failed", "reason": reason})
+
+    def create_response(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        reason: str,
+        instructions: str | None = None,
+    ) -> None:
+        """显式创建 Omni Realtime 响应。
+
+        主要逻辑：Manual turn detection 模式下，server 侧 speech boundary 在提交
+        输入后需要显式请求 provider 开始响应；provider VAD 模式仍可调用该方法，
+        但不会由 `commit_input()` 隐式触发，避免双响应。
+        参数：`user_id/session_id` 用于观测；`reason` 为创建原因；`instructions`
+        可在后续工具回填等场景覆盖响应指令。
+        返回值：无。
+        异常情况：provider 异常会转成 callbacks.error。
+        """
+
+        if self._conversation is None:
+            return
+        try:
+            create_response = getattr(self._conversation, "create_response", None)
+            if not callable(create_response):
+                if self._callbacks:
+                    self._callbacks.provider_event(
+                        {
+                            "event": "omni.response.create.skipped",
+                            "provider": "qwen",
+                            "reason": reason,
+                            "message": "provider conversation has no create_response method",
+                        }
+                    )
+                return
+            kwargs: dict[str, Any] = {"output_modalities": self._output_modalities or None}
+            if instructions is not None:
+                kwargs["instructions"] = instructions
+            with self._operation_lock:
+                create_response(**kwargs)
+            if self._callbacks:
+                self._callbacks.provider_event(
+                    {
+                        "event": "omni.response.create.requested",
+                        "provider": "qwen",
+                        "reason": reason,
+                        "has_instructions": instructions is not None,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            if self._callbacks:
+                self._callbacks.error(str(exc), {"event": "omni.response.create.failed", "reason": reason})
 
     def cancel(self, *, user_id: str, reason: str) -> None:
         """取消当前 Omni 响应。
@@ -1081,6 +1158,27 @@ class MockRealtimeProviderAdapter:
         )
         self._callbacks.audio_done({"provider": "mock", "model": self.config.model, "reason": reason})
 
+    def create_response(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        reason: str,
+        instructions: str | None = None,
+    ) -> None:
+        """记录 mock 显式响应创建请求。"""
+
+        if self._callbacks is None:
+            return
+        self._callbacks.provider_event(
+            {
+                "event": "mock_omni.response.create.requested",
+                "provider": "mock",
+                "reason": reason,
+                "has_instructions": instructions is not None,
+            }
+        )
+
     def cancel(self, *, user_id: str, reason: str) -> None:
         """记录取消状态。"""
 
@@ -1592,6 +1690,59 @@ class OmniRealtimeAgentCore:
             )
             return
         self._record_event("input.committed", user_id=user_id, session_id=session_id, reason=reason)
+
+    def create_response(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        reason: str = "manual_turn_ended",
+        instructions: str | None = None,
+    ) -> None:
+        """显式请求 realtime provider 创建响应。
+
+        主要逻辑：Manual turn detection 模式下，server 在提交输入后调用该方法请求
+        provider 生成下一轮响应；provider 不支持时记录降级事件。
+        参数：`user_id/session_id` 定位会话；`reason` 为触发来源；`instructions`
+        为可选响应指令。
+        返回值：无。
+        异常情况：provider 异常转为 system error 和 agent event，不向上抛出。
+        """
+
+        existing = self._sessions.get(user_id)
+        if not existing or existing[0] != session_id:
+            self._record_event("response.create.skipped", user_id=user_id, session_id=session_id, reason="session_not_open")
+            return
+        provider = existing[1]
+        try:
+            create_response = getattr(provider, "create_response", None)
+            if callable(create_response):
+                create_response(user_id=user_id, session_id=session_id, reason=reason, instructions=instructions)
+            else:
+                self.recorder.record_system_event(
+                    {
+                        "event": "system.degradation.raised",
+                        "component": "RealtimeProviderAdapter",
+                        "reason": "provider does not implement create_response",
+                        "user_id": user_id,
+                        "session_id": session_id,
+                    }
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._mark_session_failed(
+                user_id=user_id,
+                session_id=session_id,
+                message=str(exc),
+                record={"event": "omni.provider.create_response.failed"},
+            )
+            return
+        self._record_event(
+            "response.create.requested",
+            user_id=user_id,
+            session_id=session_id,
+            reason=reason,
+            has_instructions=instructions is not None,
+        )
 
     def interrupt(self, user_id: str, reason: str) -> None:
         """处理用户打断。
@@ -2626,6 +2777,85 @@ class OmniRealtimeAgentCore:
                     "session_id": session_id,
                 }
             )
+
+    def on_conversation_speech_started(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """同步 conversation runtime 识别到的用户语音开始。
+
+        主要逻辑：Manual turn detection 下 provider 不再上报 VAD 事件，因此由
+        conversation runtime 在 `turn_started` 时显式打开视觉输入窗口并启动本轮
+        视觉采样。该方法不发布端侧 speech 控制事件，避免和 runtime 的统一事件重复。
+        参数：`user_id`、`session_id` 定位会话；`reason` 用于 runs 诊断。
+        返回值：无。
+        异常情况：视觉采样启动失败由采样线程内部记录，不阻塞音频输入。
+        """
+
+        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        self._provider_speech_active_by_session.add(session_id)
+        self._visual_input_accepting_by_session.add(session_id)
+        self._start_visual_sampler(user_id=user_id, session_id=session_id)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.conversation_speech.started",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+                "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
+                "audio_since_commit": session_id in self._audio_since_commit_by_session,
+            },
+        )
+
+    def on_conversation_speech_stopped(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """同步 conversation runtime 识别到的用户语音结束。
+
+        主要逻辑：Manual turn detection 下 speech stopped 只表示用户停止说话，
+        随后的 `commit_input` 才会关闭 provider 输入 buffer。因此这里停止继续发起
+        新的视觉采样请求，但保留采样代际，避免刚返回的同 turn 图片被误判为过期。
+        参数：`user_id`、`session_id` 定位会话；`reason` 用于 runs 诊断。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        self._provider_speech_active_by_session.discard(session_id)
+        self._stop_visual_sampler(
+            user_id=user_id,
+            session_id=session_id,
+            reason=reason,
+            close_stream=False,
+            invalidate_generation=False,
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.conversation_speech.stopped",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+                "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
+                "audio_since_commit": session_id in self._audio_since_commit_by_session,
+            },
+        )
+
+    def on_conversation_input_committed(self, *, session_id: str, reason: str) -> None:
+        """同步 conversation runtime 已经提交本轮输入。
+
+        主要逻辑：Manual commit 后 provider 输入 buffer 已关闭，迟到图片必须丢弃，
+        下一轮音频到来前也不能继续追加视觉帧。
+        参数：`session_id` 定位会话；`reason` 用于 runs 诊断。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._provider_speech_active_by_session.discard(session_id)
+        self._visual_input_accepting_by_session.discard(session_id)
+        self._audio_since_commit_by_session.discard(session_id)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.conversation_input.committed",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+            },
+        )
 
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件管理视觉采样生命周期。
