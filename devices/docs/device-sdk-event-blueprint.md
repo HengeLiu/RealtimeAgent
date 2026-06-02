@@ -10,7 +10,7 @@
 
 ## 1. SDK 分层
 
-端侧 SDK 负责通讯、事件、stream、状态机、回执和平台默认硬件 adapter。麦克风、相机、喇叭默认禁用；App 显式 enable 后，SDK 才使用平台默认 adapter 注册这些能力。App 可以覆盖默认 adapter，但不应该被迫手写 chunk、WebSocket 或标准事件状态机。
+端侧 SDK 负责通讯、事件、stream、状态机、回执和硬件 adapter 接入。麦克风、相机、喇叭默认禁用；App 显式 enable 或显式绑定 adapter 后，SDK 才注册这些能力。Swift、浏览器等平台可以由 SDK 提供默认硬件 adapter；C/C++、ESP32-S3、Linux 网关等场景通常由 App、BSP 或示例工程提供 adapter。无论 adapter 来自哪里，App 都不应该被迫手写 chunk、WebSocket 或标准事件状态机。
 
 ```plantuml
 @startuml
@@ -86,13 +86,13 @@ SDK 对外需要暴露的抽象能力：
 
 ### 1.1 本地硬件绑定约定
 
-SDK 必须提供“默认禁用、显式启用、可覆盖 adapter”的硬件接入 API。默认情况下不注册麦克风、相机或喇叭；App 显式 enable 后，SDK 使用平台默认 adapter。默认 adapter 不适用时，App 可以覆盖 source / sink。会话过程中 SDK 只使用已启用或已覆盖的 adapter，不要求 App 处理协议 chunk。
+SDK 必须提供“默认禁用、显式启用或显式绑定 adapter”的硬件接入 API。默认情况下不注册麦克风、相机或喇叭；有平台默认 adapter 的语言可以让 App 通过 enable 启用默认硬件；没有默认硬件的 C/嵌入式场景应由 App 或 BSP 传入 source / sink / transport。会话过程中 SDK 只使用已启用或已绑定的 adapter，不要求 App 处理协议 chunk。
 
 | 绑定对象 | 方向 | SDK 使用方式 | 最小能力 |
 | --- | --- | --- | --- |
-| `sensor.mic` source | SDK/App -> SDK -> Server | 显式启用后，SDK 从默认或覆盖 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入音频上行链路 | `format`、`readChunk()` 或 async chunk producer、`close()` |
-| `sensor.rgb` source | SDK/App -> SDK -> Server | 显式启用后，SDK 只在收到 server 单帧采集请求时读取一帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame()`、`close()` |
-| `actuator.speaker` sink | Server -> SDK -> SDK/App | 显式启用后，SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或覆盖 sink 播放 | `prepare(format)`、`writeChunk()`、`drain()`、`cancel()` |
+| `sensor.mic` source | SDK/App -> SDK -> Server | SDK 从默认或绑定 source 读取 PCM 字节，封装 `StreamChunk sensor.mic` 写入音频上行链路 | `format`、`readChunk()` 或 async chunk producer、`close/stop()` |
+| `sensor.rgb` source | SDK/App -> SDK -> Server | SDK 只在收到 server 单帧采集请求时读取一帧，封装 `StreamChunk sensor.rgb` 写入视觉上行链路 | `format`、`readFrame/captureFrame()`、`close/releaseFrame()` |
+| `actuator.speaker` sink | Server -> SDK -> SDK/App | SDK 从音频下行链路接收 `StreamChunk actuator.speaker`，经过 SDK playback buffer 后写入默认或绑定 sink 播放 | `prepare(format)`、`writeChunk/writePcm()`、`drain()`、`cancel()` |
 | 自定义业务动作 | Server -> SDK -> App | SDK 通过 `custom.command.*` 或其他 `custom.*` 调用 App 注册的 handler | `on_custom_command(...)` 或 `on_event(...)` |
 
 目标 API 形态示例：
@@ -107,7 +107,9 @@ sdk.overrideInput("sensor.rgb", customCameraSource)
 sdk.overrideOutput("actuator.speaker", customSpeakerSink)
 ```
 
-`customMicSource`、`customCameraSource`、`customSpeakerSink` 可以包装真实硬件、浏览器媒体流、文件样例或测试 mock。SDK 不关心资源来自哪里，只要求 adapter 的格式声明和实际字节一致。
+上面的示例是高层语言的形态。C/嵌入式 SDK 可以使用配置结构体或初始化函数直接传入 adapter，例如 `mic_source`、`camera_source`、`speaker_sink`、`transport`；具体字段名由实现决定，但不应把 ESP32-S3 引脚、I2S/PDM、摄像头型号等板级细节放进 C SDK 核心。
+
+`customMicSource`、`customCameraSource`、`customSpeakerSink` 可以包装真实硬件、浏览器媒体流、文件样例或测试 mock。SDK 不关心资源来自哪里，只要求 adapter 的格式声明和实际字节一致。对需要回声抑制的 C/ESP32-S3 场景，AEC 算法、speaker reference ring 和麦克风前处理通常属于板级 adapter 或示例工程；SDK 核心只关心处理后的上行音频和下行播放状态。
 
 speaker sink 不负责实现端侧接收 buffer，也不负责判断水位线。speaker 播放 buffer 是 SDK 的内置能力，用来隐藏网络抖动并控制内存占用。App 开发者只需要配置 SDK 的播放 buffer 参数；SDK 用这些参数决定何时向 server 发送 `downstream.pause.requested` / `downstream.resume.requested`。
 
@@ -282,7 +284,7 @@ FUNCTION handleConnectionLost(reason):
 
 ## 3. 开启实时对话
 
-实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App 覆盖 adapter；SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、server 请求触发的视觉单帧采集和 server 音频下行播放。
+实时对话由唤醒事件触发。端侧 SDK 不做语音起止判断，VAD / turn 边界由 server 根据连续 `sensor.mic` 音频流判断。麦克风硬件或系统录音资源可以由 SDK 默认 adapter 管理，也可以由 App/BSP 提供 adapter；C/嵌入式实现通常采用后者。SDK 的协议责任是在收到 `control.audio_session.open.requested` 后建立或复用音频上行、音频下行和按需视觉上行链路，发送 `control.audio_session.opened`，并在会话打开后维护麦克风上行、server 请求触发的视觉单帧采集和 server 音频下行播放。
 
 麦克风上行的准备完成标记使用会话级 `control.audio_session.opened`，不再额外发送 `stream.input.opened (sensor.mic)`。端侧必须先确认音频上行链路可写、`sensor.mic` source 可读，再发送 `control.audio_session.opened`；server 只有在收到该回执后，才能把本轮实时对话视为可用并消费后续 `sensor.mic` chunk。
 

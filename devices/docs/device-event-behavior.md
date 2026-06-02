@@ -59,6 +59,8 @@ sdk.on_event("custom.navigation.route.updated", handleRouteUpdated)
 sdk.start()
 ```
 
+上面的示例是高层语言的目标形态。C/C++、ESP32-S3、Linux 网关等实现可以改用配置结构体或初始化函数传入 `mic_source`、`camera_source`、`speaker_sink`、`transport` 等 adapter。协议行为必须一致，但具体 API 名称不要求和 Swift、Python 或浏览器 SDK 完全相同。
+
 SDK 内部生成的注册 payload 必须使用结构化能力，不允许生成旧 `routes` 或旧 `capabilities`。例如启用 camera 时，SDK 自动生成 `supports.sensors[].type=rgb`；启用 audio input / speaker 时，SDK 自动生成对应的系统音频 `properties`。完整 JSON 信封只放在通讯协议和 SDK 实现蓝图中，作为 SDK 开发者和协议测试参考，不作为 App 接入方式。
 
 ```plantuml
@@ -141,7 +143,7 @@ Server -> SDK: control.device.registered (new connection_id)
 
 实时对话不是 device 自己直接进入对话状态，而是先由唤醒事件触发 server 下发音频会话打开请求。会话打开后，对话过程同时包含三条主链路：麦克风音频上行、按请求触发的单帧视觉上行、server 音频下行播放。
 
-端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 后，SDK 才会使用平台默认 hardware adapter 自动注册这些能力。App 也可以覆盖默认 adapter，例如使用外接麦克风、测试音频文件、图片样例、自定义播放器。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入对应的媒体链路，把 server 下发的 speaker output chunk 从音频下行链路写入播放 buffer 和 speaker sink。
+端侧 SDK 负责封装硬件接入、协议状态机和 stream chunk。麦克风、相机、喇叭默认禁用；App 必须显式 enable 或显式绑定 adapter 后，SDK 才会注册这些能力。Swift、浏览器等平台可以使用 SDK 默认 hardware adapter；C/C++、ESP32-S3、Linux 网关等场景通常由 App、BSP 或示例工程提供 adapter，例如板级麦克风 source、相机 source、speaker sink 和 transport。SDK 的职责是把输入字节或帧封装成 `StreamChunk` 写入对应的媒体链路，把 server 下发的 speaker output chunk 从音频下行链路写入播放 buffer 和 speaker sink。
 
 目标 SDK 使用形态：
 
@@ -158,7 +160,7 @@ sdk.on_event("custom.navigation.route.updated", handleRouteUpdated)
 sdk.start()
 ```
 
-显式 enable 后，App 不需要在业务代码里手写 WebSocket 发送麦克风字节，也不需要手写 WebSocket 接收 speaker 字节。平台默认 adapter 可用时，App 甚至不需要手动绑定硬件；只有默认 adapter 不适用时才覆盖 source/sink。
+显式 enable 或绑定 adapter 后，App 不需要在业务代码里手写 WebSocket 发送麦克风字节，也不需要手写 WebSocket 接收 speaker 字节。平台默认 adapter 可用时，App 可以不手动绑定硬件；没有默认 adapter 的 C/嵌入式场景，板级代码负责绑定 source/sink，但仍不应重写协议状态机。
 
 标准动作：
 
@@ -183,13 +185,13 @@ sdk.start()
 
 系统音频会话不再额外发送 `stream.input.opened (sensor.mic)` 或 `stream.input.closed (sensor.mic)`，避免和 `control.audio_session.opened/closed` 重复。浏览器参考端的真实麦克风模式使用 `pcm16le / 16000Hz / mono / 20ms`。端侧应该先建立音频上行链路并发送 `control.audio_session.opened`，再持续发二进制 chunk；server 应等待 `control.audio_session.opened` 后再按本轮会话处理麦克风音频。不要把麦克风音频放进 control event。`StreamChunk.final` 只表示该输入 stream 的最后一包数据，不表示端侧识别出了一句话或一次语音结束。
 
-麦克风的最小契约是：SDK 在显式启用音频输入后，必须能从默认 adapter 或 App 覆盖的 source 读取 `codec/sample_rate/channels/chunk_ms` 一致的音频字节。source 可以是真实系统麦克风、浏览器 `MediaStream`、音频文件或测试样例。SDK 不关心底层硬件具体打开时机，但在 `control.audio_session.opened` 后必须能持续读取并上传。
+麦克风的最小契约是：SDK 在显式启用或绑定音频输入后，必须能从默认 adapter 或 App/BSP 提供的 source 读取 `codec/sample_rate/channels/chunk_ms` 一致的音频字节。source 可以是真实系统麦克风、浏览器 `MediaStream`、音频文件、测试样例，或 C/ESP32-S3 中封装 PDM/I2S、AEC 前处理后的板级 source。SDK 不关心底层硬件具体打开时机，但在 `control.audio_session.opened` 后必须能持续读取并上传。
 
 视觉输入使用独立的视觉上行链路上传 `sensor.rgb`，不能和麦克风上行或 speaker 下行共用一条物理 WebSocket。当前阶段视觉链路是请求驱动的单帧采集：server 每次需要画面上下文时下发一次 `stream.control.open.requested (sensor.rgb, mode=single, sample_count=1)`，端侧只采集并上传一张图片，然后关闭该逻辑输入流。如果已经选择图片或视频样例，端侧只从样例中取一帧；没有样例时再打开摄像头采集一帧。图片字节不能放进 control event，也不能在没有 server 请求时无节制后台上传。
 
 系统音频下行使用独立的 `actuator.speaker` output 链路。音频下行物理 WebSocket 和 session 级 speaker runtime 已经在 `control.audio_session.opened` 之前建立或准备完成；`stream.output.start.requested` 只表示 server 希望在这条已建立的链路上开始一轮逻辑 speaker 输出。device 必须在本轮逻辑 output stream 状态重置完成后发送 `stream.output.ready`，server 收到该回执后才能向音频下行链路写 speaker chunk。`stream.output.finish.requested` 只表示 server 已写完音频数据，不表示用户已经听完；device 必须等本地播放队列 drain 完成后再发送 `stream.output.finished`。由于控制事件和音频下行 chunk 走不同 WebSocket，`stream.output.finish.requested` 可能先于最后几个 speaker chunk 到达端侧；当 payload 携带 `output_last_seq` 时，Device SDK 必须先等到该序号的 chunk 已经进入播放 buffer，再执行 drain 和完成回执。如果对话过程中收到 `stream.output.cancel.requested`，device 应立即停止当前播放并回 `stream.output.cancelled`。
 
-喇叭的最小契约是：SDK 在显式启用 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App 覆盖的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain` 和 `cancel` 能力。`stream.output.finished` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 finish 时立即发送。
+喇叭的最小契约是：SDK 在显式启用或绑定 speaker 后，必须能把 `actuator.speaker` chunk 写入默认播放器 adapter 或 App/BSP 提供的 sink。为了减轻 App 负担，SDK 应优先处理协议格式、buffer 和播放调度；sink 只需要提供平台播放、`drain` 和 `cancel` 能力。对 C/ESP32-S3 这类需要回声抑制的实现，speaker sink 还可以在板级内部把已播放或待播放音频写入 AEC reference，但这不改变协议事件。`stream.output.finished` 必须在 SDK 播放 buffer 和 sink 本地播放队列 drain 后发送，不能在 server 下发 finish 时立即发送。
 
 端侧 speaker 播放 buffer 由 SDK 实现，而不是由业务 App 或 speaker sink 实现。App 开发者只需要在 SDK 初始化时配置 buffer 大小和水位线，用来在播放流畅度和内存占用之间取舍：
 
@@ -391,6 +393,8 @@ client.onEvent("custom.navigation.route.updated", event -> {
 ```
 
 #### C
+
+下面示例只表达 C 语言的目标接入风格。实际 C SDK 可以使用不同的 context、payload 和 emit API 名称；关键要求是 handler 不直接处理 WebSocket 路由。
 
 ```c
 static void on_vibrate(ra_command_t *cmd, void *user_data) {

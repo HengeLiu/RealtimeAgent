@@ -1,0 +1,35 @@
+menu "Realtime Agent ESP32-S3 Device Demo"
+
+config REALTIME_AGENT_SERVER_URL
+    string "Realtime Agent server URL"
+    default "http://192.168.10.10:8765"
+
+config REALTIME_AGENT_DEVICE_ID
+    string "Device ID"
+    default "dev-esp32-s3-001"
+
+config REALTIME_AGENT_USER_ID
+    string "User ID"
+    default "user-device-demo"
+
+config REALTIME_AGENT_DEVICE_NAME
+    string "Device name"
+    default "ESP32-S3 Device"
+
+config REALTIME_AGENT_WIFI_SSID
+    string "Wi-Fi SSID"
+    default ""
+
+config REALTIME_AGENT_WIFI_PASSWORD
+    string "Wi-Fi password"
+    default ""
+
+config REALTIME_AGENT_AUTO_WAKE_SMOKE
+    bool "Auto send wake event after registration for smoke test"
+    default n
+    help
+        Enable this only for protocol smoke testing. The firmware waits until
+        the device is registered, delays one second, then sends
+        control.user.wake.detected.
+
+endmenu

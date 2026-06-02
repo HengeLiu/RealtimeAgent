@@ -9,7 +9,7 @@
 App 开发者只负责五类事情：
 
 1. 创建设备 client，填写设备身份、server 地址和需要启用的硬件能力。
-2. 显式启用麦克风、相机、喇叭等内置硬件能力；默认都不启用。
+2. 显式启用麦克风、相机、喇叭等内置硬件能力；C/嵌入式场景则通常显式绑定板级 adapter；默认都不启用。
 3. 注册业务自定义回调，例如 `on_custom_command(...)` 或 `on_event("custom.*", ...)`。
 4. 注册 SDK 连接状态回调，并决定断连后的 App 行为，例如手动重连、后台重试或只展示错误。
 5. 启动 SDK，并在 App 生命周期结束时关闭 SDK。
@@ -23,15 +23,19 @@ App 开发者不负责：
 - 判断用户是否打断输出；端侧只响应 SDK 内部收到的 server cancel。
 - 在断连时清理麦克风、相机、speaker、stream 或旧会话资源；这些必须由 SDK 的断连收口统一完成。
 
-## 2. 默认硬件策略
+## 2. 默认硬件和适配器策略
 
-SDK 默认不注册任何音视频硬件能力。App 必须显式启用，SDK 才会尝试使用平台默认硬件 adapter：
+SDK 默认不注册任何音视频硬件能力。App 必须显式启用或显式绑定 adapter 后，SDK 才会注册对应能力。是否存在“平台默认硬件 adapter”取决于具体语言和运行环境：
 
-| 能力 | 默认 | 显式启用后 SDK 做什么 | App 何时需要自定义 adapter |
+- Swift、浏览器、部分桌面或移动端 SDK 可以提供默认麦克风、相机、播放器 adapter；App 显式启用后即可使用。
+- C/C++、ESP32-S3、Linux 网关等嵌入式或板级场景通常没有可靠的默认硬件。SDK 只定义 source / sink / transport 接口；App、BSP 或示例工程负责按板卡引脚和传感器型号提供 adapter。
+- 如果某个 C 平台后续提供了现成 BSP adapter，也应视为“示例或平台模块提供的默认实现”，而不是 C SDK 核心直接知道硬件。
+
+| 能力 | 默认 | SDK 做什么 | App/BSP 何时需要提供 adapter |
 | --- | --- | --- | --- |
-| 麦克风 `sensor.mic` | 禁用 | SDK 打开或接入平台默认麦克风，维护音频上行 chunk | 使用外部麦克风、音频文件、测试样例或平台默认 adapter 不可用 |
-| 相机 `sensor.rgb` | 禁用 | SDK 打开或接入平台默认相机，收到 server 单帧采集请求后上传一张图片 | 使用特定镜头、图片样例、视频文件或平台默认 adapter 不可用 |
-| 喇叭 `actuator.speaker` | 禁用 | SDK 打开或接入平台默认播放器，维护下行播放 buffer 和水位线 | 使用自定义播放器、蓝牙设备、文件输出或平台默认 adapter 不可用 |
+| 麦克风 `sensor.mic` | 禁用 | 从已启用或已绑定 source 读取音频字节，维护音频上行 chunk | 平台没有默认麦克风、使用外部麦克风、音频文件、测试样例或需要 AEC 处理 |
+| 相机 `sensor.rgb` | 禁用 | 从已启用或已绑定 source 读取单帧图片，收到 server 单帧采集请求后上传 | 平台没有默认相机、使用特定镜头、图片样例、视频文件或自定义图像处理 |
+| 喇叭 `actuator.speaker` | 禁用 | 维护下行播放 buffer 和水位线，把音频写入已启用或已绑定 sink | 平台没有默认播放器、使用 I2S/蓝牙/文件输出，或需要接入 AEC reference |
 
 不需要音视频的设备可以只作为自定义事件消费节点运行，例如独立算力节点、网关、控制器。
 
@@ -152,15 +156,23 @@ client.start();
 
 ### C
 
+下面的 C 示例面向板级接入或 ESP32-S3 示例工程，只表达目标使用形态。C SDK 的具体结构体字段名可以按实现收敛，但应保持“SDK 核心接收 adapter，板级代码提供硬件实现”的边界。
+
 ```c
+ra_mic_source_t mic_source = esp32_s3_board_create_mic_source(&board_config);
+ra_camera_source_t camera_source = esp32_s3_board_create_camera_source(&board_config);
+ra_speaker_sink_t speaker_sink = esp32_s3_board_create_speaker_sink(&board_config);
+ra_transport_t transport = esp32_s3_board_create_transport(&network_config);
+
 ra_device_client_config_t config = {
-    .server_url = "ws://127.0.0.1:8765",
+    .server_url = "http://127.0.0.1:8765",
     .device_id = "phone-001",
     .user_id = "user-001",
     .name = "Phone device",
-    .audio_input = RA_AUDIO_INPUT_ENABLED_DEFAULT,
-    .camera = RA_CAMERA_ENABLED_DEFAULT,
-    .speaker = RA_SPEAKER_ENABLED_DEFAULT_BUFFER,
+    .mic_source = &mic_source,
+    .camera_source = &camera_source,
+    .speaker_sink = &speaker_sink,
+    .transport = &transport,
 };
 
 ra_device_client_t *client = ra_device_client_create(&config);

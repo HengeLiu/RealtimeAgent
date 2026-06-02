@@ -1,16 +1,18 @@
 # Device Demo
 
-`examples/device_app_demo` 是面向端侧 App 开发者的最小真机 / 浏览器 demo。它演示新的端侧 SDK 接入方式：
+`examples/device_app_demo` 是面向端侧 App 开发者的最小真机、浏览器和嵌入式 demo。当前 Web Chat demo 使用 JavaScript Device SDK，Swift / iOS demo 已用于验证基础音视频对话链路，ESP32-S3 demo 是基于 C Device SDK 的固件参考实现，用于验证联网、注册、媒体链路、相机、WakeNet 和 AEC 边界。
 
 - 不手写设备注册 JSON。
 - 不手写 `control.device.register.requested`。
-- 通过 Swift 或 JavaScript 代码声明设备、能力和硬件。
+- 通过 Swift、JavaScript 或 C 代码声明设备、能力和硬件。
 - 显式启用麦克风、相机和喇叭后，由 SDK 维护音频上行、相机帧上传、speaker 播放 buffer 和下行播放。
 
 ## 目录
 
 ```text
 examples/device_app_demo/
+  agent-server/
+    server.yaml
   ios/
     DeviceDemo.xcodeproj
     DeviceDemo/
@@ -24,6 +26,9 @@ examples/device_app_demo/
     app.js
     styles.css
     package.json
+  esp32-s3/
+    README.md
+    firmware/
 ```
 
 ## 交互流程
@@ -90,3 +95,15 @@ http://127.0.0.1:8766/examples/device_app_demo/web-chat/
 ```
 
 首次启动后，在页面里设置 server 地址，点击“开始音视频对话”，并授权麦克风和相机。Web Chat 页面不直接实现 WebSocket、StreamChunk、浏览器回声抑制或 speaker buffer，这些都由 JavaScript Device SDK 负责。
+
+## ESP32-S3 固件骨架
+
+ESP32-S3 demo 位于 [esp32-s3](esp32-s3/README.md)。它当前已经接入 C Device SDK、ESP-IDF 工程、WebSocket transport、board config 和基础 adapter 文件。默认 mic/speaker 仍是占位实现，避免在未知板卡上硬编码 I2S/PDM 行为；真机完整音视频前需要按实际板卡补齐硬件音频、WakeNet 和 AEC。
+
+基础构建命令：
+
+```bash
+cd examples/device_app_demo/esp32-s3/firmware
+idf.py set-target esp32s3
+idf.py build
+```

@@ -1,0 +1,31 @@
+set(RA_C_SDK_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../../devices/c")
+
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "board/board_config.c"
+        "adapters/ra_esp32_transport.c"
+        "adapters/ra_esp32_mic.c"
+        "adapters/ra_esp32_speaker.c"
+        "adapters/ra_esp32_camera.c"
+        "adapters/ra_esp32_aec.c"
+        "adapters/ra_esp32_wake_word.c"
+        "diagnostics/ra_esp32_diag.c"
+        "${RA_C_SDK_ROOT}/src/ra_client.c"
+        "${RA_C_SDK_ROOT}/src/ra_diagnostics.c"
+        "${RA_C_SDK_ROOT}/src/ra_event.c"
+        "${RA_C_SDK_ROOT}/src/ra_log.c"
+        "${RA_C_SDK_ROOT}/src/ra_speaker_buffer.c"
+        "${RA_C_SDK_ROOT}/src/ra_stream_chunk.c"
+    INCLUDE_DIRS
+        "."
+        "${RA_C_SDK_ROOT}/include"
+    REQUIRES
+        esp_wifi
+        esp_event
+        nvs_flash
+        esp_websocket_client
+        esp_timer
+        esp_driver_i2s
+        esp32-camera
+)

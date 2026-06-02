@@ -11,6 +11,7 @@ devices/
   docs/          # 端侧 App 接入、事件行为标准和 SDK 实现蓝图
   javascript/    # JavaScript Device SDK，适合浏览器、Node、Electron 和 WebView
   swift/         # Swift Device SDK，适合 iOS / macOS
+  c/             # C Device SDK，适合 ESP32、嵌入式 Linux 和自定义网络栈
 ```
 
 `devices/swift-backup/` 是历史阶段备份目录，不作为当前公开接入入口。
@@ -34,6 +35,7 @@ devices/
 | --- | --- | --- |
 | JavaScript | [javascript](javascript/README.md) | 浏览器、Node、Electron 和 WebView 端侧，当前 Web Chat demo 的主要 SDK。 |
 | Swift | [swift](swift/README.md) | iOS / macOS 端侧，当前真机 demo 的主要 SDK。 |
+| C | [c](c/README.md) | ESP32、嵌入式 Linux 和自定义网络栈的最小协议核心；当前已覆盖无硬件协议测试，板级硬件由示例或 BSP 接入。 |
 
 ## 推荐阅读
 
@@ -47,4 +49,7 @@ devices/
 ```bash
 cd devices/javascript && npm test
 cd devices/swift && swift test
+cmake -S devices/c -B /tmp/realtime-agent-device-c-build
+cmake --build /tmp/realtime-agent-device-c-build
+ctest --test-dir /tmp/realtime-agent-device-c-build --output-on-failure
 ```
