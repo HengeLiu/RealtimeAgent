@@ -99,6 +99,76 @@ def _serve_web(*, html_path: Path, host: str, port: int, print_url: bool, server
         server.server_close()
 
 
+def open_web_chat(argv: list[str] | None = None) -> None:
+    """打开 Web Chat Device Demo 页面。
+
+    主要逻辑：
+    1. 默认解析仓库内 `examples/device_app_demo/web-chat/index.html`。
+    2. 默认启动仓库根目录静态服务，保证页面能导入本地 JavaScript Device SDK。
+    3. `--print-url` 只打印 HTTP URL 并立即退出，便于文档检查和无桌面环境使用。
+    4. 非 `--print-url` 时打开浏览器并保持静态服务运行。
+
+    参数：`argv` 为命令行参数。
+    返回值：无。
+    异常情况：页面文件不存在、端口占用或系统打开命令失败时抛出异常。
+    """
+
+    parser = argparse.ArgumentParser(prog="realtime-agent.web-chat.open", description="打开 Web Chat Device Demo")
+    parser.add_argument("--path", default="examples/device_app_demo/web-chat/index.html", help="Web Chat HTML 路径")
+    parser.add_argument("--print-url", action="store_true", help="只打印 HTTP URL，不打开浏览器，也不保持服务运行")
+    parser.add_argument("--host", default="127.0.0.1", help="静态服务监听地址")
+    parser.add_argument("--port", type=int, default=8766, help="静态服务端口")
+    args = parser.parse_args(argv)
+
+    html_path = _resolve_audio_root_path(args.path)
+    if not html_path.exists():
+        raise FileNotFoundError(str(html_path))
+    _serve_static_page(
+        html_path=html_path.resolve(),
+        host=args.host,
+        port=args.port,
+        print_url=args.print_url,
+        label="Web Chat demo",
+    )
+
+
+def _serve_static_page(*, html_path: Path, host: str, port: int, print_url: bool, label: str) -> None:
+    """启动仓库根目录静态服务并打开指定页面。
+
+    主要逻辑：服务根目录固定为仓库根目录，使 Web Chat 这类页面可以通过绝对路径导入
+    `devices/javascript` 下的本地 SDK 文件。`--print-url` 模式只打印 URL 后退出。
+    参数：`html_path` 为页面路径，`host/port` 为监听地址，`print_url` 控制是否只打印，
+    `label` 用于终端提示。
+    返回值：无。
+    异常情况：端口占用或页面路径不在仓库根目录下时抛出异常。
+    """
+
+    audio_root = Path(__file__).resolve().parents[3]
+    relative = html_path.relative_to(audio_root)
+    handler = partial(_QuietStaticHandler, directory=str(audio_root))
+    server = ThreadingHTTPServer((host, port), handler)
+    actual_host, actual_port = server.server_address[:2]
+    if html_path.name == "index.html":
+        url_path = "/".join(quote(part) for part in relative.parent.parts) + "/"
+    else:
+        url_path = "/".join(quote(part) for part in relative.parts)
+    url = f"http://{actual_host}:{actual_port}/{url_path}"
+    if print_url:
+        server.server_close()
+        print(url)
+        return
+
+    print(url)
+    _open_url(url)
+    try:
+        print(f"serving {label}; press Ctrl+C to stop")
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print(f"{label} static server stopped")
+    finally:
+        server.server_close()
+
+
 def _open_url(url: str) -> None:
     """按当前平台打开 URL。"""
 

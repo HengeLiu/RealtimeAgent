@@ -40,6 +40,23 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
+## Web Chat Device Demo
+
+打开当前推荐的 Web Chat demo：
+
+```bash
+uv run realtime-agent.web-chat.open
+```
+
+该命令会用标准库启动仓库根目录静态服务，并打开
+`http://127.0.0.1:8766/examples/device_app_demo/web-chat/`。
+Web Chat 通过 JavaScript Device SDK 接入 server，适合验证浏览器麦克风、相机、speaker
+和标准设备事件链路。脚本检查时可使用：
+
+```bash
+uv run realtime-agent.web-chat.open --print-url
+```
+
 ## 浏览器眼镜模拟组件
 
 打开 browser-glass 开发支持组件：

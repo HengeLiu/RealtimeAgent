@@ -94,13 +94,19 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```bash
    uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
    ```
-2. 打开浏览器眼镜模拟组件：
+2. 启动 Web Chat demo app：
 
    ```bash
-   uv run realtime-agent.web.open --serve
+   uv run realtime-agent.web-chat.open
    ```
 
-   浏览器组件会作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
+   CLI 会启动本地静态服务并打开：
+
+   ```text
+   http://127.0.0.1:8766/examples/device_app_demo/web-chat/
+   ```
+
+   Web Chat 会通过 JavaScript Device SDK 作为普通 Device 注册到 server，可用于测试麦克风输入、摄像头输入、server 下发的 speaker 输出、控制事件和 stream 生命周期。
 3. 可选打开 Swift 真机 demo：
 
    ```bash
@@ -116,11 +122,13 @@ curl http://127.0.0.1:8765/api/debug/playback
    find examples/device_app_demo/agent-server/runs -maxdepth 3 -type f | sort
    ```
 
-如果只想快速打开浏览器模拟端，可以直接运行：
+如果只想快速打开 Web Chat demo app，可以直接运行：
 
 ```bash
-uv run realtime-agent.web.open --serve
+uv run realtime-agent.web-chat.open
 ```
+
+无桌面环境或只想查看 URL 时，可以运行 `uv run realtime-agent.web-chat.open --print-url`。
 
 运行一个最小契约测试：
 
@@ -169,13 +177,10 @@ examples/<your-app>/agent-server/capabilities/
 
 当前 SDK 入口：
 
-| SDK           | 入口                                            |
-| ------------- | ----------------------------------------------- |
-| Python        | [devices/python](devices/python/README.md)         |
-| TypeScript    | [devices/typescript](devices/typescript/README.md) |
-| Swift         | [devices/swift](devices/swift/README.md)           |
-| Kotlin / Java | [devices/kotlin](devices/kotlin/README.md)         |
-| C             | [devices/c](devices/c/README.md)                   |
+| SDK        | 入口                                                |
+| ---------- | --------------------------------------------------- |
+| JavaScript | [devices/javascript](devices/javascript/README.md) |
+| Swift      | [devices/swift](devices/swift/README.md)           |
 
 设备接入模型见 [端侧 App 接入指南](devices/docs/device-app-integration.md)。
 
@@ -217,7 +222,7 @@ examples/<your-app>/agent-server/capabilities/
 
 ```text
 agent-server/   Python server SDK 和服务端运行时，见 agent-server/README.md
-devices/        Python、TypeScript、Swift、Kotlin/Java、C 的 Device SDK，见 devices/README.md
+devices/        JavaScript、Swift 等多语言 Device SDK，见 devices/README.md
 protocol/       共享协议文档、fixture 和协议测试
 examples/       示例应用、设备模拟器、回放测试和硬件参考工程
 docs/           入门文档、参考文档、how-to 文档和设计说明
@@ -237,11 +242,11 @@ tools/          开发和校验工具
 examples/device_app_demo/
 ```
 
-它是面向端侧 App 开发者的最小 Swift 真机 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
+它是面向端侧 App 开发者的最小真机 / 浏览器 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
 
 开发支持设备包括：
 
-- 浏览器眼镜模拟组件：`uv run realtime-agent.web.open --serve`
+- Web Chat demo：`examples/device_app_demo/web-chat/`
 - Swift 真机 demo：`examples/device_app_demo/ios/`
 - Python 手机视觉模拟组件：`examples/dev-support/devices/python-phone/`
 - Python playback glass：`examples/dev-support/devices/python-playback-glass/`

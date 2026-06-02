@@ -16,6 +16,7 @@ DEVELOPER_COMMANDS = [
     "realtime-agent.server.stop",
     "realtime-agent.server.logs",
     "realtime-agent.web.open",
+    "realtime-agent.web-chat.open",
     "realtime-agent.ios.open",
     "realtime-agent.ios.build-sim",
     "realtime-agent.esp32.config",
@@ -173,6 +174,27 @@ def test_web_open_serve_print_url_uses_local_http_origin() -> None:
     assert url.startswith("http://127.0.0.1:8766/")
     assert "/examples/dev-support/devices/browser-glass/index.html?" in url
     assert "server_url=http%3A%2F%2F127.0.0.1%3A8765" in url
+
+
+def test_web_chat_open_print_url_uses_local_http_origin() -> None:
+    """测试目标：确认 Web Chat demo 可通过一条 CLI 命令获取本地 HTTP 地址。
+
+    测试方法：执行 `realtime-agent.web-chat.open --print-url`，不真正打开浏览器。
+    预期结果：命令输出 `http://127.0.0.1:8766/.../web-chat/`。
+    """
+
+    completed = subprocess.run(
+        ["uv", "run", "realtime-agent.web-chat.open", "--print-url"],
+        cwd=AUDIO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    url = completed.stdout.strip()
+    assert url.startswith("http://127.0.0.1:8766/")
+    assert "/examples/device_app_demo/web-chat/" in url
 
 
 def test_package_check_can_write_report(tmp_path) -> None:

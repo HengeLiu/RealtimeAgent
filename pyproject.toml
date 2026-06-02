@@ -25,6 +25,7 @@ dependencies = [
 "realtime-agent.sdk.package-check" = "realtime_agent.cli.sdk:package_check"
 "realtime-agent.device.validate" = "realtime_agent.cli.device:validate"
 "realtime-agent.web.open" = "realtime_agent.cli.web:open_web"
+"realtime-agent.web-chat.open" = "realtime_agent.cli.web:open_web_chat"
 "realtime-agent.ios.open" = "realtime_agent.cli.ios:open_ios"
 "realtime-agent.ios.build-sim" = "realtime_agent.cli.ios:build_sim"
 "realtime-agent.esp32.config" = "realtime_agent.cli.esp32:config"
