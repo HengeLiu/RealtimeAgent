@@ -9,11 +9,8 @@
 ```text
 devices/
   docs/          # 端侧 App 接入、事件行为标准和 SDK 实现蓝图
-  python/        # Python Device SDK，适合测试、Linux 网关和开发支持端侧
-  typescript/    # TypeScript / JavaScript Device SDK，适合浏览器、Node、Electron
+  javascript/    # JavaScript Device SDK，适合浏览器、Node、Electron 和 WebView
   swift/         # Swift Device SDK，适合 iOS / macOS
-  kotlin/        # Kotlin / Java Device SDK，适合 Android / JVM
-  c/             # C Device SDK，适合 ESP32、嵌入式 Linux 和自定义网络栈
 ```
 
 `devices/swift-backup/` 是历史阶段备份目录，不作为当前公开接入入口。
@@ -35,11 +32,8 @@ devices/
 
 | SDK | 入口 | 当前定位 |
 | --- | --- | --- |
-| Python | [python](python/README.md) | 基准 SDK、测试 harness、Linux / Python 端侧。 |
-| TypeScript | [typescript](typescript/README.md) | 浏览器、Node、Electron 和 WebView 端侧。 |
+| JavaScript | [javascript](javascript/README.md) | 浏览器、Node、Electron 和 WebView 端侧，当前 Web Chat demo 的主要 SDK。 |
 | Swift | [swift](swift/README.md) | iOS / macOS 端侧，当前真机 demo 的主要 SDK。 |
-| Kotlin / Java | [kotlin](kotlin/README.md) | Android / JVM 协议模型和端侧 SDK。 |
-| C | [c](c/README.md) | ESP32、嵌入式 Linux 和自定义网络栈的最小协议核心。 |
 
 ## 推荐阅读
 
@@ -51,16 +45,6 @@ devices/
 ## 常用测试
 
 ```bash
-uv run python -m pytest devices/python/unit-tests devices/python/protocol-tests -q
-cd devices/typescript && npm test
+cd devices/javascript && npm test
 cd devices/swift && swift test
-```
-
-Kotlin 和 C SDK 的测试需要本机具备对应工具链：
-
-```bash
-cd devices/kotlin && gradle test
-cmake -S devices/c -B devices/c/build
-cmake --build devices/c/build
-ctest --test-dir devices/c/build --output-on-failure
 ```

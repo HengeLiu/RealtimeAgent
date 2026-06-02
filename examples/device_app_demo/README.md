@@ -1,10 +1,10 @@
 # Device Demo
 
-`examples/device_app_demo` 是面向端侧 App 开发者的最小 Swift 真机 demo。它演示新的端侧 SDK 接入方式：
+`examples/device_app_demo` 是面向端侧 App 开发者的最小真机 / 浏览器 demo。它演示新的端侧 SDK 接入方式：
 
 - 不手写设备注册 JSON。
 - 不手写 `control.device.register.requested`。
-- 通过 Swift 代码声明设备、能力和硬件。
+- 通过 Swift 或 JavaScript 代码声明设备、能力和硬件。
 - 显式启用麦克风、相机和喇叭后，由 SDK 维护音频上行、相机帧上传、speaker 播放 buffer 和下行播放。
 
 ## 目录
@@ -19,6 +19,11 @@ examples/device_app_demo/
       DeviceDemoRuntime.swift
       CameraPreviewController.swift
       Info.plist
+  web-chat/
+    index.html
+    app.js
+    styles.css
+    package.json
 ```
 
 ## 交互流程
@@ -61,3 +66,27 @@ examples/device_app_demo/ios/DeviceDemo.xcodeproj
 ```
 
 首次启动后，在右上角调试面板里修改 server 地址，然后点击“开始音视频对话”。不要使用外部业务 App 工程来验证 Swift Device SDK。
+
+## 浏览器运行
+
+Web Chat demo 只依赖本仓库的 JavaScript Device SDK：
+
+```text
+examples/device_app_demo/web-chat/app.js
+  -> /devices/javascript/src/index.js
+```
+
+启动本地静态服务：
+
+```bash
+cd examples/device_app_demo/web-chat
+npm run dev
+```
+
+浏览器打开：
+
+```text
+http://127.0.0.1:8766/examples/device_app_demo/web-chat/
+```
+
+首次启动后，在页面里设置 server 地址，点击“开始音视频对话”，并授权麦克风和相机。Web Chat 页面不直接实现 WebSocket、StreamChunk、浏览器回声抑制或 speaker buffer，这些都由 JavaScript Device SDK 负责。

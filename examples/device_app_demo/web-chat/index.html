@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Realtime Agent Web Chat</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="page-shell">
+      <main class="app-shell">
+        <section class="topbar">
+          <div class="brand-block">
+            <img class="brand-mark" src="/docs/assets/realtime-agent-brand.svg" alt="realtime-agent">
+            <div>
+              <p class="eyebrow">Device Demo</p>
+              <h1>Web Chat</h1>
+            </div>
+          </div>
+          <button id="debugButton" class="icon-button" type="button" title="调试信息" aria-label="调试信息">i</button>
+        </section>
+
+        <section id="startView" class="start-view">
+          <button id="primaryButton" class="primary-orb" type="button">
+            <span id="primaryButtonText">开始<br>音视频对话</span>
+          </button>
+          <p id="shortStatus" class="short-status">等待连接</p>
+        </section>
+
+        <section id="conversationView" class="conversation-view" hidden>
+          <div class="preview-frame">
+            <video id="cameraPreview" autoplay muted playsinline></video>
+            <div id="cameraPlaceholder" class="camera-placeholder">摄像头视频回显窗口</div>
+          </div>
+          <button id="endButton" class="audio-strip" type="button">
+            <div class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+            <span id="conversationStatus">对话中</span>
+            <div class="wave" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+          </button>
+        </section>
+      </main>
+
+      <aside id="debugPanel" class="debug-panel">
+        <div class="debug-header">
+          <div>
+            <p class="eyebrow">Diagnostics</p>
+            <h2>调试信息 / 日志</h2>
+          </div>
+          <button id="closeDebugButton" class="icon-button" type="button" title="关闭" aria-label="关闭">x</button>
+        </div>
+        <div class="server-panel">
+          <label for="serverUrl">Server URL</label>
+          <div class="url-row">
+            <input id="serverUrl" type="url" autocomplete="off" spellcheck="false">
+            <button id="saveUrlButton" class="secondary-button" type="button">保存</button>
+          </div>
+        </div>
+        <div class="debug-actions">
+          <button id="copyDiagnosticsButton" class="secondary-button" type="button">复制诊断</button>
+          <button id="copyLogsButton" class="secondary-button" type="button">复制日志</button>
+          <button id="clearLogsButton" class="secondary-button" type="button">清空日志</button>
+        </div>
+        <pre id="diagnosticsText" class="diagnostics-text">{}</pre>
+        <ol id="logList" class="log-list"></ol>
+      </aside>
+    </div>
+
+    <script type="module" src="./app.js?v=webchat-preview-20260602"></script>
+  </body>
+</html>
