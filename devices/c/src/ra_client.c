@@ -55,7 +55,53 @@ static bool has_text(const char *value) {
     return value != NULL && value[0] != '\0';
 }
 
+static int append_text(char *out, size_t capacity, size_t *pos, const char *fmt, ...);
+
+static int append_json_object_members(char *out, size_t capacity, size_t *pos, const char *json, bool *need_comma) {
+    if (!has_text(json) || out == NULL || pos == NULL || need_comma == NULL) {
+        return RA_OK;
+    }
+    const char *start = json;
+    while (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t') {
+        start++;
+    }
+    if (*start != '{') {
+        return RA_ERROR_INVALID_ARGUMENT;
+    }
+    start++;
+    const char *end = json + strlen(json);
+    while (end > start && (end[-1] == ' ' || end[-1] == '\n' || end[-1] == '\r' || end[-1] == '\t')) {
+        end--;
+    }
+    if (end <= start || end[-1] != '}') {
+        return RA_ERROR_INVALID_ARGUMENT;
+    }
+    end--;
+    while (start < end && (*start == ' ' || *start == '\n' || *start == '\r' || *start == '\t')) {
+        start++;
+    }
+    while (end > start && (end[-1] == ' ' || end[-1] == '\n' || end[-1] == '\r' || end[-1] == '\t')) {
+        end--;
+    }
+    if (start >= end) {
+        return RA_OK;
+    }
+    int rc = RA_OK;
+    if (*need_comma) {
+        rc = append_text(out, capacity, pos, ",");
+        if (rc != RA_OK) {
+            return rc;
+        }
+    }
+    rc = append_text(out, capacity, pos, "%.*s", (int)(end - start), start);
+    if (rc == RA_OK) {
+        *need_comma = true;
+    }
+    return rc;
+}
+
 static int send_simple_event(ra_device_client_t *client, const char *name, const char *payload);
+static void update_speaker_buffer_diagnostics(ra_device_client_t *client);
 
 static int append_text(char *out, size_t capacity, size_t *pos, const char *fmt, ...) {
     va_list args;
@@ -354,6 +400,11 @@ int ra_device_client_build_registration_payload(const ra_device_client_t *client
         if (rc != RA_OK) {
             return rc;
         }
+        need_comma = true;
+    }
+    rc = append_json_object_members(out, capacity, &pos, client->properties_json, &need_comma);
+    if (rc != RA_OK) {
+        return rc;
     }
     rc = append_text(out, capacity, &pos, "},\"supports\":{\"sensors\":[");
     if (rc != RA_OK) {
@@ -460,6 +511,39 @@ int ra_device_client_close(ra_device_client_t *client) {
     return RA_OK;
 }
 
+int ra_device_client_handle_transport_disconnected(ra_device_client_t *client, ra_transport_channel_t channel) {
+    if (client == NULL) {
+        return RA_ERROR_INVALID_ARGUMENT;
+    }
+    (void)channel;
+    if (client->connection_state == RA_CLIENT_CLOSED) {
+        return RA_OK;
+    }
+    if (client->config.mic != NULL && client->config.mic->stop != NULL) {
+        (void)client->config.mic->stop(client->config.mic->ctx);
+    }
+    client->output_finish_pending = false;
+    client->output_finish_last_seq = -1;
+    client->output_started = false;
+    if (client->speaker_buffer_initialized) {
+        ra_speaker_buffer_reset(&client->speaker_buffer, 0);
+        update_speaker_buffer_diagnostics(client);
+    }
+    if (client->config.speaker != NULL && client->config.speaker->cancel != NULL) {
+        (void)client->config.speaker->cancel(client->config.speaker->ctx);
+    }
+    if (client->config.transport != NULL && client->config.transport->close != NULL) {
+        (void)client->config.transport->close(client->config.transport->ctx, RA_TRANSPORT_CONTROL);
+        (void)client->config.transport->close(client->config.transport->ctx, RA_TRANSPORT_AUDIO_INPUT);
+        (void)client->config.transport->close(client->config.transport->ctx, RA_TRANSPORT_AUDIO_OUTPUT);
+        (void)client->config.transport->close(client->config.transport->ctx, RA_TRANSPORT_VISUAL_INPUT);
+    }
+    set_conversation_state(client, RA_CONVERSATION_WAITING);
+    set_connection_state(client, RA_CLIENT_DISCONNECTED);
+    ra_diagnostics_set_error(&client->diagnostics, "transport_disconnected");
+    return RA_OK;
+}
+
 int ra_device_client_start_conversation(ra_device_client_t *client, const char *reason) {
     if (client == NULL || client->config.transport == NULL || client->config.transport->send_text == NULL) {
         return RA_ERROR_INVALID_ARGUMENT;
@@ -535,18 +619,39 @@ static void update_speaker_buffer_diagnostics(ra_device_client_t *client) {
     if (client == NULL || !client->speaker_buffer_initialized) {
         return;
     }
-    client->diagnostics.speaker_buffered_ms = (uint32_t)(client->speaker_buffer.buffered_ms < 0 ? 0 : client->speaker_buffer.buffered_ms);
-    client->diagnostics.speaker_buffered_bytes = (uint32_t)client->speaker_buffer.buffered_bytes;
+    ra_speaker_buffer_snapshot_t snapshot;
+    if (ra_speaker_buffer_snapshot(&client->speaker_buffer, &snapshot) != RA_OK) {
+        return;
+    }
+    client->diagnostics.speaker_buffered_ms = (uint32_t)(snapshot.buffered_ms < 0 ? 0 : snapshot.buffered_ms);
+    client->diagnostics.speaker_buffered_bytes = (uint32_t)snapshot.buffered_bytes;
 }
 
-static int send_downstream_watermark_event(ra_device_client_t *client, const char *name, int watermark_ms, const char *reason) {
+static int speaker_buffer_snapshot_or_empty(ra_device_client_t *client, ra_speaker_buffer_snapshot_t *out) {
+    if (out == NULL) {
+        return RA_ERROR_INVALID_ARGUMENT;
+    }
+    memset(out, 0, sizeof(*out));
+    if (client == NULL || !client->speaker_buffer_initialized) {
+        return RA_ERROR_STATE;
+    }
+    return ra_speaker_buffer_snapshot(&client->speaker_buffer, out);
+}
+
+static int send_downstream_watermark_event(
+    ra_device_client_t *client,
+    const char *name,
+    int watermark_ms,
+    int buffered_ms,
+    const char *reason
+) {
     char payload[256];
     const char *watermark_key = strcmp(name, "downstream.pause.requested") == 0 ? "high_watermark_ms" : "low_watermark_ms";
     snprintf(
         payload,
         sizeof(payload),
         "{\"stream_type\":\"actuator.speaker\",\"buffered_ms\":%d,\"%s\":%d,\"reason\":\"%s\"}",
-        client->speaker_buffer.buffered_ms,
+        buffered_ms,
         watermark_key,
         watermark_ms,
         reason
@@ -578,8 +683,12 @@ static int start_output_if_ready(ra_device_client_t *client) {
     if (client == NULL || client->output_started || !client->speaker_buffer_initialized) {
         return RA_OK;
     }
+    ra_speaker_buffer_snapshot_t snapshot;
+    if (speaker_buffer_snapshot_or_empty(client, &snapshot) != RA_OK) {
+        return RA_OK;
+    }
     if (!ra_speaker_buffer_can_start(&client->speaker_buffer) &&
-        !(client->output_finish_pending && client->speaker_buffer.chunk_count > 0)) {
+        !(client->output_finish_pending && snapshot.chunk_count > 0)) {
         return RA_OK;
     }
     client->output_started = true;
@@ -593,7 +702,8 @@ static int finish_output_if_ready(ra_device_client_t *client) {
     if (client->output_finish_last_seq >= 0 && client->output_last_seq < client->output_finish_last_seq) {
         return RA_OK;
     }
-    if (client->speaker_buffer_initialized && client->speaker_buffer.chunk_count > 0) {
+    ra_speaker_buffer_snapshot_t snapshot;
+    if (speaker_buffer_snapshot_or_empty(client, &snapshot) == RA_OK && snapshot.chunk_count > 0) {
         return RA_OK;
     }
     client->output_finish_pending = false;
@@ -777,10 +887,13 @@ int ra_device_client_handle_output_chunk(ra_device_client_t *client, const uint8
     }
     update_speaker_buffer_diagnostics(client);
     if (ra_speaker_buffer_should_pause(&client->speaker_buffer)) {
+        ra_speaker_buffer_snapshot_t snapshot;
+        (void)speaker_buffer_snapshot_or_empty(client, &snapshot);
         (void)send_downstream_watermark_event(
             client,
             "downstream.pause.requested",
             client->speaker_buffer.config.high_watermark_ms,
+            snapshot.buffered_ms,
             "speaker_buffer_high"
         );
     }
@@ -817,10 +930,13 @@ int ra_device_client_pump_output(ra_device_client_t *client) {
     ra_speaker_buffer_release_chunk(&out);
     update_speaker_buffer_diagnostics(client);
     if (ra_speaker_buffer_should_resume(&client->speaker_buffer)) {
+        ra_speaker_buffer_snapshot_t snapshot;
+        (void)speaker_buffer_snapshot_or_empty(client, &snapshot);
         (void)send_downstream_watermark_event(
             client,
             "downstream.resume.requested",
             client->speaker_buffer.config.low_watermark_ms,
+            snapshot.buffered_ms,
             "speaker_buffer_low"
         );
     }

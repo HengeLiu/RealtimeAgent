@@ -3,49 +3,42 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(ESP_PLATFORM)
-#include "esp_heap_caps.h"
-#define RA_SPEAKER_BUFFER_HAS_ESP_HEAP 1
-#endif
-
 static void speaker_buffer_lock(ra_speaker_buffer_t *buffer) {
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-    if (buffer != NULL && buffer->mutex != NULL) {
-        xSemaphoreTake(buffer->mutex, portMAX_DELAY);
+    if (buffer != NULL && buffer->config.lock != NULL) {
+        buffer->config.lock(buffer->config.lock_ctx);
     }
-#else
-    (void)buffer;
-#endif
 }
 
 static void speaker_buffer_unlock(ra_speaker_buffer_t *buffer) {
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-    if (buffer != NULL && buffer->mutex != NULL) {
-        xSemaphoreGive(buffer->mutex);
+    if (buffer != NULL && buffer->config.unlock != NULL) {
+        buffer->config.unlock(buffer->config.lock_ctx);
     }
-#else
-    (void)buffer;
-#endif
 }
 
-static void *speaker_buffer_malloc(size_t size) {
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-    if (ptr == NULL) {
-        ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+static void *speaker_buffer_malloc(const ra_speaker_buffer_t *buffer, size_t size) {
+    if (buffer != NULL && buffer->config.alloc != NULL) {
+        return buffer->config.alloc(buffer->config.allocator_ctx, size);
     }
-    return ptr;
-#else
     return malloc(size);
-#endif
 }
 
-static void *speaker_buffer_calloc(size_t count, size_t size) {
+static void speaker_buffer_free(const ra_speaker_buffer_t *buffer, void *ptr) {
+    if (ptr == NULL) {
+        return;
+    }
+    if (buffer != NULL && buffer->config.free != NULL) {
+        buffer->config.free(buffer->config.allocator_ctx, ptr);
+        return;
+    }
+    free(ptr);
+}
+
+static void *speaker_buffer_calloc(const ra_speaker_buffer_t *buffer, size_t count, size_t size) {
     if (count != 0 && size > ((size_t)-1) / count) {
         return NULL;
     }
     size_t total = count * size;
-    void *ptr = speaker_buffer_malloc(total);
+    void *ptr = speaker_buffer_malloc(buffer, total);
     if (ptr != NULL) {
         memset(ptr, 0, total);
     }
@@ -60,6 +53,12 @@ ra_speaker_buffer_config_t ra_speaker_buffer_default_config(void) {
     config.max_buffer_ms = 1200;
     config.max_payload_bytes = 4096;
     config.max_chunks = 96;
+    config.allocator_ctx = NULL;
+    config.alloc = NULL;
+    config.free = NULL;
+    config.lock_ctx = NULL;
+    config.lock = NULL;
+    config.unlock = NULL;
     return config;
 }
 
@@ -68,25 +67,16 @@ int ra_speaker_buffer_init(ra_speaker_buffer_t *buffer, const ra_speaker_buffer_
         return RA_ERROR_INVALID_ARGUMENT;
     }
     memset(buffer, 0, sizeof(*buffer));
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-    buffer->mutex = xSemaphoreCreateMutex();
-    if (buffer->mutex == NULL) {
-        return RA_ERROR_NO_MEMORY;
-    }
-#endif
     buffer->config = config == NULL ? ra_speaker_buffer_default_config() : *config;
     if (buffer->config.max_chunks <= 0) {
         buffer->config.max_chunks = 96;
     }
     buffer->chunks = (ra_speaker_buffer_chunk_t *)speaker_buffer_calloc(
+        buffer,
         (size_t)buffer->config.max_chunks,
         sizeof(ra_speaker_buffer_chunk_t)
     );
     if (buffer->chunks == NULL) {
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-        vSemaphoreDelete(buffer->mutex);
-        buffer->mutex = NULL;
-#endif
         return RA_ERROR_NO_MEMORY;
     }
     buffer->next_seq = 0;
@@ -97,7 +87,11 @@ void ra_speaker_buffer_release_chunk(ra_speaker_buffer_chunk_t *chunk) {
     if (chunk == NULL) {
         return;
     }
-    free(chunk->payload);
+    if (chunk->free != NULL) {
+        chunk->free(chunk->allocator_ctx, chunk->payload);
+    } else {
+        free(chunk->payload);
+    }
     memset(chunk, 0, sizeof(*chunk));
 }
 
@@ -124,14 +118,8 @@ void ra_speaker_buffer_deinit(ra_speaker_buffer_t *buffer) {
         return;
     }
     ra_speaker_buffer_reset(buffer, 0);
-    free(buffer->chunks);
+    speaker_buffer_free(buffer, buffer->chunks);
     buffer->chunks = NULL;
-#if defined(RA_SPEAKER_BUFFER_HAS_ESP_HEAP)
-    if (buffer->mutex != NULL) {
-        vSemaphoreDelete(buffer->mutex);
-        buffer->mutex = NULL;
-    }
-#endif
 }
 
 static bool speaker_buffer_has_seq_unlocked(const ra_speaker_buffer_t *buffer, int seq) {
@@ -158,7 +146,7 @@ int ra_speaker_buffer_append(ra_speaker_buffer_t *buffer, int seq, const uint8_t
     if (buffer == NULL || buffer->chunks == NULL || payload == NULL || size == 0 || duration_ms <= 0) {
         return RA_ERROR_INVALID_ARGUMENT;
     }
-    uint8_t *copy = (uint8_t *)speaker_buffer_malloc(size);
+    uint8_t *copy = (uint8_t *)speaker_buffer_malloc(buffer, size);
     if (copy == NULL) {
         return RA_ERROR_NO_MEMORY;
     }
@@ -167,7 +155,7 @@ int ra_speaker_buffer_append(ra_speaker_buffer_t *buffer, int seq, const uint8_t
     if (seq < buffer->next_seq || speaker_buffer_has_seq_unlocked(buffer, seq)) {
         buffer->duplicate_chunks++;
         speaker_buffer_unlock(buffer);
-        free(copy);
+        speaker_buffer_free(buffer, copy);
         return RA_OK;
     }
     if (seq > buffer->next_seq) {
@@ -175,12 +163,12 @@ int ra_speaker_buffer_append(ra_speaker_buffer_t *buffer, int seq, const uint8_t
     }
     if (buffer->buffered_ms + duration_ms > buffer->config.max_buffer_ms) {
         speaker_buffer_unlock(buffer);
-        free(copy);
+        speaker_buffer_free(buffer, copy);
         return RA_ERROR_BUFFER_TOO_SMALL;
     }
     if (buffer->config.max_payload_bytes > 0 && size > buffer->config.max_payload_bytes) {
         speaker_buffer_unlock(buffer);
-        free(copy);
+        speaker_buffer_free(buffer, copy);
         return RA_ERROR_BUFFER_TOO_SMALL;
     }
     int slot = -1;
@@ -192,13 +180,15 @@ int ra_speaker_buffer_append(ra_speaker_buffer_t *buffer, int seq, const uint8_t
     }
     if (slot < 0) {
         speaker_buffer_unlock(buffer);
-        free(copy);
+        speaker_buffer_free(buffer, copy);
         return RA_ERROR_BUFFER_TOO_SMALL;
     }
     buffer->chunks[slot].seq = seq;
     buffer->chunks[slot].duration_ms = duration_ms;
     buffer->chunks[slot].size = size;
     buffer->chunks[slot].payload = copy;
+    buffer->chunks[slot].allocator_ctx = buffer->config.allocator_ctx;
+    buffer->chunks[slot].free = buffer->config.free;
     buffer->chunk_count++;
     buffer->buffered_ms += duration_ms;
     buffer->buffered_bytes += size;
@@ -272,4 +262,20 @@ int ra_speaker_buffer_pop_next(ra_speaker_buffer_t *buffer, ra_speaker_buffer_ch
     }
     speaker_buffer_unlock(buffer);
     return RA_ERROR_NOT_FOUND;
+}
+
+int ra_speaker_buffer_snapshot(const ra_speaker_buffer_t *buffer, ra_speaker_buffer_snapshot_t *out) {
+    if (buffer == NULL || out == NULL) {
+        return RA_ERROR_INVALID_ARGUMENT;
+    }
+    ra_speaker_buffer_t *mutable_buffer = (ra_speaker_buffer_t *)buffer;
+    speaker_buffer_lock(mutable_buffer);
+    out->chunk_count = buffer->chunk_count;
+    out->buffered_ms = buffer->buffered_ms;
+    out->buffered_bytes = buffer->buffered_bytes;
+    out->duplicate_chunks = buffer->duplicate_chunks;
+    out->out_of_order_chunks = buffer->out_of_order_chunks;
+    out->paused = buffer->paused;
+    speaker_buffer_unlock(mutable_buffer);
+    return RA_OK;
 }

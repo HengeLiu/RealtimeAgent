@@ -9,11 +9,13 @@
 #include "board/board_config.h"
 #include "diagnostics/ra_esp32_diag.h"
 #include "esp_event.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs_flash.h"
 #include "realtime_agent_device/ra_client.h"
@@ -29,10 +31,17 @@ static const char *TAG = "ra_esp32_app";
 static EventGroupHandle_t s_wifi_event_group;
 static int s_wifi_retry_count = 0;
 static ra_device_client_t *s_client = NULL;
+static const char *s_device_properties =
+    "{\"audio.aec\":\"disabled\","
+    "\"audio.playback_reference\":\"not_wired\","
+    "\"audio.wake_word\":\"disabled\","
+    "\"audio.full_duplex\":true,"
+    "\"audio.mic_policy\":\"keep_uploading_raw_pdm\"}";
 static ra_transport_t s_sdk_transport;
 static ra_mic_source_t s_mic_source;
 static ra_speaker_sink_t s_speaker_sink;
 static ra_camera_source_t s_camera_source;
+static SemaphoreHandle_t s_speaker_buffer_mutex = NULL;
 
 #if CONFIG_REALTIME_AGENT_AUTO_WAKE_SMOKE
 static bool s_auto_wake_sent = false;
@@ -138,7 +147,15 @@ static void control_receive_task(void *arg) {
         int rc = s_sdk_transport.recv_text(s_sdk_transport.ctx, RA_TRANSPORT_CONTROL, text, CONTROL_RECV_BUFFER_SIZE, &size);
         if (rc != 0) {
             ESP_LOGW(TAG, "control.recv failed");
+            (void)ra_device_client_handle_transport_disconnected(s_client, RA_TRANSPORT_CONTROL);
             vTaskDelay(pdMS_TO_TICKS(1000));
+            rc = ra_device_client_start(s_client);
+            if (rc != RA_OK) {
+                ESP_LOGW(TAG, "client.reconnect failed rc=%d", rc);
+                vTaskDelay(pdMS_TO_TICKS(2000));
+            } else {
+                ESP_LOGI(TAG, "client.reconnect requested");
+            }
             continue;
         }
         ESP_LOGI(TAG, "control.event bytes=%u", (unsigned)size);
@@ -242,6 +259,34 @@ static void connection_state_changed(ra_client_connection_state_t state, void *u
     ESP_LOGI(TAG, "connection.state=%s", ra_client_connection_state_name(state));
 }
 
+static void *speaker_buffer_alloc(void *ctx, size_t size) {
+    (void)ctx;
+    void *ptr = heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (ptr == NULL) {
+        ptr = heap_caps_malloc(size, MALLOC_CAP_8BIT);
+    }
+    return ptr;
+}
+
+static void speaker_buffer_free(void *ctx, void *ptr) {
+    (void)ctx;
+    heap_caps_free(ptr);
+}
+
+static void speaker_buffer_lock(void *ctx) {
+    SemaphoreHandle_t mutex = (SemaphoreHandle_t)ctx;
+    if (mutex != NULL) {
+        xSemaphoreTake(mutex, portMAX_DELAY);
+    }
+}
+
+static void speaker_buffer_unlock(void *ctx) {
+    SemaphoreHandle_t mutex = (SemaphoreHandle_t)ctx;
+    if (mutex != NULL) {
+        xSemaphoreGive(mutex);
+    }
+}
+
 static void client_start_task(void *arg) {
     (void)arg;
     int rc = ra_device_client_start(s_client);
@@ -297,6 +342,16 @@ void app_main(void) {
     speaker_buffer.max_buffer_ms = 12000;
     speaker_buffer.max_payload_bytes = 2048;
     speaker_buffer.max_chunks = 768;
+    s_speaker_buffer_mutex = xSemaphoreCreateMutex();
+    if (s_speaker_buffer_mutex == NULL) {
+        ESP_LOGE(TAG, "speaker_buffer mutex create failed");
+        return;
+    }
+    speaker_buffer.alloc = speaker_buffer_alloc;
+    speaker_buffer.free = speaker_buffer_free;
+    speaker_buffer.lock_ctx = s_speaker_buffer_mutex;
+    speaker_buffer.lock = speaker_buffer_lock;
+    speaker_buffer.unlock = speaker_buffer_unlock;
 
     ra_device_client_config_t config = {
         .server_url = CONFIG_REALTIME_AGENT_SERVER_URL,
@@ -304,6 +359,7 @@ void app_main(void) {
         .user_id = CONFIG_REALTIME_AGENT_USER_ID,
         .name = CONFIG_REALTIME_AGENT_DEVICE_NAME,
         .client_type = "esp32-s3",
+        .properties_json = s_device_properties,
         .mic = &s_mic_source,
         .speaker = &s_speaker_sink,
         .camera = &s_camera_source,

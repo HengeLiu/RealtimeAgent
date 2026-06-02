@@ -60,6 +60,7 @@ int ra_device_client_close(ra_device_client_t *client);
 int ra_device_client_send_heartbeat(ra_device_client_t *client);
 int ra_device_client_start_conversation(ra_device_client_t *client, const char *reason);
 int ra_device_client_handle_event(ra_device_client_t *client, const char *json);
+int ra_device_client_handle_transport_disconnected(ra_device_client_t *client, ra_transport_channel_t channel);
 int ra_device_client_send_mic_chunk(ra_device_client_t *client);
 int ra_device_client_handle_output_chunk(ra_device_client_t *client, const uint8_t *data, size_t size);
 int ra_device_client_pump_output(ra_device_client_t *client);

@@ -7,14 +7,14 @@
 
 #include "ra_error.h"
 
-#if defined(ESP_PLATFORM)
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef void *(*ra_speaker_buffer_alloc_fn)(void *ctx, size_t size);
+typedef void (*ra_speaker_buffer_free_fn)(void *ctx, void *ptr);
+typedef void (*ra_speaker_buffer_lock_fn)(void *ctx);
+typedef void (*ra_speaker_buffer_unlock_fn)(void *ctx);
 
 typedef struct {
     int start_watermark_ms;
@@ -23,6 +23,12 @@ typedef struct {
     int max_buffer_ms;
     size_t max_payload_bytes;
     int max_chunks;
+    void *allocator_ctx;
+    ra_speaker_buffer_alloc_fn alloc;
+    ra_speaker_buffer_free_fn free;
+    void *lock_ctx;
+    ra_speaker_buffer_lock_fn lock;
+    ra_speaker_buffer_unlock_fn unlock;
 } ra_speaker_buffer_config_t;
 
 typedef struct {
@@ -30,14 +36,13 @@ typedef struct {
     int duration_ms;
     size_t size;
     uint8_t *payload;
+    void *allocator_ctx;
+    ra_speaker_buffer_free_fn free;
 } ra_speaker_buffer_chunk_t;
 
 typedef struct {
     ra_speaker_buffer_config_t config;
     ra_speaker_buffer_chunk_t *chunks;
-#if defined(ESP_PLATFORM)
-    SemaphoreHandle_t mutex;
-#endif
     int next_seq;
     int chunk_count;
     int buffered_ms;
@@ -46,6 +51,15 @@ typedef struct {
     int out_of_order_chunks;
     bool paused;
 } ra_speaker_buffer_t;
+
+typedef struct {
+    int chunk_count;
+    int buffered_ms;
+    size_t buffered_bytes;
+    int duplicate_chunks;
+    int out_of_order_chunks;
+    bool paused;
+} ra_speaker_buffer_snapshot_t;
 
 ra_speaker_buffer_config_t ra_speaker_buffer_default_config(void);
 int ra_speaker_buffer_init(ra_speaker_buffer_t *buffer, const ra_speaker_buffer_config_t *config);
@@ -58,6 +72,7 @@ bool ra_speaker_buffer_should_resume(ra_speaker_buffer_t *buffer);
 int ra_speaker_buffer_pop_next(ra_speaker_buffer_t *buffer, ra_speaker_buffer_chunk_t *out);
 void ra_speaker_buffer_release_chunk(ra_speaker_buffer_chunk_t *chunk);
 bool ra_speaker_buffer_has_seq(const ra_speaker_buffer_t *buffer, int seq);
+int ra_speaker_buffer_snapshot(const ra_speaker_buffer_t *buffer, ra_speaker_buffer_snapshot_t *out);
 
 #ifdef __cplusplus
 }

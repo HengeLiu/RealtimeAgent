@@ -72,6 +72,22 @@ static void clear_fragment(ra_esp32_transport_t *transport, ra_transport_channel
     memset(&transport->fragments[channel], 0, sizeof(transport->fragments[channel]));
 }
 
+static void clear_queue(QueueHandle_t queue) {
+    if (queue == NULL) {
+        return;
+    }
+    ra_esp32_transport_message_t message;
+    while (xQueueReceive(queue, &message, 0) == pdTRUE) {
+        free(message.data);
+    }
+}
+
+static void clear_channel_queues(ra_esp32_transport_t *transport, ra_transport_channel_t channel) {
+    clear_queue(transport->text_queues[channel]);
+    clear_queue(transport->binary_queues[channel]);
+    clear_fragment(transport, channel);
+}
+
 static void enqueue_message(
     ra_esp32_transport_t *transport,
     ra_transport_channel_t channel,
@@ -98,6 +114,19 @@ static void enqueue_message(
     }
 }
 
+static void enqueue_disconnect(ra_esp32_transport_t *transport, ra_transport_channel_t channel) {
+    ra_esp32_transport_message_t message = {
+        .size = 0,
+        .data = NULL,
+    };
+    if (transport->text_queues[channel] != NULL) {
+        (void)xQueueSend(transport->text_queues[channel], &message, 0);
+    }
+    if (transport->binary_queues[channel] != NULL) {
+        (void)xQueueSend(transport->binary_queues[channel], &message, 0);
+    }
+}
+
 static void websocket_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     (void)base;
     ra_esp32_transport_t *transport = (ra_esp32_transport_t *)handler_args;
@@ -113,6 +142,7 @@ static void websocket_event_handler(void *handler_args, esp_event_base_t base, i
     }
     if (event_id == WEBSOCKET_EVENT_DISCONNECTED) {
         ESP_LOGW(TAG, "%s.disconnected", ra_transport_channel_name(channel));
+        enqueue_disconnect(transport, channel);
         if (transport->event_groups[channel] != NULL) {
             xEventGroupClearBits(transport->event_groups[channel], RA_ESP32_TRANSPORT_CONNECTED_BIT);
             xEventGroupSetBits(transport->event_groups[channel], RA_ESP32_TRANSPORT_DISCONNECTED_BIT);
@@ -215,6 +245,7 @@ static int transport_connect(void *ctx, ra_transport_channel_t channel, const ch
         esp_websocket_client_destroy(transport->clients[channel]);
         transport->clients[channel] = NULL;
     }
+    clear_channel_queues(transport, channel);
     esp_websocket_client_config_t config = {
         .uri = url,
         .buffer_size = RA_ESP32_TRANSPORT_MAX_MESSAGE,

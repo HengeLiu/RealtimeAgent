@@ -8,6 +8,7 @@ typedef struct {
     int connect_count;
     int send_count;
     int binary_count;
+    int close_count;
     char last_url[256];
     char last_text[4096];
     char last_binary_header[1024];
@@ -41,8 +42,8 @@ static int mock_send_binary(void *ctx, ra_transport_channel_t channel, const uin
 }
 
 static int mock_close(void *ctx, ra_transport_channel_t channel) {
-    (void)ctx;
     (void)channel;
+    ((mock_transport_t *)ctx)->close_count++;
     return RA_OK;
 }
 
@@ -163,6 +164,7 @@ static void test_start_sends_registration(void) {
         .user_id = "user-001",
         .name = "C Test Device",
         .client_type = "test-c",
+        .properties_json = "{\"audio.aec\":\"disabled\",\"audio.wake_word\":\"disabled\"}",
         .mic = &mic,
         .camera = &camera,
         .speaker = &speaker,
@@ -177,6 +179,8 @@ static void test_start_sends_registration(void) {
     assert(strstr(mock.last_url, "control:ws://127.0.0.1:8765/ws/control") != NULL);
     assert(strstr(mock.last_text, "control.device.register.requested") != NULL);
     assert(strstr(mock.last_text, "realtime_agent.audio_input") != NULL);
+    assert(strstr(mock.last_text, "\"audio.aec\":\"disabled\"") != NULL);
+    assert(strstr(mock.last_text, "\"audio.wake_word\":\"disabled\"") != NULL);
     assert(strstr(mock.last_text, "\"type\":\"rgb\"") != NULL);
     assert(strstr(mock.last_text, "\"routes\"") == NULL);
     assert(strstr(mock.last_text, "\"capabilities\"") == NULL);
@@ -350,11 +354,64 @@ static void test_rgb_request_uses_image_stream_format_and_id(void) {
     ra_device_client_destroy(client);
 }
 
+/*
+ * 测试目标：验证 transport 断开后 SDK 会统一收口端侧状态。
+ * 测试方法：先模拟注册和音频会话打开，再调用 transport disconnected 入口。
+ * 预期结果：连接状态变为 disconnected，mic 被停止，speaker 被 cancel，四条 transport 被关闭。
+ */
+static void test_transport_disconnect_closes_runtime_state(void) {
+    mock_transport_t mock = {0};
+    ra_transport_t transport = {
+        .ctx = &mock,
+        .connect = mock_connect,
+        .send_text = mock_send_text,
+        .close = mock_close,
+    };
+    mock_mic_t mic_ctx = {0};
+    ra_mic_source_t mic = {
+        .ctx = &mic_ctx,
+        .format = ra_audio_format_default(),
+        .start = mock_mic_start,
+        .stop = mock_mic_stop,
+    };
+    mock_speaker_t speaker_ctx = {0};
+    ra_speaker_sink_t speaker = {
+        .ctx = &speaker_ctx,
+        .prepare = mock_speaker_prepare,
+        .write = mock_speaker_write,
+        .drain = mock_speaker_drain,
+        .cancel = mock_speaker_cancel,
+    };
+    ra_device_client_config_t config = {
+        .server_url = "http://127.0.0.1:8765",
+        .device_id = "dev-001",
+        .user_id = "user-001",
+        .name = "C Test Device",
+        .mic = &mic,
+        .speaker = &speaker,
+        .transport = &transport,
+        .log_level = RA_LOG_DISABLED,
+    };
+    ra_device_client_t *client = ra_device_client_create(&config);
+    assert(client != NULL);
+    assert(ra_device_client_start(client) == RA_OK);
+    assert(ra_device_client_handle_event(client, "{\"event_name\":\"control.device.registered\",\"user_id\":\"user-001\",\"producer_id\":\"server\",\"payload\":{}}") == RA_OK);
+    assert(ra_device_client_handle_event(client, "{\"event_name\":\"control.audio_session.open.requested\",\"user_id\":\"user-001\",\"producer_id\":\"server\",\"payload\":{}}") == RA_OK);
+    assert(ra_device_client_handle_transport_disconnected(client, RA_TRANSPORT_CONTROL) == RA_OK);
+    assert(ra_device_client_connection_state(client) == RA_CLIENT_DISCONNECTED);
+    assert(ra_device_client_conversation_state(client) == RA_CONVERSATION_WAITING);
+    assert(mic_ctx.stopped == 1);
+    assert(speaker_ctx.cancelled == 1);
+    assert(mock.close_count == 4);
+    ra_device_client_destroy(client);
+}
+
 int main(void) {
     test_start_sends_registration();
     test_handle_core_events();
     test_send_heartbeat_after_registered();
     test_rgb_request_uses_image_stream_format_and_id();
+    test_transport_disconnect_closes_runtime_state();
     puts("test_client_state_machine passed");
     return 0;
 }
