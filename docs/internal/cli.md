@@ -17,7 +17,7 @@ uv pip install -e .
 启动示例应用：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 其他应用也推荐按配置启动：
@@ -122,7 +122,7 @@ uv run realtime-agent.esp32.monitor --project-dir /path/to/esp32-firmware --port
 预检：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 发布包检查：
@@ -147,7 +147,7 @@ ctest --test-dir devices/c/build --output-on-failure
 Device Demo 契约测试：
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 全部测试：

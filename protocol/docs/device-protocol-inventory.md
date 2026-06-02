@@ -21,7 +21,7 @@
 | 能力声明校验 | `agent-server/realtime_agent/device_capabilities.py` |
 | Python 回放端 | `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
 | 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
-| iOS SDK Demo | `examples/device_demo/ios/DeviceDemo/` |
+| iOS SDK Demo | `examples/device_app_demo/ios/DeviceDemo/` |
 | ESP32-S3 参考端 | 外部端侧工程维护，本仓库仅保留协议和配置同步入口 |
 
 ## 2. 控制事件清单

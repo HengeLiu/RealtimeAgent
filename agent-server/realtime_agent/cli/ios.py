@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_IOS_PROJECT = "examples/device_demo/ios/DeviceDemo.xcodeproj"
+DEFAULT_IOS_PROJECT = "examples/device_app_demo/ios/DeviceDemo.xcodeproj"
 DEFAULT_IOS_SCHEME = "DeviceDemo"
 
 

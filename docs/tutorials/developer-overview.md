@@ -271,7 +271,7 @@ uv pip install -e .
 ### 启动示例 server
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 默认地址：
@@ -319,7 +319,7 @@ uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass
 ### 跑一个最小契约测试
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 这条测试静态检查 Device Demo、Swift Device SDK 本地依赖、端侧硬件 enable 配置和独立 server 配置，适合快速确认当前推荐示例入口没有退化。
@@ -329,7 +329,7 @@ uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_cont
 示例应用的运行产物默认写到：
 
 ```text
-examples/device_demo/agent-server/runs
+examples/device_app_demo/agent-server/runs
 ```
 
 排查时优先看：

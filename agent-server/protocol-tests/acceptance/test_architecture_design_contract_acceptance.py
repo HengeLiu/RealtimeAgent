@@ -133,11 +133,11 @@ def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
 def test_yaml_config_matches_design_discovery_and_dev_checks_contract() -> None:
     """测试目标：确认 YAML 配置能表达设计文档中的自动发现和本地验收检查。
 
-    测试方法：读取 examples/device_demo/agent-server/server.yaml，检查 tools.discover、tasks.discover 和 dev_checks。
+    测试方法：读取 examples/device_app_demo/agent-server/server.yaml，检查 tools.discover、tasks.discover 和 dev_checks。
     预期结果：开发者只需把 BaseTool / BaseTask 子类放到配置包下，并运行 dev_checks 完成验收。
     """
 
-    config = load_yaml_config("examples/device_demo/agent-server/server.yaml")
+    config = load_yaml_config("examples/device_app_demo/agent-server/server.yaml")
 
     assert hasattr(config, "dev_checks")
     assert config.tools.extra["discover"]["enabled"] is True

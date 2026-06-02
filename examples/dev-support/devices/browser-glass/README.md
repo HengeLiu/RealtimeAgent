@@ -22,7 +22,7 @@
 
 ```bash
 # 在项目根目录执行
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 打开页面时使用 CLI 的本地 HTTP 模式：

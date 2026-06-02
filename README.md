@@ -70,7 +70,7 @@ uv pip install -e .
 启动示例 Agent server：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 默认服务地址：
@@ -92,7 +92,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 1. 启动 server：
 
    ```bash
-   uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+   uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
    ```
 2. 打开浏览器眼镜模拟组件：
 
@@ -113,7 +113,7 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```bash
    curl http://127.0.0.1:8765/api/debug/devices
    curl http://127.0.0.1:8765/api/debug/playback
-   find examples/device_demo/agent-server/runs -maxdepth 3 -type f | sort
+   find examples/device_app_demo/agent-server/runs -maxdepth 3 -type f | sort
    ```
 
 如果只想快速打开浏览器模拟端，可以直接运行：
@@ -125,7 +125,7 @@ uv run realtime-agent.web.open --serve
 运行一个最小契约测试：
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 更多启动、扩展和排障说明见 [开发者总览](docs/tutorials/developer-overview.md)。
@@ -234,7 +234,7 @@ tools/          开发和校验工具
 主要示例应用是：
 
 ```text
-examples/device_demo/
+examples/device_app_demo/
 ```
 
 它是面向端侧 App 开发者的最小 Swift 真机 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
@@ -242,7 +242,7 @@ examples/device_demo/
 开发支持设备包括：
 
 - 浏览器眼镜模拟组件：`uv run realtime-agent.web.open --serve`
-- Swift 真机 demo：`examples/device_demo/ios/`
+- Swift 真机 demo：`examples/device_app_demo/ios/`
 - Python 手机视觉模拟组件：`examples/dev-support/devices/python-phone/`
 - Python playback glass：`examples/dev-support/devices/python-playback-glass/`
 
@@ -253,7 +253,7 @@ examples/device_demo/
 示例应用的运行产物默认写到：
 
 ```text
-examples/device_demo/agent-server/runs
+examples/device_app_demo/agent-server/runs
 ```
 
 最常用的文件：
@@ -290,7 +290,7 @@ examples/device_demo/agent-server/runs
 本项目将持续完善自动测试和审查能力，提交变更前，运行和改动范围最相关的测试。对于 Device Demo 和 Swift Device SDK 入口改动，下面的契约测试可以作为一个轻量 smoke test：
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 ## License

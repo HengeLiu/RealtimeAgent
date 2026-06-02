@@ -112,14 +112,14 @@ def test_example_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_
         TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
 
-def test_device_demo_files_are_copyable() -> None:
+def test_device_app_demo_files_are_copyable() -> None:
     """测试目标：确认仓库内提供可复制的最小 app-root 示例。
 
-    测试方法：检查 device_demo README、配置和 iOS 宿主入口文件存在。
-    预期结果：端侧开发者能从 `examples/device_demo` 开始复制开发。
+    测试方法：检查 device_app_demo README、配置和 iOS 宿主入口文件存在。
+    预期结果：端侧开发者能从 `examples/device_app_demo` 开始复制开发。
     """
 
-    project_root = Path(__file__).resolve().parents[3] / "examples" / "device_demo"
+    project_root = Path(__file__).resolve().parents[3] / "examples" / "device_app_demo"
     root = project_root / "agent-server"
     assert (project_root / "README.md").exists()
     expected = [

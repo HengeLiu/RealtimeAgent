@@ -93,8 +93,8 @@ def live_check(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="realtime-agent.dev.live-check", description="检查 realtime-agent 本地联调状态")
-    parser.add_argument("--config", default="examples/device_demo/agent-server/server.yaml")
-    parser.add_argument("--generated-dir", default="examples/device_demo/agent-server/config/generated")
+    parser.add_argument("--config", default="examples/device_app_demo/agent-server/server.yaml")
+    parser.add_argument("--generated-dir", default="examples/device_app_demo/agent-server/config/generated")
     parser.add_argument("--report", default="runs/default-app/live-check.json")
     args = parser.parse_args(argv)
 
@@ -619,7 +619,7 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Re
         "phone_mock": generated_dir / "phone.mock.yaml",
         "glass_playback": generated_dir / "glass.playback.yaml",
         "web_glass": generated_dir / "browser-glass.yaml",
-        "ios_device_demo": generated_dir / "ios-device-demo.local.json",
+        "ios_device_app_demo": generated_dir / "ios-device-demo.local.json",
         "esp32_s3": generated_dir / "esp32-s3.local.env",
     }
     missing = [name for name, path in files.items() if not path.exists()]
@@ -645,9 +645,9 @@ def _reference_endpoint_config_consistency_check(generated_dir: Path, config: Re
                 errors.append(f"{name} server_url differs from live-check config")
             user_ids.add(str(data.get("user_id", "")))
             device_ids.add(str(data.get("device_id", "")))
-        ios = json.loads(files["ios_device_demo"].read_text(encoding="utf-8"))
+        ios = json.loads(files["ios_device_app_demo"].read_text(encoding="utf-8"))
         if ios.get("server_url") != expected_server_url:
-            errors.append("ios_device_demo server_url differs from live-check config")
+            errors.append("ios_device_app_demo server_url differs from live-check config")
         user_ids.add(str(ios.get("user_id", "")))
         device_ids.add(str(ios.get("device_id", "")))
         esp32_values = _read_env_values(files["esp32_s3"])

@@ -147,8 +147,8 @@ def test_endpoint_reference_directories_exist() -> None:
     root = Path(__file__).resolve().parents[4]
     assert (root / "examples/dev-support/devices/browser-glass/README.md").exists()
     assert (root / "examples/dev-support/devices/python-phone/phone.mock.yaml").exists()
-    assert (root / "examples/device_demo/ios/DeviceDemo.xcodeproj/project.pbxproj").exists()
-    assert (root / "examples/device_demo/agent-server/server.yaml").exists()
+    assert (root / "examples/device_app_demo/ios/DeviceDemo.xcodeproj/project.pbxproj").exists()
+    assert (root / "examples/device_app_demo/agent-server/server.yaml").exists()
 
 
 def test_python_phone_reference_uses_python_device_sdk() -> None:

@@ -2,7 +2,7 @@
 
 本文面向端侧 App 开发者，目标是说明“用最少的标准代码接入 Device SDK”。App 开发者不需要理解 control WebSocket、多条媒体 WebSocket、标准事件状态机或媒体 chunk 封装；这些由各语言 Device SDK 负责。
 
-当前推荐从 `examples/device_demo` 验证端侧接入。Swift Device SDK 已经具备真机 demo 入口；TypeScript / JavaScript SDK 主要覆盖浏览器和 Node 端侧；Python SDK 主要作为基准 SDK、开发支持组件和测试 harness；Kotlin / Java 与 C / ESP32 仍在补齐完整端侧能力的过程中。
+当前推荐从 `examples/device_app_demo` 验证端侧接入。Swift Device SDK 已经具备真机 demo 入口；TypeScript / JavaScript SDK 主要覆盖浏览器和 Node 端侧；Python SDK 主要作为基准 SDK、开发支持组件和测试 harness；Kotlin / Java 与 C / ESP32 仍在补齐完整端侧能力的过程中。
 
 ## 1. App 开发者负责什么
 

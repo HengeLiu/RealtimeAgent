@@ -18,7 +18,7 @@ def main(argv: list[str] | None = None) -> int:
     run_parser.add_argument("--server-url", default="http://127.0.0.1:8765")
     run_parser.add_argument("--case")
     run_parser.add_argument("--suite")
-    run_parser.add_argument("--runs-root", default="examples/device_demo/agent-server/runs")
+    run_parser.add_argument("--runs-root", default="examples/device_app_demo/agent-server/runs")
     run_parser.add_argument("--report", default="examples/dev-support/devices/python-playback-glass/reports/report.json")
     run_parser.add_argument("--fail-fast", action="store_true")
     run_parser.add_argument("--keep-runs", action="store_true")

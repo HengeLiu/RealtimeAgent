@@ -581,9 +581,9 @@ uv run realtime-agent.test.model.latency
 
 当前已有基础：
 
-- `examples/device_demo/tests/`
+- `examples/device_app_demo/tests/`
 - `examples/dev-support/tests/`
-- `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
+- `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
 
 ### 6.3 测试档位
 
@@ -615,9 +615,9 @@ iOS、ESP32、真实摄像头、真实麦克风、真实模型。
 建议命令：
 
 ```bash
-uv run python -m pytest examples/device_demo/tests -q
+uv run python -m pytest examples/device_app_demo/tests -q
 uv run python -m pytest examples/dev-support/tests -q
-uv run python -m pytest examples/device_demo/replay-tests/test_vision_route_audio_samples.py -q
+uv run python -m pytest examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
 后续拆分为：
@@ -682,7 +682,7 @@ devices/
   kotlin/device/src/test/
   c/tests/
 
-examples/device_demo/tests/
+examples/device_app_demo/tests/
   component/
   integration/
   replay/
@@ -1126,10 +1126,10 @@ uv run python -m pytest -m model_provider -q
 主要产物：
 
 ```text
-examples/device_demo/tests/component/
-examples/device_demo/tests/integration/
-examples/device_demo/replay-tests/
-examples/device_demo/app-tests/acceptance/
+examples/device_app_demo/tests/component/
+examples/device_app_demo/tests/integration/
+examples/device_app_demo/replay-tests/
+examples/device_app_demo/app-tests/acceptance/
 examples/dev-support/tests/
 docs/how-to/cross-device-local-debug.md
 runs/regression-reports/latest/l3-app-report.json
@@ -1217,7 +1217,7 @@ uv run python -m pytest -m replay -q
   - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
   - `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
   - `agent-server/model-provider-tests/test_dashscope_providers.py`
-  - `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
+  - `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
 - 验证：
   - `uv run python -m pytest -m protocol_spec -q`，结果：`3 passed`。
   - `uv run python -m pytest -m protocol -q`，结果：`14 passed`。
@@ -1422,18 +1422,18 @@ uv run python -m pytest -m replay -q
   - L3 报告输入摘要增加 external-business-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。
 - 文件：
-  - `examples/device_demo/replay-tests/test_vision_route_audio_samples.py`
+  - `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
   - `examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`
   - `examples/dev-support/app-tests/network/test_network_server_playback.py`
   - `examples/dev-support/unit-tests/browser/test_browser_device_example.py`
   - `examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py`
-  - `examples/device_demo/app-tests/acceptance/test_capability_template_playback.py`
-  - `examples/device_demo/app-tests/acceptance/test_example_capabilities_playback.py`
-  - `examples/device_demo/app-tests/acceptance/test_phone_visual_task_playback.py`
-  - `examples/device_demo/app-tests/config/test_app_name_launch.py`
-  - `examples/device_demo/app-tests/config/test_endpoint_config_sync.py`
-  - `examples/device_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py`
-  - `examples/device_demo/app-tests/test_ios_device_demo_contract.py`
+  - `examples/device_app_demo/app-tests/acceptance/test_capability_template_playback.py`
+  - `examples/device_app_demo/app-tests/acceptance/test_example_capabilities_playback.py`
+  - `examples/device_app_demo/app-tests/acceptance/test_phone_visual_task_playback.py`
+  - `examples/device_app_demo/app-tests/config/test_app_name_launch.py`
+  - `examples/device_app_demo/app-tests/config/test_endpoint_config_sync.py`
+  - `examples/device_app_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py`
+  - `examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py`
   - `external-device-repo/esp32-s3/realtime_agent_esp32_s3/esp32_aec.py`
   - `conftest.py`
 - 验证：
@@ -1442,8 +1442,8 @@ uv run python -m pytest -m replay -q
   - `uv run python -m pytest examples/dev-support/unit-tests/playback/test_python_playback.py examples/dev-support/app-tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
   - `uv run python -m pytest examples/dev-support/unit-tests/browser/test_browser_device_example.py examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
   - `uv run python -m pytest examples/dev-support/tests -q`，结果：`62 passed`。
-  - `uv run python -m pytest examples/device_demo/app-tests/acceptance/test_phone_visual_task_playback.py examples/device_demo/app-tests/config/test_app_name_launch.py examples/device_demo/app-tests/config/test_endpoint_config_sync.py examples/device_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_demo/app-tests -q`，结果：`23 passed`。
-  - `uv run python -m pytest examples/device_demo/tests -q`，结果：`61 passed`。
+  - `uv run python -m pytest examples/device_app_demo/app-tests/acceptance/test_phone_visual_task_playback.py examples/device_app_demo/app-tests/config/test_app_name_launch.py examples/device_app_demo/app-tests/config/test_endpoint_config_sync.py examples/device_app_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_app_demo/app-tests -q`，结果：`23 passed`。
+  - `uv run python -m pytest examples/device_app_demo/tests -q`，结果：`61 passed`。
 - 运行证据：
   - `runs/regression-reports/latest/l3-app-report.json`
   - `runs/regression-reports/latest/l3-replay-report.json`

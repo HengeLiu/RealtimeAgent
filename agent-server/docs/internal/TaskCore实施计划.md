@@ -196,7 +196,7 @@ stop
 1. `agent-server/realtime_agent/app.py`
 2. `agent-server/realtime_agent/tools.py`
 3. `examples/dev-support/agent-server/capabilities/tasks.py`
-4. `examples/device_demo/tests/`
+4. `examples/device_app_demo/tests/`
 
 具体改动：
 
@@ -246,7 +246,7 @@ stop
 2. `agent-server/realtime_agent/tasks.py`
 3. `agent-server/realtime_agent/app.py`
 4. `agent-server/docs/how-to/运行产物排查说明.md`
-5. `examples/device_demo/tests/`
+5. `examples/device_app_demo/tests/`
 
 具体改动：
 
@@ -355,7 +355,7 @@ stop
 
 已验证：
 
-1. `uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_task_engine_scheduler.py agent-server/protocol-tests/sdk/runtime/test_task_engine_persistence.py agent-server/protocol-tests/sdk/runtime/test_task_manage_tool.py agent-server/protocol-tests/acceptance/test_architecture_design_contract_acceptance.py examples/device_demo/app-tests/capabilities/test_phone_task_contract.py examples/device_demo/app-tests/capabilities/test_peer_video_tasks.py -q`
+1. `uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_task_engine_scheduler.py agent-server/protocol-tests/sdk/runtime/test_task_engine_persistence.py agent-server/protocol-tests/sdk/runtime/test_task_manage_tool.py agent-server/protocol-tests/acceptance/test_architecture_design_contract_acceptance.py examples/device_app_demo/app-tests/capabilities/test_phone_task_contract.py examples/device_app_demo/app-tests/capabilities/test_peer_video_tasks.py -q`
    - 结果：26 passed。
 
 补充说明：

@@ -86,7 +86,7 @@ testpaths = [
     "agent-server/model-provider-tests",
     "devices/python/unit-tests",
     "devices/python/protocol-tests",
-    "examples/device_demo/app-tests",
+    "examples/device_app_demo/app-tests",
     "examples/dev-support/unit-tests",
     "examples/dev-support/app-tests",
     "examples/dev-support/replay-tests",

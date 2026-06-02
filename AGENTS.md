@@ -27,7 +27,7 @@
 - [agent-server/docs/README.md](agent-server/docs/README.md)：Server SDK 内部设计文档索引。
 - [agent-server/docs/reference/上下文设备接口设计.md](agent-server/docs/reference/上下文设备接口设计.md)：Context 与设备 API 目标设计。
 - [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)：runs 产物和排障入口。
-- [examples/device_demo/README.md](examples/device_demo/README.md)：Swift Device SDK 真机 demo。
+- [examples/device_app_demo/README.md](examples/device_app_demo/README.md)：Swift Device SDK 真机 demo。
 
 修改目录结构、命令行、协议、运行产物或跨设备流程时，必须同步更新上面的对应文档。文档中的命令、测试结果和真实实现必须一致。
 
@@ -42,7 +42,7 @@ agent-server/docs/                # Server SDK 内部设计、Context API、运�
 devices/                          # 多语言 Device SDK
 protocol/                         # 协议说明、协议数据资产和协议资产检查
 docs/                             # 社区向文档、教程、CLI、测试说明
-examples/device_demo/             # Swift Device SDK 真机验证示例
+examples/device_app_demo/             # Swift Device SDK 真机验证示例
 examples/dev-support/             # browser-glass、Python phone、Python playback 等开发支持组件
 testdata/                         # 可复用测试和回放样例
 legacy/                           # 旧实现和迁移参考
@@ -130,7 +130,7 @@ WebSocket stream 正式入口只使用：
 
 ## 运行产物和排障
 
-`runs/` 是主要排障证据目录，默认位于应用目录下，例如 `examples/device_demo/agent-server/runs`。详细文件结构和排查顺序见 [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)。
+`runs/` 是主要排障证据目录，默认位于应用目录下，例如 `examples/device_app_demo/agent-server/runs`。详细文件结构和排查顺序见 [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)。
 
 排障时优先用真实运行证据定位：
 
@@ -182,7 +182,7 @@ WebSocket stream 正式入口只使用：
 开始改代码前先确认任务属于哪一层：
 
 - SDK 核心能力：改 `agent-server/realtime_agent/`，补 `agent-server/protocol-tests/`，必要时补 `agent-server/unit-tests/`。
-- Device SDK 或端侧参考：改 `devices/`、`examples/device_demo/ios/` 或 `examples/dev-support/devices/`，补端侧契约或联调说明。
+- Device SDK 或端侧参考：改 `devices/`、`examples/device_app_demo/ios/` 或 `examples/dev-support/devices/`，补端侧契约或联调说明。
 - 示例和开发支持能力：改对应 `examples/<app>/agent-server/capabilities/` 或 `examples/dev-support/`。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 

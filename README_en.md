@@ -70,7 +70,7 @@ uv pip install -e .
 Start the example Agent server:
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 Default server address:
@@ -92,7 +92,7 @@ Start local multi-device debugging in this order:
 1. Start the server:
 
    ```bash
-   uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+   uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
    ```
 
 2. Open the browser glass simulator:
@@ -116,7 +116,7 @@ Start local multi-device debugging in this order:
    ```bash
    curl http://127.0.0.1:8765/api/debug/devices
    curl http://127.0.0.1:8765/api/debug/playback
-   find examples/device_demo/agent-server/runs -maxdepth 3 -type f | sort
+   find examples/device_app_demo/agent-server/runs -maxdepth 3 -type f | sort
    ```
 
 If you only want to open the browser simulator quickly, run:
@@ -128,7 +128,7 @@ uv run realtime-agent.web.open --serve
 Run a minimal contract test:
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 For more startup, extension, and debugging guidance, see the [Developer Overview](docs/tutorials/developer-overview.md).
@@ -237,7 +237,7 @@ The project boundary can be summarized as:
 The main example app is:
 
 ```text
-examples/device_demo/
+examples/device_app_demo/
 ```
 
 It is a minimal Swift hardware demo for device-side app developers, used to validate Device SDK registration, audio upload, camera frame upload, speaker output playback, and control events.
@@ -245,7 +245,7 @@ It is a minimal Swift hardware demo for device-side app developers, used to vali
 Developer support devices include:
 
 - Browser glass simulator: `uv run realtime-agent.web.open --serve`
-- Swift hardware demo: `examples/device_demo/ios/`
+- Swift hardware demo: `examples/device_app_demo/ios/`
 - Python phone visual simulator: `examples/dev-support/devices/python-phone/`
 - Python playback glass: `examples/dev-support/devices/python-playback-glass/`
 
@@ -256,7 +256,7 @@ See [Examples](examples/README.md) for the current example inventory.
 Example app run artifacts are written to:
 
 ```text
-examples/device_demo/agent-server/runs
+examples/device_app_demo/agent-server/runs
 ```
 
 The most useful files are:
@@ -293,7 +293,7 @@ Developers are also welcome to try an AI Coding workflow for this project. [AGEN
 Before submitting changes, run the narrowest relevant tests for your change. For Device Demo and Swift Device SDK entrypoint changes, the following contract test is a lightweight smoke test:
 
 ```bash
-uv run python -m pytest examples/device_demo/app-tests/test_ios_device_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
 ```
 
 ## License

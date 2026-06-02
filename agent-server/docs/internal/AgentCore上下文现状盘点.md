@@ -2,13 +2,13 @@
 
 本文记录当前 `realtime-agent` 中所有会进入大模型视野的内容来源，作为后续上下文管理重构的基线。
 
-当前核对对象是 `examples/device_demo/agent-server/server.yaml` 默认配置：`agent.mode=omni`、`memory.enabled=true`、`tools.denylist=[capture_photo, interpret_image, interpret_current_view]`。
+当前核对对象是 `examples/device_app_demo/agent-server/server.yaml` 默认配置：`agent.mode=omni`、`memory.enabled=true`、`tools.denylist=[capture_photo, interpret_image, interpret_current_view]`。
 
 ## 主链路上下文入口
 
 | 类别 | 来源 | 进入模型的位置 | 当前默认是否生效 | 模型可见内容 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| Omni 主系统提示 | `examples/device_demo/agent-server/server.yaml` 的 `agent.omni.prompt` | `RealtimeAgentConfig.from_yaml()` 写入 `omni_prompt`，再传入 `RealtimeProviderConfig.prompt` | 是，默认主链路 | 助手名称“乐鑫”、盲人眼镜身份、视觉问题处理规则、找物任务规则、禁止朗读工具名/参数/JSON、非视觉问题不要描述图片 | 这是当前最重要的主 Agent 指令。 |
+| Omni 主系统提示 | `examples/device_app_demo/agent-server/server.yaml` 的 `agent.omni.prompt` | `RealtimeAgentConfig.from_yaml()` 写入 `omni_prompt`，再传入 `RealtimeProviderConfig.prompt` | 是，默认主链路 | 助手名称“乐鑫”、盲人眼镜身份、视觉问题处理规则、找物任务规则、禁止朗读工具名/参数/JSON、非视觉问题不要描述图片 | 这是当前最重要的主 Agent 指令。 |
 | Vision 主系统提示 | `server.yaml` 的 `agent.vision.prompt` | `VisionModelProviderConfig.prompt`，最终作为 Chat Completions system message | 配置存在；默认不走 vision 模式 | 助手名称、盲人眼镜身份、找物任务规则、简短中文回答、必要时调用工具 | vision 模式启用时生效。 |
 | 默认系统提示 | `RealtimeAgentConfig.vision_prompt` / `omni_prompt` 默认值 | 未配置 YAML 时作为 fallback | 默认被示例配置覆盖 | “你是中文语音助手。请用简短口语回答用户。” | SDK 默认值，不包含业务语义。 |
 | Memory 使用规则 | `realtime_agent.app.MEMORY_AGENT_INSTRUCTIONS`，通过 `_with_memory_instructions()` 追加 | `from_yaml()` 和直接构造配置时追加到 vision/omni prompt | 是，因 `memory.enabled=true` | 长期记忆规则、何时调用 `memory_search` / `manage_memory`、不要保存敏感信息等 | 追加规则使用字符串包含“长期记忆规则”避免重复追加。 |

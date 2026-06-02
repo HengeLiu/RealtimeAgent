@@ -97,7 +97,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
             "run",
             "realtime-agent.server.start",
             "--config",
-            "examples/device_demo/agent-server/server.yaml",
+            "examples/device_app_demo/agent-server/server.yaml",
             "--pid-file",
             str(pid_file),
             "--log-file",

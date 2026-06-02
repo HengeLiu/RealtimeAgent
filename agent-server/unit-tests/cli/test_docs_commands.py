@@ -111,7 +111,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
             "run",
             "realtime-agent.dev.preflight",
             "--config",
-            "examples/device_demo/agent-server/server.yaml",
+            "examples/device_app_demo/agent-server/server.yaml",
             "--report",
             str(report),
         ],
@@ -137,14 +137,14 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
     } <= names
 
 
-def test_device_demo_server_yaml_documents_supported_model_routes(tmp_path) -> None:
-    """测试目标：确认 device_demo 的精简配置仍能指导开发者启动服务。
+def test_device_app_demo_server_yaml_documents_supported_model_routes(tmp_path) -> None:
+    """测试目标：确认 device_app_demo 的精简配置仍能指导开发者启动服务。
 
     测试方法：读取 `server.yaml`，检查关键 provider 取值和已删除旧 schema/example 引用。
     预期结果：配置可直接作为 app-root 配置使用，不再依赖老 SDK 示例文件。
     """
 
-    config = AUDIO_ROOT / "examples" / "device_demo" / "agent-server" / "server.yaml"
+    config = AUDIO_ROOT / "examples" / "device_app_demo" / "agent-server" / "server.yaml"
     text = config.read_text(encoding="utf-8")
     data = yaml.safe_load(text)
 
@@ -156,7 +156,7 @@ def test_device_demo_server_yaml_documents_supported_model_routes(tmp_path) -> N
     assert data["agent"]["vision"]["tts_provider"] in {"mock", "dashscope"}
     assert data["mcp"]["enabled"] is False
 
-    app_dir = tmp_path / "device_demo"
+    app_dir = tmp_path / "device_app_demo"
     app_dir.mkdir()
     shutil.copyfile(config, app_dir / "server.yaml")
     config = RealtimeAgentConfig.from_yaml(app_dir / "server.yaml")

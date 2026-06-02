@@ -38,15 +38,15 @@ def test_release_package_check_reports_release_candidate_gate(tmp_path: Path) ->
     assert data["checks"]["source_boundary"]["ok"] is True
 
 
-def test_device_demo_can_be_copied_to_temp_project_and_generate_endpoint_configs(tmp_path: Path) -> None:
-    """测试目标：验证发布候选能支撑新项目复制精简后的 device_demo。
+def test_device_app_demo_can_be_copied_to_temp_project_and_generate_endpoint_configs(tmp_path: Path) -> None:
+    """测试目标：验证发布候选能支撑新项目复制精简后的 device_app_demo。
 
-    测试方法：把 `examples/device_demo` 复制到临时目录，用当前 SDK 命令生成端侧配置。
+    测试方法：把 `examples/device_app_demo` 复制到临时目录，用当前 SDK 命令生成端侧配置。
     预期结果：配置同步命令成功，并生成 glass playback 配置。
     """
 
-    app_copy = tmp_path / "device_demo"
-    shutil.copytree(AUDIO_ROOT / "examples" / "device_demo", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "runs"))
+    app_copy = tmp_path / "device_app_demo"
+    shutil.copytree(AUDIO_ROOT / "examples" / "device_app_demo", app_copy, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "runs"))
     output_dir = tmp_path / "generated"
 
     app_server = app_copy / "agent-server"

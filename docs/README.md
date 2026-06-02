@@ -2,7 +2,7 @@
 
 `realtime-agent` 是一套面向实时语音、视觉输入和多端设备协作的 Agent SDK。它由 Server SDK、Device SDK 和标准通讯协议组成，用于构建语音优先、多设备协作、实时 stream 驱动的 AI Agent 应用。项目内部使用事件协议连接 server 和 device，但社区开发者主要面对的是 Tool、Task、Context API、Device SDK 能力声明和 stream API。
 
-它适合智能眼镜、手机协作、ESP32 或其他端侧传感器设备参与的应用原型和产品化探索。当前推荐入口是 `examples/device_demo` 和多语言 `devices/` SDK；仓库中的 `browser-glass`、`python-phone` 等属于开发/测试支持组件：它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
+它适合智能眼镜、手机协作、ESP32 或其他端侧传感器设备参与的应用原型和产品化探索。当前推荐入口是 `examples/device_app_demo` 和多语言 `devices/` SDK；仓库中的 `browser-glass`、`python-phone` 等属于开发/测试支持组件：它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
 本文档目录面向社区开发者，目标是帮助开发者快速判断项目是否适合自己、跑通当前推荐样例，并理解如何扩展 Tool、Task 和设备能力。
 

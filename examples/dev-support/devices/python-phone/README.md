@@ -78,7 +78,7 @@ uv pip install -r examples/dev-support/devices/python-phone/requirements.vision.
 终端 1：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
 终端 2：

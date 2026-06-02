@@ -325,12 +325,12 @@ def _endpoint_source_check(audio_root: Path) -> dict:
     """
 
     required_files = {
-        "ios_device_demo": [
-            "examples/device_demo/README.md",
-            "examples/device_demo/agent-server/server.yaml",
-            "examples/device_demo/ios/DeviceDemo.xcodeproj/project.pbxproj",
-            "examples/device_demo/ios/DeviceDemo/DeviceDemoRuntime.swift",
-            "examples/device_demo/ios/DeviceDemo/Info.plist",
+        "ios_device_app_demo": [
+            "examples/device_app_demo/README.md",
+            "examples/device_app_demo/agent-server/server.yaml",
+            "examples/device_app_demo/ios/DeviceDemo.xcodeproj/project.pbxproj",
+            "examples/device_app_demo/ios/DeviceDemo/DeviceDemoRuntime.swift",
+            "examples/device_app_demo/ios/DeviceDemo/Info.plist",
         ],
         "browser_glass": [
             "examples/dev-support/devices/browser-glass/README.md",

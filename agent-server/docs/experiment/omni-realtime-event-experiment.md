@@ -37,7 +37,7 @@ testdata/audio-sample/看一下我前面有什么.wav
 图片：
 
 ```bash
-examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg
+examples/device_app_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg
 ```
 
 图片来自本地运行产物目录，仅作为本次真实链路输入，不应提交。
@@ -53,7 +53,7 @@ examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-
 ```bash
 uv run python tools/omni_realtime_event_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
-  --image 'examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
+  --image 'examples/device_app_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --with-tool \
   --turn-detection semantic_vad \
   --vad-tail-seconds 1.5 \
@@ -114,7 +114,7 @@ response.create
 ```bash
 uv run python tools/omni_realtime_event_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
-  --image 'examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
+  --image 'examples/device_app_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --with-tool \
   --turn-detection manual \
   --wait-seconds 12 \
@@ -211,7 +211,7 @@ tools/realtime_agent_omni_chain_probe.py
 ```bash
 uv run python tools/realtime_agent_omni_chain_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
-  --image 'examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
+  --image 'examples/device_app_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --wait-seconds 18 \
   --out runs/omni-realtime-probe/realtime-agent-chain-flat-vad-events.jsonl
 ```
@@ -250,7 +250,7 @@ uv run python tools/realtime_agent_omni_chain_probe.py \
 ```bash
 uv run python tools/realtime_agent_omni_chain_probe.py \
   --audio 'testdata/audio-sample/看一下我前面有什么.wav' \
-  --image 'examples/device_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
+  --image 'examples/device_app_demo/agent-server/runs/user-browser-glass-001/dev-browser-glass-001/photos/asset_5c68b990ae0e.jpg' \
   --send-final \
   --wait-seconds 18 \
   --out runs/omni-realtime-probe/realtime-agent-chain-flat-send-final-events.jsonl
