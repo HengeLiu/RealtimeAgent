@@ -59,28 +59,20 @@ esp_err_t camera_capture_frame(uint8_t **jpg_data, size_t *jpg_len) {
         return ESP_ERR_INVALID_STATE;
     }
 
-    if (s_last_fb) {
-        esp_camera_fb_return(s_last_fb);
-        s_last_fb = NULL;
-    }
-
     camera_fb_t *fb = esp_camera_fb_get();
     if (!fb) {
         ESP_LOGE(TAG, "Failed to get frame buffer");
         return ESP_FAIL;
     }
 
-    s_last_fb = fb;
     *jpg_data = fb->buf;
     *jpg_len = fb->len;
     return ESP_OK;
 }
 
 esp_err_t camera_return_frame(void) {
-    if (s_last_fb) {
-        esp_camera_fb_return(s_last_fb);
-        s_last_fb = NULL;
-    }
+    // Get fb from esp_camera_fb_get() must be returned
+    // But we handle it in ws_stream so this is placeholder
     return ESP_OK;
 }
 
@@ -116,7 +108,7 @@ void camera_task_start(void) {
     if (!s_camera_inited) return;
     s_streaming = true;
 
-    xTaskCreatePinnedToCore(&camera_send_task, "cam_snd", 3072, NULL, 3, &s_send_task, 1);
+    xTaskCreatePinnedToCore(&camera_send_task, "cam_snd", 4096, NULL, 3, &s_send_task, 1);
     ESP_LOGI(TAG, "Camera task started");
 }
 

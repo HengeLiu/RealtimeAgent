@@ -291,6 +291,11 @@ class AudioPipeline:
             current = result.chunk
             diagnostics.append({"processor": processor.name, **dict(result.diagnostics)})
         self.last_diagnostics = diagnostics
+        import logging
+        if current.seq <= 3 or current.seq % 500 == 0:
+            logging.getLogger("audio_chat.server").info(
+                "AudioPipeline.process: seq=%d calling agent_core.append_audio_event, payload=%d bytes",
+                current.seq, len(current.payload))
         self.agent_core.append_audio_event(current)
 
     def dispatch(self, chunk: StreamChunk) -> None:

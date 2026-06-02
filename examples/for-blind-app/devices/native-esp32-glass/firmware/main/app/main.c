@@ -13,19 +13,17 @@
 #include "drivers/camera.h"
 #include "drivers/audio.h"
 #include "drivers/imu.h"
+#include "drivers/feedback_tone.h"
+#include "storage/config_store.h"
+#include "provisioning/provisioning.h"
 #include "protocol/protocol_adapter.h"
 #include "app/device.h"
 #include "utils/wake_word.h"
 
 static const char *TAG = "main";
 
-// Configuration
-static const char *WIFI_SSID = "oioioioioi";
-static const char *WIFI_PASS = "890909!!";
-static const char *SERVER_HOST = "192.168.31.8";
-static const uint16_t SERVER_PORT = 8766;
-static const char *DEVICE_ID = "dev-esp32-glass-001";
-static const char *USER_ID = "user-browser-glass-001";
+// Runtime config from NVS
+static device_config_t g_config;
 
 // State
 static audio_chat_device_t g_device;
@@ -35,7 +33,7 @@ static bool s_session_active = false;
 static bool s_streaming = false;
 static bool s_start_streaming_requested = false;
 static uint32_t s_session_counter = 0;
-static char s_current_stream_id[64] = {0};
+static char s_current_stream_id[128] = {0};
 
 // Callbacks
 static void on_wifi_connected(void) { ESP_LOGI(TAG, "WiFi connected"); }
@@ -143,7 +141,7 @@ static void on_control_message(const char *event_name, const char *payload, size
 void app_main(void) {
     ESP_LOGI(TAG, "=== ESP32-S3 Glass Firmware ===");
 
-    // NVS
+    // NVS + Config
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         nvs_flash_erase();
@@ -152,23 +150,85 @@ void app_main(void) {
     ESP_ERROR_CHECK(ret);
     esp_log_level_set("*", ESP_LOG_INFO);
 
+    config_store_init();
+    memset(&g_config, 0, sizeof(g_config));
+
     // Random session counter to avoid stale stream_id from previous boot
     s_session_counter = esp_random();
     ESP_LOGI(TAG, "Session counter init: %lu", (unsigned long)s_session_counter);
 
+    // Load config from NVS
+    bool need_provisioning = false;
+    if (config_store_load(&g_config) != ESP_OK || !g_config.configured) {
+        need_provisioning = true;
+    }
+
+    // Generate hw_id if not set
+    if (g_config.hw_id[0] == '\0') {
+        config_store_generate_hw_id(g_config.hw_id, sizeof(g_config.hw_id));
+    }
+
+    if (need_provisioning) {
+        // ===== Provisioning Mode =====
+        ESP_LOGI(TAG, "No config found, entering provisioning mode");
+        ESP_LOGI(TAG, "Connect to WiFi AP 'Glass-XXXX' to provision this device");
+
+        // Start provisioning (AP + captive portal + DNS + pairing)
+        provisioning_start(&g_config);
+
+        // Wait for provisioning to complete
+        while (provisioning_get_state() != PROV_STATE_DONE &&
+               provisioning_get_state() != PROV_STATE_ERROR) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+
+        if (provisioning_get_state() == PROV_STATE_DONE) {
+            ESP_LOGI(TAG, "Provisioning successful, restarting...");
+            vTaskDelay(pdMS_TO_TICKS(1000));
+            esp_restart();
+        } else {
+            ESP_LOGE(TAG, "Provisioning failed");
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            esp_restart();  // Retry provisioning on next boot
+        }
+        return;
+    }
+
+    // ===== Normal Mode =====
+    ESP_LOGI(TAG, "Config loaded: device=%s user=%s server=%s:%d hw=%s",
+             g_config.device_id, g_config.user_id,
+             g_config.server_host, g_config.server_port, g_config.hw_id);
+
+    // Peripherals
+    esp_err_t audio_ret = audio_init(true);
+    ESP_LOGI(TAG, "audio_init returned: %d", audio_ret);
+    tone_play_startup();
+
+    // WiFi fail count: auto-reset after 5 consecutive failures
+    if (g_config.wifi_fail_count >= 5) {
+        ESP_LOGW(TAG, "WiFi failed %d times, clearing config", g_config.wifi_fail_count);
+        config_store_clear_all();
+        esp_restart();
+    }
+
     // Device model
-    audio_chat_device_init(&g_device, USER_ID, DEVICE_ID);
+    audio_chat_device_init(&g_device, g_config.user_id, g_config.device_id);
     audio_chat_device_set_name(&g_device, "ESP32-S3 Glass");
     audio_chat_device_set_role(&g_device, "glass");
     audio_chat_device_add_rgb_sensor(&g_device);
     audio_chat_device_add_imu_sensor(&g_device);
     audio_chat_device_add_vibrator(&g_device);
+    if (g_config.auth_token[0] != '\0') {
+        audio_chat_device_set_auth(&g_device, "token", g_config.auth_token);
+    }
 
     // Server URL
-    snprintf(s_server_url, sizeof(s_server_url), "ws://%s:%d/ws/control", SERVER_HOST, SERVER_PORT);
+    snprintf(s_server_url, sizeof(s_server_url), "ws://%s:%d/ws/control",
+             g_config.server_host, g_config.server_port);
 
     // WiFi
-    ret = wifi_manager_init(WIFI_SSID, WIFI_PASS);
+    config_store_increment_fail_count(NULL);
+    ret = wifi_manager_init(g_config.wifi_ssid, g_config.wifi_pass);
     if (ret != ESP_OK) {
         ESP_LOGE(TAG, "WiFi init failed");
         vTaskDelay(pdMS_TO_TICKS(2000));
@@ -184,13 +244,12 @@ void app_main(void) {
         vTaskDelay(pdMS_TO_TICKS(2000));
         esp_restart();
     }
+    config_store_reset_fail_count();
+    tone_play_wifi_connected();
     ESP_LOGI(TAG, "WiFi OK: %s", wifi_manager_get_local_ip());
 
     // Peripherals
     // camera_init();  // DISABLED: conflicts with PDM mic on I2S controller 0
-    ESP_LOGI(TAG, "Initializing audio...");
-    esp_err_t audio_ret = audio_init();
-    ESP_LOGI(TAG, "audio_init returned: %d", audio_ret);
 
     ESP_LOGI(TAG, "Initializing wake word...");
     esp_err_t ww_ret = wake_word_init();
@@ -215,7 +274,7 @@ void app_main(void) {
     imu_init();
 
     // Control WebSocket
-    ret = ws_control_init(s_server_url, DEVICE_ID, &g_device);
+    ret = ws_control_init(s_server_url, g_config.device_id, &g_device);
     if (ret == ESP_OK) {
         ws_control_set_callbacks(on_control_connected, on_control_disconnected, on_control_message);
         ws_control_task_start();
@@ -262,7 +321,7 @@ void app_main(void) {
 
             // Generate unique stream_id per session (like browser demo's newId("stream_in"))
             s_session_counter++;
-            snprintf(s_current_stream_id, sizeof(s_current_stream_id), "stream_in_%s_%lu", DEVICE_ID, (unsigned long)s_session_counter);
+            snprintf(s_current_stream_id, sizeof(s_current_stream_id), "stream_in_%s_%lu", g_config.device_id, (unsigned long)s_session_counter);
 
             // Step 1: Send audio session opened
             const char *opened_payload = "{\"reason\":\"esp32_device_opened\"}";
@@ -281,8 +340,8 @@ void app_main(void) {
 
             // Step 4: Now open stream WebSocket
             char stream_url[128];
-            snprintf(stream_url, sizeof(stream_url), "ws://%s:%d/ws/stream", SERVER_HOST, SERVER_PORT);
-            esp_err_t stream_ret = ws_stream_init(stream_url, DEVICE_ID, s_current_stream_id);
+            snprintf(stream_url, sizeof(stream_url), "ws://%s:%d/ws/stream", g_config.server_host, g_config.server_port);
+            esp_err_t stream_ret = ws_stream_init(stream_url, g_config.device_id, s_current_stream_id);
             ESP_LOGI(TAG, "ws_stream_init returned: %d", stream_ret);
 
             if (stream_ret == ESP_OK) {

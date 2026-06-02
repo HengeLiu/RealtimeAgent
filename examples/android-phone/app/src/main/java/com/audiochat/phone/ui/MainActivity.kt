@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import com.audiochat.phone.ble.BleProvisioner
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -67,6 +68,7 @@ fun MainApp(viewModel: MainViewModel) {
 
     val tabs = listOf(
         MainTab("用户", Icons.Default.Person),
+        MainTab("配网", Icons.Default.Bluetooth),
         MainTab("调试", Icons.Default.BugReport)
     )
 
@@ -122,7 +124,15 @@ fun MainApp(viewModel: MainViewModel) {
         Box(modifier = Modifier.padding(paddingValues)) {
             when (selectedTab) {
                 0 -> UserScreen(viewModel = viewModel, uiState = uiState)
-                1 -> DebugScreen(viewModel = viewModel, uiState = uiState)
+                1 -> {
+                    val context = androidx.compose.ui.platform.LocalContext.current
+                    val bleProvisioner = remember { BleProvisioner(context) }
+                    ProvisionScreen(
+                        bleProvisioner = bleProvisioner,
+                        onDone = { selectedTab = 0 }
+                    )
+                }
+                2 -> DebugScreen(viewModel = viewModel, uiState = uiState)
             }
         }
     }

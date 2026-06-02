@@ -1266,6 +1266,14 @@ class OutputFacade:
             ttl_seconds=ttl_seconds,
         )
 
+    def close_session(self, *, reason: str = "tool_requested", mode: str = "close_after_reply") -> None:
+        """关闭当前用户的音频会话。
+
+        参数：`reason` 为关闭原因；`mode` 为关闭模式，`close_after_reply` 等待当前播报结束再关闭。
+        """
+
+        self._app.close_audio_session(self.user_id, reason=reason, mode=mode)
+
 
 class AssetFacade:
     """资产引用读取门面。

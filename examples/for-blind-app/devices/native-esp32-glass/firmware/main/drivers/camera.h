@@ -14,6 +14,5 @@ esp_err_t camera_set_quality(int quality);
 esp_err_t camera_set_framesize(framesize_t framesize);
 esp_err_t camera_capture_hq(uint8_t **jpg_data, size_t *jpg_len);
 void camera_task_start(void);
-void camera_task_stop(void);
 
 #endif // CAMERA_H

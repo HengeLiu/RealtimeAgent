@@ -7,7 +7,7 @@ pluginManagement {
 }
 
 dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_EXPOSED)
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
         google()
         mavenCentral()
@@ -17,4 +17,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "AudioChatPhone"
 include(":app")
-include(":$rootDir/../../audio-device/kotlin/device")

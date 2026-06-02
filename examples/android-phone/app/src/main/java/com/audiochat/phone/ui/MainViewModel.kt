@@ -182,14 +182,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun autoStartIfLoggedIn() {
-        val authInfo = tokenManager?.getAuthInfo()
-        if (authInfo != null && tokenManager?.isAccessTokenValid() == true) {
-            viewModelScope.launch {
-                delay(3000) // 等待 Activity 完全初始化
-                startForegroundService()
-                addLog("INFO", "已自动启动常驻服务")
-            }
-        }
+        // 常驻服务已在 connect() 中通过 ViewModel 管理，无需单独启动
     }
     
     private fun checkExistingAuth() {
@@ -260,9 +253,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 addEvent("control.device.register", "send", "userId=${state.userId}, deviceId=${state.deviceId}")
                 deviceManager?.connect()
                 deviceManager?.start()
-
-                // 自动启动常驻服务
-                startForegroundService()
 
                 addLog("INFO", "连接请求已发送 (IP: $localIp)")
             } catch (e: Exception) {

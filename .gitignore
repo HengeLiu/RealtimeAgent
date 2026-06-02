@@ -8,6 +8,7 @@ logs
 reply
 m4a
 runs
+server.log
 mobileclip_blt.ts
 examples/dev-support/devices/python-playback-glass/reports/*
 !examples/dev-support/devices/python-playback-glass/reports/.gitkeep

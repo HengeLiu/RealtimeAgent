@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import sys
 import time
-import uuid
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -19,7 +18,7 @@ from audio_chat.mcp import McpGateway
 from audio_chat.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import OutputService, TtsProviderConfig
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, create_unique_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from audio_chat.skills import SkillService
 from audio_chat.stream import StreamHandle, StreamService
 from audio_chat.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
@@ -294,7 +293,7 @@ class DeviceDialogState:
 
     主要功能：记录 server 侧对某台设备连续对话生命周期的最小状态。
     主要属性：`state` 表示 requested/opened/closing/closed；`close_mode` 区分立即关闭
-    和等待当前回复结束后关闭；`trace_id` 用于链路追踪。
+    和等待当前回复结束后关闭。
     """
 
     user_id: str
@@ -305,7 +304,6 @@ class DeviceDialogState:
     close_pending: bool = False
     close_mode: str = ""
     close_reason: str = ""
-    trace_id: str | None = None
 
     def touch(self) -> None:
         """刷新会话最近活跃时间。"""
@@ -662,7 +660,7 @@ class AudioChatApp:
             stream_type=stream_type,
             producer_id=producer_id,
             format=format or StreamFormat(),
-            stream_id=create_unique_id("stream_in"),
+            stream_id=new_id("stream_in"),
         )
         self.control_service.publish(
             Event(
@@ -752,9 +750,7 @@ class AudioChatApp:
         """
         if not session_id or not hasattr(self.agent_core, "open"):
             return
-        dialog_state = self._device_dialogs_by_user.get(user_id)
-        trace_id = dialog_state.trace_id if dialog_state else None
-        self.agent_core.open(user_id, session_id, trace_id=trace_id)
+        self.agent_core.open(user_id, session_id)
 
     def _close_agent_session(self, user_id: str, *, reason: str) -> None:
         """关闭当前 Agent Core 的会话。
@@ -771,11 +767,8 @@ class AudioChatApp:
 
     def _handle_wake_detected(self, event: Event) -> None:
         device_id = self._event_device_id(event)
-        trace_id = str(uuid.uuid4())
         self._active_device_by_user[event.user_id] = device_id
-        self._device_dialogs_by_user[event.user_id] = DeviceDialogState(
-            user_id=event.user_id, device_id=device_id, trace_id=trace_id
-        )
+        self._device_dialogs_by_user[event.user_id] = DeviceDialogState(user_id=event.user_id, device_id=device_id)
         self.recorder.bind_device(user_id=event.user_id, device_id=device_id)
         self.control_service.publish(
             Event(
@@ -783,7 +776,6 @@ class AudioChatApp:
                 user_id=event.user_id,
                 producer_id=event.producer_id,
                 session_id=device_id,
-                trace_id=trace_id,
                 payload=event.payload,
             )
         )
@@ -793,7 +785,6 @@ class AudioChatApp:
                 user_id=event.user_id,
                 producer_id=SERVER_PRODUCER_ID,
                 session_id=device_id,
-                trace_id=trace_id,
                 payload={"reason": "wake_detected"},
             )
         )

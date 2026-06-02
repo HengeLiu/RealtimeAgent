@@ -15,6 +15,9 @@ from audio_chat.app import AudioChatApp, AudioChatConfig
 from audio_chat.app_loader import load_app_config, load_config_as_app
 from audio_chat.auth import setup_auth_routes
 from audio_chat.admin import setup_admin_routes
+from audio_chat.device.pairing import PairingService
+from audio_chat.device.routes import register_device_routes
+from audio_chat.control.service import HmacSignedTokenIssuer
 from audio_chat.observability import (
     LogContext,
     configure_console_logging,
@@ -323,6 +326,13 @@ class AudioChatHttpServer:
         
         setup_auth_routes(app)
         setup_admin_routes(app)
+
+        # 设备配对 API
+        import os
+        token_secret = os.environ.get("AUDIO_CHAT_DEVICE_TOKEN_SECRET", "default-dev-secret")
+        token_issuer = HmacSignedTokenIssuer(token_secret)
+        pairing_service = PairingService(token_issuer)
+        register_device_routes(app, pairing_service)
         
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
@@ -496,7 +506,6 @@ class AudioChatHttpServer:
                                 device_id=event.producer_id,
                                 stream_id=event.stream_id,
                                 event=event.event_name,
-                                trace_id=event.trace_id,
                                 fields={"stream_type": event.stream_type},
                             ),
                         )

@@ -123,8 +123,11 @@ def now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def create_unique_id(prefix: str) -> str:
+def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+create_unique_id = new_id
 
 
 def validate_event_name(event_name: str) -> None:
@@ -182,12 +185,11 @@ class Event:
     producer_id: str
     payload: dict[str, Any] = field(default_factory=dict)
     version: str = PROTOCOL_VERSION
-    event_id: str = field(default_factory=lambda: create_unique_id("evt"))
+    event_id: str = field(default_factory=lambda: new_id("evt"))
     timestamp_ms: int = field(default_factory=now_ms)
     session_id: str | None = None
     stream_id: str | None = None
     stream_type: str | StreamType | None = None
-    trace_id: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "event_name", str(self.event_name))
@@ -213,8 +215,6 @@ class Event:
             data["stream_id"] = self.stream_id
         if self.stream_type is not None:
             data["stream_type"] = self.stream_type
-        if self.trace_id is not None:
-            data["trace_id"] = self.trace_id
         validate_event_envelope_dict(data)
         return data
 
@@ -223,7 +223,7 @@ class Event:
         validate_event_envelope_dict(data)
         return cls(
             version=data.get("version", PROTOCOL_VERSION),
-            event_id=data.get("event_id", create_unique_id("evt")),
+            event_id=data.get("event_id", new_id("evt")),
             event_name=data["event_name"],
             timestamp_ms=int(data.get("timestamp_ms", now_ms())),
             user_id=data["user_id"],
@@ -231,7 +231,6 @@ class Event:
             session_id=data.get("session_id"),
             stream_id=data.get("stream_id"),
             stream_type=data.get("stream_type"),
-            trace_id=data.get("trace_id"),
             payload=dict(data.get("payload") or {}),
         )
 

@@ -8,7 +8,7 @@ from typing import Any
 from audio_chat.control import ControlService
 from audio_chat.observability import RunRecorder
 from audio_chat.output import AssistantTextDelta, OutputService
-from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, create_unique_id
+from audio_chat.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 from audio_chat.agent_core.base import AgentEventBuffer, AgentCoreEvent
 from audio_chat.agent_core.context import ContextCompileRequest, ContextCompiler, record_context_events
 from audio_chat.agent_core.providers import (
@@ -370,7 +370,6 @@ class TextAgentCore:
         self._responded_input_streams: set[str] = set()
         self._cancelled_users: set[str] = set()
         self._session_by_user: dict[str, str] = {}
-        self._trace_id_by_user: dict[str, str] = {}
         self._event_buffer = AgentEventBuffer()
         self.tool_gateway = tool_gateway
         self.memory_service = memory_service
@@ -391,19 +390,17 @@ class TextAgentCore:
 
         self.tool_gateway = tool_gateway
 
-    def open(self, user_id: str, session_id: str, trace_id: str | None = None) -> None:
+    def open(self, user_id: str, session_id: str) -> None:
         """打开文本 Agent 会话。
 
         主要逻辑：文本链路不需要提前连接模型 provider，只记录统一会话事件。
-        参数：`user_id` 为用户标识，`session_id` 为当前会话，`trace_id` 为链路追踪标识。
+        参数：`user_id` 为用户标识，`session_id` 为当前会话。
         返回值：无。
         异常情况：无。
         """
 
-        self._record_event("session.opened", user_id=user_id, session_id=session_id, agent_core="TextAgentCore", trace_id=trace_id)
+        self._record_event("session.opened", user_id=user_id, session_id=session_id, agent_core="TextAgentCore")
         self._session_by_user[user_id] = session_id
-        if trace_id:
-            self._trace_id_by_user[user_id] = trace_id
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         self._set_turn_state(chunk.user_id, chunk.session_id, "transcribing", reason="audio_final_check")
@@ -419,11 +416,6 @@ class TextAgentCore:
         self._responded_input_streams.add(turn_key)
         self._cancelled_users.discard(chunk.user_id)
         self._interruption_reason_by_user.pop(chunk.user_id, None)
-
-        # 生成任务级 trace_id
-        task_trace_id = create_unique_id("task_trace")
-        session_trace_id = self._trace_id_by_user.get(chunk.user_id)
-
         self.control_service.append_message(
             chunk.user_id,
             {
@@ -447,15 +439,13 @@ class TextAgentCore:
             user_id=chunk.user_id,
             session_id=chunk.session_id,
             agent_core="TextAgentCore",
-            task_trace_id=task_trace_id,
-            )
+        )
         response_error: Exception | None = None
         try:
             assistant_text = self._run_tool_loop(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
                 transcript=transcript,
-                task_trace_id=task_trace_id,
             )
         except Exception as exc:
             response_error = exc
@@ -618,20 +608,15 @@ class TextAgentCore:
             )
             return False
 
-    def _run_tool_loop(self, *, user_id: str, session_id: str, transcript: str, task_trace_id: str | None = None) -> str:
+    def _run_tool_loop(self, *, user_id: str, session_id: str, transcript: str) -> str:
         """运行 Text Agent 工具循环。
 
         主要逻辑：支持 provider 通过 `stream_messages(messages, tools)` 返回
         `tool_call` 事件；每次 ToolResult 会写入消息历史，然后继续请求模型生成后续回复。
-        参数：`user_id/session_id/transcript` 定位当前轮次，`task_trace_id` 为任务链路追踪。
+        参数：`user_id/session_id/transcript` 定位当前轮次。
         返回值：最终助手文本。
         异常情况：ToolGateway 会把工具异常转换为 ToolResult，本函数不抛业务异常。
         """
-
-        # 如果外部没有传入，则生成新的 task_trace_id
-        if not task_trace_id:
-            task_trace_id = create_unique_id("task_trace")
-        session_trace_id = self._trace_id_by_user.get(user_id)
 
         assistant_parts: list[str] = []
         context = self.context_compiler.compile(
@@ -666,8 +651,6 @@ class TextAgentCore:
                 "runner": "agent_core_text",
                 "user_id": user_id,
                 "session_id": session_id,
-                "trace_id": session_trace_id,
-                "task_trace_id": task_trace_id,
                 "prompt": prompt,
                 "messages": [{"role": "system", "content": prompt}, *list(messages)],
                 "tools": tools,
@@ -982,26 +965,19 @@ class TextAgentCore:
 
         return self._event_buffer.events()
 
-    def _record_event(self, event: str, *, user_id: str = "", session_id: str = "", trace_id: str | None = None, task_trace_id: str | None = None, **payload) -> None:
+    def _record_event(self, event: str, *, user_id: str = "", session_id: str = "", **payload) -> None:
         """同时写入内存事件和 runs 产物。
 
         参数：
         1. `event`：统一 Agent 事件名。
         2. `user_id`：用户编号。
         3. `session_id`：会话编号。
-        4. `trace_id`：链路追踪标识（会话级）。
-        5. `task_trace_id`：任务级追踪标识。
-        6. `payload`：补充字段。
+        4. `payload`：补充字段。
 
         返回值：无。
         异常情况：无。
         """
 
-        final_trace_id = trace_id or self._trace_id_by_user.get(user_id or session_id)
-        if final_trace_id:
-            payload["trace_id"] = final_trace_id
-        if task_trace_id:
-            payload["task_trace_id"] = task_trace_id
         self._event_buffer.record_event(event, user_id=user_id, session_id=session_id, payload=payload)
         if session_id:
             self.recorder.record_agent_event(session_id, {"event": event, "user_id": user_id, **payload})

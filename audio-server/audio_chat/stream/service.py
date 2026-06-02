@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Protocol
@@ -185,6 +186,11 @@ class StreamService:
                     selection=selection,
                 )
                 consumers = tuple(device.device_id for device in matched)
+            import logging
+            logging.getLogger("audio_chat.server").info(
+                "Actuator stream open: stream_type=%s, user_id=%s, consumers=%s, stream_id=%s",
+                stream_type, user_id, list(consumers), stream_id,
+            )
             if len(consumers) == 1:
                 handle.session_id = consumers[0]
             event = Event(
@@ -211,7 +217,13 @@ class StreamService:
         return handle
 
     def on_chunk(self, chunk: StreamChunk) -> None:
-        handle = self.registry.get(chunk.stream_id)
+        logger = logging.getLogger("audio_chat.server")
+        try:
+            handle = self.registry.get(chunk.stream_id)
+        except ValueError:
+            logger.error("on_chunk: unknown stream_id=%s, registered_ids=%s",
+                         chunk.stream_id, list(self.registry._streams.keys()))
+            raise
         self._validate_chunk(chunk, handle=handle)
         if handle.state != "open":
             if handle.state == "closed" and handle.stream_type.startswith("sensor."):

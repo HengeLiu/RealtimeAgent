@@ -829,6 +829,11 @@ class ControlService:
         diagnostics: list[dict[str, Any]] = []
         for device in self._devices.values():
             if device.user_id != event.user_id:
+                diagnostics.append(self._route_decision(
+                    device, route_matched=False, selected=False,
+                    reason="user_id_mismatch",
+                    detail={"device_user_id": device.user_id, "event_user_id": event.user_id},
+                ))
                 continue
             if device.connection_state != "online":
                 diagnostics.append(self._route_decision(device, route_matched=False, selected=False, reason="device_offline"))

@@ -5,316 +5,202 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>用户管理后台</title>
     <style>
-        :root {
-            --primary-color: #6366f1;
-            --primary-hover: #4f46e5;
-            --success-color: #10b981;
-            --warning-color: #f59e0b;
-            --danger-color: #ef4444;
-            --text-primary: #1f2937;
-            --text-secondary: #6b7280;
-            --text-tertiary: #9ca3af;
-            --bg-primary: #ffffff;
-            --bg-secondary: #f9fafb;
-            --bg-tertiary: #f3f4f6;
-            --border-color: #e5e7eb;
-            --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
-            --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-            --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
-            --radius-sm: 6px;
-            --radius-md: 8px;
-            --radius-lg: 12px;
-            --radius-xl: 16px;
-        }
-
         * {
             margin: 0;
             padding: 0;
             box-sizing: border-box;
         }
-
+        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-            background: var(--bg-secondary);
-            color: var(--text-primary);
-            line-height: 1.6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f5f5;
+            color: #333;
         }
-
+        
         .container {
             max-width: 1400px;
             margin: 0 auto;
-            padding: 24px;
+            padding: 20px;
         }
-
-        @media (max-width: 768px) {
-            .container {
-                padding: 16px;
-            }
-        }
-
+        
         .header {
-            background: linear-gradient(135deg, var(--primary-color) 0%, #8b5cf6 100%);
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             color: white;
-            padding: 32px;
-            border-radius: var(--radius-xl);
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-lg);
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
-
+        
         .header h1 {
             font-size: 28px;
-            font-weight: 700;
-            margin-bottom: 8px;
+            margin-bottom: 10px;
         }
-
+        
         .header p {
             opacity: 0.9;
             font-size: 14px;
         }
-
+        
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
         }
-
+        
         .stat-card {
-            background: var(--bg-primary);
-            padding: 24px;
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-sm);
-            border: 1px solid var(--border-color);
-            transition: all 0.2s ease;
+            background: white;
+            padding: 25px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            transition: transform 0.2s;
         }
-
+        
         .stat-card:hover {
             transform: translateY(-2px);
-            box-shadow: var(--shadow-md);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
         }
-
+        
         .stat-card h3 {
-            font-size: 13px;
-            color: var(--text-secondary);
-            margin-bottom: 12px;
-            font-weight: 500;
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-
+        
         .stat-card .value {
             font-size: 32px;
-            font-weight: 700;
-            color: var(--primary-color);
-            line-height: 1;
+            font-weight: bold;
+            color: #667eea;
         }
-
-        .stat-card .trend {
-            margin-top: 8px;
-            font-size: 12px;
-            color: var(--success-color);
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-
+        
         .section {
-            background: var(--bg-primary);
-            border-radius: var(--radius-lg);
-            padding: 24px;
-            margin-bottom: 24px;
-            box-shadow: var(--shadow-sm);
-            border: 1px solid var(--border-color);
+            background: white;
+            border-radius: 10px;
+            padding: 25px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
         }
-
-        .section-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        
+        .section h2 {
+            font-size: 20px;
             margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border-color);
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
         }
-
-        .section-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .section-actions {
-            display: flex;
-            gap: 8px;
-        }
-
-        .btn {
-            padding: 8px 16px;
-            border: none;
-            border-radius: var(--radius-md);
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s ease;
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-        }
-
-        .btn-primary {
-            background: var(--primary-color);
-            color: white;
-        }
-
-        .btn-primary:hover {
-            background: var(--primary-hover);
-        }
-
-        .btn-secondary {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
-        }
-
-        .btn-secondary:hover {
-            background: var(--border-color);
-        }
-
-        .btn-sm {
-            padding: 6px 12px;
-            font-size: 13px;
-        }
-
+        
         .tabs {
             display: flex;
-            gap: 8px;
+            gap: 10px;
             margin-bottom: 20px;
-            border-bottom: 1px solid var(--border-color);
-            padding-bottom: 12px;
         }
-
+        
         .tab {
-            padding: 8px 16px;
-            background: transparent;
+            padding: 10px 20px;
+            background: #f0f0f0;
             border: none;
-            border-radius: var(--radius-md);
+            border-radius: 5px;
             cursor: pointer;
             font-size: 14px;
-            font-weight: 500;
-            color: var(--text-secondary);
-            transition: all 0.2s ease;
+            transition: all 0.2s;
         }
-
+        
         .tab.active {
-            background: var(--primary-color);
+            background: #667eea;
             color: white;
         }
-
-        .tab:hover:not(.active) {
-            background: var(--bg-tertiary);
-            color: var(--text-primary);
+        
+        .tab:hover {
+            background: #667eea;
+            color: white;
         }
-
-        .table-container {
-            overflow-x: auto;
-            margin: -8px;
-            padding: 8px;
-        }
-
+        
         table {
             width: 100%;
             border-collapse: collapse;
-            min-width: 800px;
         }
-
+        
         th, td {
-            padding: 12px 16px;
+            padding: 12px;
             text-align: left;
-            border-bottom: 1px solid var(--border-color);
+            border-bottom: 1px solid #eee;
         }
-
+        
         th {
-            background: var(--bg-tertiary);
+            background: #f8f9fa;
             font-weight: 600;
-            color: var(--text-secondary);
-            font-size: 12px;
+            color: #666;
+            font-size: 13px;
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            position: sticky;
-            top: 0;
         }
-
+        
         tr:hover {
-            background: var(--bg-secondary);
+            background: #f8f9fa;
         }
-
+        
         .badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 10px;
+            display: inline-block;
+            padding: 4px 8px;
             border-radius: 12px;
             font-size: 12px;
             font-weight: 500;
-            gap: 4px;
         }
-
+        
         .badge-active {
-            background: #d1fae5;
-            color: #065f46;
+            background: #d4edda;
+            color: #155724;
         }
-
+        
         .badge-inactive {
-            background: #fee2e2;
-            color: #991b1b;
+            background: #f8d7da;
+            color: #721c24;
         }
-
-        .badge-online {
-            background: #d1fae5;
-            color: #065f46;
-        }
-
-        .badge-offline {
-            background: #fee2e2;
-            color: #991b1b;
-        }
-
-        .badge-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 50%;
-            background: currentColor;
-        }
-
+        
         .loading {
             text-align: center;
-            padding: 48px;
-            color: var(--text-tertiary);
+            padding: 40px;
+            color: #666;
         }
-
-        .loading::after {
-            content: '';
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 2px solid var(--border-color);
-            border-top-color: var(--primary-color);
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            margin-left: 8px;
-            vertical-align: middle;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
+        
         .error {
-            background: #fee2e2;
-            color: #991b1b;
-            padding: 16px;
-            border-radius: var(--radius-md);
-            margin-bottom: 16px;
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
         }
-
-        .modal {
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin-top: 20px;
+        }
+        
+        .feature-list {
+            list-style: none;
+        }
+        
+        .feature-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        .feature-name {
+            font-weight: 500;
+        }
+        
+        .feature-count {
+            color: #667eea;
+            font-weight: bold;
+        }
+        
+        .user-detail {
             display: none;
             position: fixed;
             top: 0;
@@ -324,246 +210,132 @@
             background: rgba(0, 0, 0, 0.5);
             z-index: 1000;
             overflow-y: auto;
-            padding: 24px;
-            animation: fadeIn 0.2s ease;
         }
-
-        .modal.active {
+        
+        .user-detail.active {
             display: flex;
-            align-items: flex-start;
+            align-items: center;
             justify-content: center;
+            padding: 20px;
         }
-
-        @keyframes fadeIn {
-            from { opacity: 0; }
-            to { opacity: 1; }
-        }
-
-        .modal-content {
-            background: var(--bg-primary);
-            border-radius: var(--radius-xl);
-            padding: 32px;
+        
+        .user-detail-content {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
             max-width: 800px;
             width: 100%;
-            margin: auto;
-            box-shadow: var(--shadow-lg);
-            animation: slideUp 0.3s ease;
+            max-height: 90vh;
+            overflow-y: auto;
         }
-
-        @keyframes slideUp {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        .modal-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .modal-title {
-            font-size: 20px;
-            font-weight: 600;
-        }
-
+        
         .close-btn {
+            float: right;
             background: none;
             border: none;
             font-size: 24px;
             cursor: pointer;
-            color: var(--text-tertiary);
-            padding: 4px;
-            line-height: 1;
-            transition: color 0.2s;
+            color: #666;
         }
-
+        
         .close-btn:hover {
-            color: var(--text-primary);
+            color: #333;
         }
-
-        .info-grid {
+        
+        .user-info-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 16px;
-            margin-bottom: 24px;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 20px;
+            margin: 20px 0;
         }
-
+        
         .info-item {
-            padding: 16px;
-            background: var(--bg-secondary);
-            border-radius: var(--radius-md);
-            border: 1px solid var(--border-color);
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 5px;
         }
-
+        
         .info-label {
             font-size: 12px;
-            color: var(--text-tertiary);
-            margin-bottom: 4px;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            color: #666;
+            margin-bottom: 5px;
         }
-
+        
         .info-value {
             font-size: 16px;
-            font-weight: 600;
-            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .device-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+        }
+
+        .device-status.online {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .device-status.offline {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .device-status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .device-status.online .device-status-dot {
+            background: #28a745;
+        }
+
+        .device-status.offline .device-status-dot {
+            background: #dc3545;
         }
 
         .devices-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 16px;
+            margin-top: 16px;
         }
 
-        .device-card {
-            background: var(--bg-secondary);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-lg);
-            padding: 20px;
-            transition: all 0.2s ease;
-        }
-
-        .device-card:hover {
-            border-color: var(--primary-color);
-            box-shadow: var(--shadow-sm);
-        }
-
-        .device-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            margin-bottom: 16px;
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .device-icon {
-            font-size: 24px;
-        }
-
-        .device-title {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
-        .device-id {
-            font-size: 12px;
-            color: var(--text-tertiary);
-            font-family: monospace;
-        }
-
-        .device-info {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .device-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 13px;
-        }
-
-        .device-label {
-            color: var(--text-secondary);
-        }
-
-        .device-value {
-            font-weight: 500;
-            color: var(--text-primary);
-        }
-
-        .feature-list {
-            list-style: none;
-        }
-
-        .feature-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
+        .user-devices-card {
+            background: #f8f9fa;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
             padding: 16px;
-            border-bottom: 1px solid var(--border-color);
-            transition: background 0.2s;
         }
 
-        .feature-item:hover {
-            background: var(--bg-secondary);
+        .user-devices-card h4 {
+            margin-bottom: 12px;
+            color: #333;
+            font-size: 14px;
         }
 
-        .feature-item:last-child {
+        .device-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .device-item:last-child {
             border-bottom: none;
         }
 
-        .feature-name {
-            font-weight: 500;
-            color: var(--text-primary);
+        .device-item-label {
+            font-size: 13px;
+            color: #666;
         }
-
-        .feature-count {
-            color: var(--primary-color);
-            font-weight: 600;
-            font-size: 16px;
-        }
-
-        .empty-state {
-            text-align: center;
-            padding: 48px;
-            color: var(--text-tertiary);
-        }
-
-        .empty-state-icon {
-            font-size: 48px;
-            margin-bottom: 16px;
-            opacity: 0.5;
-        }
-
-        @media (max-width: 640px) {
-            .header {
-                padding: 24px;
-            }
-
-            .header h1 {
-                font-size: 24px;
-            }
-
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-
-            .section {
-                padding: 16px;
-            }
-
-            .section-header {
-                flex-direction: column;
-                align-items: flex-start;
-                gap: 12px;
-            }
-
-            .modal-content {
-                padding: 24px;
-            }
-
-            .info-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .devices-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-        </style>
+    </style>
 </head>
 <body>
     <div class="container">
@@ -571,7 +343,7 @@
             <h1>用户管理后台</h1>
             <p>实时监控用户数据和行为分析</p>
         </div>
-
+        
         <div class="stats-grid" id="statsGrid">
             <div class="stat-card">
                 <h3>总用户数</h3>
@@ -602,29 +374,18 @@
                 <div class="value" id="avgDuration">-</div>
             </div>
         </div>
-
+        
         <div class="section">
-            <div class="section-header">
-                <h2 class="section-title">用户列表</h2>
-            </div>
-            <div class="table-container">
-                <div id="usersTable">
-                    <div class="loading">加载中...</div>
-                </div>
+            <h2>用户列表</h2>
+            <div id="usersTable">
+                <div class="loading">加载中...</div>
             </div>
         </div>
 
         <div class="section">
-            <div class="section-header">
-                <h2 class="section-title">设备列表</h2>
-                <div class="section-actions">
-                    <button class="btn btn-primary btn-sm" onclick="loadAllDevices()">
-                        <span>🔄</span>
-                        刷新设备
-                    </button>
-                </div>
-            </div>
-            <div class="table-container">
+            <h2>设备列表</h2>
+            <button class="tab active" onclick="loadAllDevices()">刷新设备</button>
+            <div style="margin-top: 16px;">
                 <table>
                     <thead>
                         <tr>
@@ -643,11 +404,9 @@
                 </table>
             </div>
         </div>
-
+        
         <div class="section">
-            <div class="section-header">
-                <h2 class="section-title">功能使用统计</h2>
-            </div>
+            <h2>功能使用统计</h2>
             <div class="tabs">
                 <button class="tab active" onclick="loadFeatureUsage(7)">最近 7 天</button>
                 <button class="tab" onclick="loadFeatureUsage(30)">最近 30 天</button>
@@ -656,35 +415,31 @@
                 <div class="loading">加载中...</div>
             </div>
         </div>
-
+        
         <div class="section">
-            <div class="section-header">
-                <h2 class="section-title">日活趋势</h2>
-            </div>
+            <h2>日活趋势</h2>
             <div id="dauChart">
                 <div class="loading">加载中...</div>
             </div>
         </div>
     </div>
-
-    <div class="modal" id="userDetail">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 class="modal-title">用户详情</h2>
-                <button class="close-btn" onclick="closeUserDetail()">&times;</button>
-            </div>
+    
+    <div class="user-detail" id="userDetail">
+        <div class="user-detail-content">
+            <button class="close-btn" onclick="closeUserDetail()">&times;</button>
+            <h2>用户详情</h2>
             <div id="userDetailContent"></div>
         </div>
     </div>
-
+    
     <script>
         const API_BASE = window.location.origin;
-
+        
         async function loadOverview() {
             try {
                 const response = await fetch(`${API_BASE}/api/admin/analytics/overview`);
                 const data = await response.json();
-
+                
                 if (data.success) {
                     document.getElementById('totalUsers').textContent = data.data.total_users;
                     document.getElementById('dau').textContent = data.data.dau;
@@ -698,7 +453,7 @@
                 console.error('加载概览数据失败:', error);
             }
         }
-
+        
         async function loadUsers() {
             try {
                 const [usersResponse, devicesResponse] = await Promise.all([
@@ -729,13 +484,13 @@
                                     const userPhone = devices.find(d => d.user_id === user.user_id && d.properties?.device_role === 'phone');
                                     return `
                                     <tr>
-                                        <td><code style="font-size: 12px;">${user.user_id}</code></td>
+                                        <td>${user.user_id}</td>
                                         <td>${maskPhone(user.phone_number)}</td>
                                         <td>${user.nickname || '-'}</td>
                                         <td>${getDeviceStatusBadge(userGlass)}</td>
                                         <td>${getDeviceStatusBadge(userPhone)}</td>
                                         <td><span class="badge badge-${user.status}">${user.status}</span></td>
-                                        <td><button class="btn btn-secondary btn-sm" onclick="showUserDetail('${user.user_id}')">查看详情</button></td>
+                                        <td><button onclick="showUserDetail('${user.user_id}')">查看详情</button></td>
                                     </tr>
                                 `}).join('')}
                             </tbody>
@@ -765,22 +520,12 @@
                 const html = Object.entries(grouped).map(([userId, devs]) => {
                     const glassBadge = getDeviceStatusBadge(devs.glass);
                     const phoneBadge = getDeviceStatusBadge(devs.phone);
-                    const glassInfo = devs.glass ? `<code style="font-size: 11px; color: var(--text-tertiary);">${devs.glass.device_id}</code>${devs.glass.last_error ? ' ⚠️' : ''}` : '-';
-                    const phoneInfo = devs.phone ? `<code style="font-size: 11px; color: var(--text-tertiary);">${devs.phone.device_id}</code>${devs.phone.last_error ? ' ⚠️' : ''}` : '-';
-                    return `
-                        <tr>
-                            <td><code style="font-size: 12px;">${userId}</code></td>
-                            <td>-</td>
-                            <td>-</td>
-                            <td>${glassBadge}<br><div style="margin-top: 4px;">${glassInfo}</div></td>
-                            <td>${phoneBadge}<br><div style="margin-top: 4px;">${phoneInfo}</div></td>
-                            <td>-</td>
-                            <td><button class="btn btn-secondary btn-sm" onclick="showDeviceDetail('${userId}')">查看详情</button></td>
-                        </tr>
-                    `;
+                    const glassInfo = devs.glass ? `${devs.glass.device_id}${devs.glass.last_error ? ' ❌' : ''}` : '-';
+                    const phoneInfo = devs.phone ? `${devs.phone.device_id}${devs.phone.last_error ? ' ❌' : ''}` : '-';
+                    return `<tr><td>${userId}</td><td>-</td><td>-</td><td>${glassBadge}<br><small style="color:#666;">${glassInfo}</small></td><td>${phoneBadge}<br><small style="color:#666;">${phoneInfo}</small></td><td>-</td><td><button onclick="showDeviceDetail('${userId}')">查看详情</button></td></tr>`;
                 }).join('');
 
-                document.getElementById('allDevicesTable').innerHTML = html || '<tr><td colspan="7" class="empty-state"><div class="empty-state-icon">📱</div><div>暂无设备</div></td></tr>';
+                document.getElementById('allDevicesTable').innerHTML = html || '<tr><td colspan="7" style="text-align:center;color:#666;">暂无设备</td></tr>';
             } catch (error) {
                 console.error('加载设备列表失败:', error);
             }
@@ -793,39 +538,31 @@
                 const devices = (data.devices || []).filter(d => d.user_id === userId);
 
                 const content = `
-                    <div class="info-grid">
+                    <div class="user-info-grid">
                         <div class="info-item">
                             <div class="info-label">用户ID</div>
-                            <div class="info-value"><code>${userId}</code></div>
+                            <div class="info-value">${userId}</div>
                         </div>
                     </div>
-                    <h3 style="margin-top: 24px; margin-bottom: 16px; font-size: 16px; font-weight: 600;">设备列表</h3>
+                    <h3 style="margin-top: 30px; margin-bottom: 15px;">设备列表</h3>
                     <div class="devices-grid">
                         ${devices.map(d => `
-                            <div class="device-card">
-                                <div class="device-header">
-                                    <span class="device-icon">${d.properties?.device_role === 'glass' ? '👓' : '📱'}</span>
-                                    <div>
-                                        <div class="device-title">${d.properties?.device_role === 'glass' ? '眼镜' : '手机'}</div>
-                                        <div class="device-id">${d.device_id}</div>
-                                    </div>
+                            <div class="user-devices-card">
+                                <h4>${d.properties?.device_role === 'glass' ? '👓 眼镜' : '📱 手机'} - ${d.device_id}</h4>
+                                <div class="device-item">
+                                    <span class="device-item-label">状态</span>
+                                    <span class="device-status ${d.connection_state === 'online' ? 'online' : 'offline'}">
+                                        <span class="device-status-dot"></span>
+                                        ${d.connection_state === 'online' ? '在线' : '离线'}
+                                    </span>
                                 </div>
-                                <div class="device-info">
-                                    <div class="device-row">
-                                        <span class="device-label">状态</span>
-                                        <span class="badge badge-${d.connection_state === 'online' ? 'online' : 'offline'}">
-                                            <span class="badge-dot"></span>
-                                            ${d.connection_state === 'online' ? '在线' : '离线'}
-                                        </span>
-                                    </div>
-                                    <div class="device-row">
-                                        <span class="device-label">最后活动</span>
-                                        <span class="device-value">${d.last_seen_at ? new Date(d.last_seen_at * 1000).toLocaleString('zh-CN') : '-'}</span>
-                                    </div>
-                                    <div class="device-row">
-                                        <span class="device-label">错误</span>
-                                        <span class="device-value" style="color: ${d.last_error ? 'var(--danger-color)' : 'var(--success-color)'}">${d.last_error?.message || '无'}</span>
-                                    </div>
+                                <div class="device-item">
+                                    <span class="device-item-label">最后活动</span>
+                                    <span>${d.last_seen_at ? new Date(d.last_seen_at * 1000).toLocaleString('zh-CN') : '-'}</span>
+                                </div>
+                                <div class="device-item">
+                                    <span class="device-item-label">错误</span>
+                                    <span style="color: ${d.last_error ? '#dc3545' : '#28a745'}">${d.last_error?.message || '无'}</span>
                                 </div>
                             </div>
                         `).join('')}
@@ -841,25 +578,25 @@
 
         function getDeviceStatusBadge(device) {
             if (!device) {
-                return '<span class="badge badge-offline"><span class="badge-dot"></span>未绑定</span>';
+                return '<span class="device-status offline"><span class="device-status-dot"></span>未绑定</span>';
             }
             const state = device.connection_state === 'online' ? 'online' : 'offline';
             const label = device.connection_state === 'online' ? '在线' : '离线';
-            return `<span class="badge badge-${state}"><span class="badge-dot"></span>${label}</span>`;
+            return `<span class="device-status ${state}"><span class="device-status-dot"></span>${label}</span>`;
         }
-
+        
         async function loadFeatureUsage(days = 7) {
             try {
                 const response = await fetch(`${API_BASE}/api/admin/analytics/feature-usage?days=${days}`);
                 const data = await response.json();
-
+                
                 if (data.success) {
                     const listHTML = `
                         <ul class="feature-list">
                             ${data.data.map(item => `
                                 <li class="feature-item">
-                                    <span class="feature-name">${item.feature_name}</span>
-                                    <span class="feature-count">${item.count}</span>
+                                    <span class="feature-name">${item.feature_name} - ${item.action}</span>
+                                    <span class="feature-count">${item.count} 次</span>
                                 </li>
                             `).join('')}
                         </ul>
@@ -871,60 +608,161 @@
                 document.getElementById('featureUsage').innerHTML = '<div class="error">加载失败</div>';
             }
         }
-
-        async function loadDAUChart() {
+        
+        async function loadDAU() {
             try {
-                const response = await fetch(`${API_BASE}/api/admin/analytics/dau-trend?days=30`);
+                const response = await fetch(`${API_BASE}/api/admin/analytics/dau?days=7`);
                 const data = await response.json();
-
+                
                 if (data.success) {
                     const chartHTML = `
-                        <div style="height: 300px; display: flex; align-items: center; justify-content: center; color: var(--text-tertiary);">
-                            日活趋势图表（待集成图表库）
-                        </div>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>日期</th>
+                                    <th>活跃用户数</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.data.map(item => `
+                                    <tr>
+                                        <td>${item.date}</td>
+                                        <td>${item.count}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
                     `;
                     document.getElementById('dauChart').innerHTML = chartHTML;
                 }
             } catch (error) {
-                console.error('加载日活趋势失败:', error);
+                console.error('加载日活数据失败:', error);
                 document.getElementById('dauChart').innerHTML = '<div class="error">加载失败</div>';
             }
         }
-
+        
         async function showUserDetail(userId) {
             try {
-                const response = await fetch(`${API_BASE}/api/admin/users/${userId}`);
-                const data = await response.json();
+                const [userResponse, devicesResponse] = await Promise.all([
+                    fetch(`${API_BASE}/api/admin/users/${userId}`),
+                    fetch(`${API_BASE}/api/debug/devices`)
+                ]);
+                const data = await userResponse.json();
+                const devicesData = await devicesResponse.json();
 
                 if (data.success) {
-                    const user = data.data;
+                    const user = data.data.user;
+                    const allDevices = devicesData.devices || [];
+                    const userGlass = allDevices.find(d => d.user_id === user.user_id && d.properties?.device_role === 'glass');
+                    const userPhone = allDevices.find(d => d.user_id === user.user_id && d.properties?.device_role === 'phone');
+
                     const content = `
-                        <div class="info-grid">
+                        <div class="user-info-grid">
                             <div class="info-item">
                                 <div class="info-label">用户ID</div>
-                                <div class="info-value"><code>${user.user_id}</code></div>
+                                <div class="info-value">${user.user_id}</div>
                             </div>
                             <div class="info-item">
                                 <div class="info-label">手机号</div>
-                                <div class="info-value">${maskPhone(user.phone_number)}</div>
+                                <div class="info-value">${user.phone_number}</div>
                             </div>
                             <div class="info-item">
                                 <div class="info-label">昵称</div>
                                 <div class="info-value">${user.nickname || '-'}</div>
                             </div>
                             <div class="info-item">
-                                <div class="info-label">状态</div>
-                                <div class="info-value"><span class="badge badge-${user.status}">${user.status}</span></div>
+                                <div class="info-label">登录次数</div>
+                                <div class="info-value">${user.login_count}</div>
                             </div>
                             <div class="info-item">
                                 <div class="info-label">注册时间</div>
-                                <div class="info-value">${new Date(user.created_at).toLocaleString('zh-CN')}</div>
+                                <div class="info-value">${formatDate(user.created_at)}</div>
                             </div>
                             <div class="info-item">
                                 <div class="info-label">最后登录</div>
-                                <div class="info-value">${user.last_login ? new Date(user.last_login).toLocaleString('zh-CN') : '-'}</div>
+                                <div class="info-value">${formatDate(user.last_login_at)}</div>
                             </div>
                         </div>
+
+                        <h3 style="margin-top: 30px; margin-bottom: 15px;">设备状态</h3>
+                        <div class="devices-grid">
+                            ${(userGlass || userPhone) ? `
+                            <div class="user-devices-card">
+                                <h4>👓 眼镜</h4>
+                                ${userGlass ? `
+                                    <div class="device-item">
+                                        <span class="device-item-label">👤 User</span>
+                                        <span>${userGlass.user_id}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">📱 Device</span>
+                                        <span>${userGlass.device_id}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">🎭 Role</span>
+                                        <span>${userGlass.properties?.device_role || 'glass'}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">⏰ Last seen</span>
+                                        <span>${userGlass.last_seen_at ? new Date(userGlass.last_seen_at * 1000).toLocaleTimeString('zh-CN') : '-'}</span>
+                                    </div>
+                                    ${userGlass.last_error ? `
+                                    <div class="device-item">
+                                        <span class="device-item-label">❌ Error</span>
+                                        <span style="color: #dc3545;">${userGlass.last_error.message}</span>
+                                    </div>
+                                    ` : ''}
+                                ` : `<div class="device-item"><span style="color:#666;">未绑定</span></div>`}
+                            </div>
+                            <div class="user-devices-card">
+                                <h4>📱 手机</h4>
+                                ${userPhone ? `
+                                    <div class="device-item">
+                                        <span class="device-item-label">👤 User</span>
+                                        <span>${userPhone.user_id}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">📱 Device</span>
+                                        <span>${userPhone.device_id}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">🎭 Role</span>
+                                        <span>${userPhone.properties?.device_role || 'phone'}</span>
+                                    </div>
+                                    <div class="device-item">
+                                        <span class="device-item-label">⏰ Last seen</span>
+                                        <span>${userPhone.last_seen_at ? new Date(userPhone.last_seen_at * 1000).toLocaleTimeString('zh-CN') : '-'}</span>
+                                    </div>
+                                    ${userPhone.last_error ? `
+                                    <div class="device-item">
+                                        <span class="device-item-label">❌ Error</span>
+                                        <span style="color: #dc3545;">${userPhone.last_error.message}</span>
+                                    </div>
+                                    ` : ''}
+                                ` : `<div class="device-item"><span style="color:#666;">未绑定</span></div>`}
+                            </div>
+                            ` : `<div class="user-devices-card"><p style="color:#666;">暂无设备</p></div>`}
+                        </div>
+
+                        <h3 style="margin-top: 30px; margin-bottom: 15px;">最近功能使用</h3>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>功能</th>
+                                    <th>动作</th>
+                                    <th>时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${data.data.feature_usage.slice(0, 10).map(usage => `
+                                    <tr>
+                                        <td>${usage.feature_name}</td>
+                                        <td>${usage.action}</td>
+                                        <td>${formatDate(usage.created_at)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
                     `;
 
                     document.getElementById('userDetailContent').innerHTML = content;
@@ -934,36 +772,38 @@
                 console.error('加载用户详情失败:', error);
             }
         }
-
+        
         function closeUserDetail() {
             document.getElementById('userDetail').classList.remove('active');
         }
-
+        
         function maskPhone(phone) {
             if (!phone) return '-';
             return phone.replace(/(\d{3})\d{4}(\d{4})/, '$1****$2');
         }
-
+        
+        function formatDate(dateStr) {
+            if (!dateStr) return '-';
+            const date = new Date(dateStr);
+            return date.toLocaleString('zh-CN');
+        }
+        
         function formatDuration(seconds) {
             if (!seconds) return '-';
             const minutes = Math.floor(seconds / 60);
             const secs = Math.floor(seconds % 60);
             return `${minutes}分${secs}秒`;
         }
-
-        document.addEventListener('DOMContentLoaded', () => {
-            loadOverview();
-            loadUsers();
-            loadAllDevices();
-            loadFeatureUsage(7);
-            loadDAUChart();
-        });
-
-        document.getElementById('userDetail').addEventListener('click', (e) => {
-            if (e.target.id === 'userDetail') {
-                closeUserDetail();
-            }
-        });
+        
+        // 初始化加载
+        loadOverview();
+        loadUsers();
+        loadAllDevices();
+        loadFeatureUsage();
+        loadDAU();
+        
+        // 定时刷新
+        setInterval(loadOverview, 30000);
     </script>
 </body>
 </html>

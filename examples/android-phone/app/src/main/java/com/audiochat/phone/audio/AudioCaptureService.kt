@@ -13,6 +13,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.audiochat.phone.device.DeviceConfig
+import com.audiochat.phone.device.DeviceListener
 import com.audiochat.phone.device.DeviceManager
 import com.audiochat.phone.ui.MainActivity
 import kotlinx.coroutines.CoroutineScope
@@ -109,33 +111,31 @@ class AudioCaptureService : Service() {
     private fun startConnection(serverUrl: String, userId: String, deviceId: String, deviceName: String, accessToken: String?) {
         serviceJob?.cancel()
 
-        deviceManager = DeviceManager(
+        val config = DeviceConfig(
             serverUrl = serverUrl,
             userId = userId,
             deviceId = deviceId,
             accessToken = accessToken,
             deviceName = deviceName
         )
+        deviceManager = DeviceManager.create(config)
+
+        deviceManager?.setListener(object : DeviceListener {
+            override fun onDeviceRegistered() {
+                mainHandler.post { updateNotification("已注册 - 常驻运行中") }
+            }
+            override fun onReconnectNeeded() {
+                mainHandler.post { updateNotification("连接断开，正在重连...") }
+            }
+        })
 
         serviceJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                deviceManager?.connectAndRegister()
-                deviceManager?.startStreamAndHeartbeat()
+                deviceManager?.connect()
+                deviceManager?.start()
 
                 mainHandler.post {
                     updateNotification("已连接 - 常驻运行中")
-                }
-
-                deviceManager?.onDeviceRegistered = {
-                    mainHandler.post {
-                        updateNotification("已注册 - 常驻运行中")
-                    }
-                }
-
-                deviceManager?.onReconnectNeeded = {
-                    mainHandler.post {
-                        updateNotification("连接断开，正在重连...")
-                    }
                 }
 
             } catch (e: Exception) {

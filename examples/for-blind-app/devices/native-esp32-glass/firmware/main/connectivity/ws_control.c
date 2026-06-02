@@ -94,7 +94,11 @@ esp_err_t ws_control_init(const char *server_url, const char *device_id,
     s_server_url = server_url;
     s_device_id = device_id;
     s_device = device;
-    snprintf(s_user_id, sizeof(s_user_id), "user-device-%s", device_id);
+    if (device && device->user_id[0]) {
+        snprintf(s_user_id, sizeof(s_user_id), "%s", device->user_id);
+    } else {
+        snprintf(s_user_id, sizeof(s_user_id), "user-device-%s", device_id);
+    }
 
     ESP_LOGI(TAG, "Init: %s", server_url);
     ESP_LOGI(TAG, "Heap: free=%u, internal=%u, largest_block=%u",

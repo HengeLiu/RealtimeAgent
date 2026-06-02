@@ -17,7 +17,7 @@ esp_err_t ws_control_set_callbacks(ws_control_on_connected_cb_t on_connected,
                                     ws_control_on_message_cb_t on_message);
 esp_err_t ws_control_send_event(const char *event_name, const char *payload, size_t len);
 esp_err_t ws_control_send_event_with_stream(const char *event_name, const char *payload, size_t len,
-                                              const char *stream_id, const char *stream_type);
+                                             const char *stream_id, const char *stream_type);
 esp_err_t ws_control_send_binary(const uint8_t *data, size_t len);
 bool ws_control_is_connected(void);
 esp_err_t ws_control_disconnect(void);

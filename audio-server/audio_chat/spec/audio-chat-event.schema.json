@@ -63,7 +63,6 @@
     "session_id": {"type": "string", "minLength": 1},
     "stream_id": {"type": "string", "minLength": 1},
     "stream_type": {"$ref": "#/$defs/streamType"},
-    "trace_id": {"type": "string", "minLength": 1},
     "payload": {"$ref": "#/$defs/payload"}
   },
   "$defs": {

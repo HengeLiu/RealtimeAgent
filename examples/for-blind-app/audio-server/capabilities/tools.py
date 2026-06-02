@@ -109,9 +109,8 @@ class CaptureHighResPhotoTool(BaseTool):
     spec = ToolSpec(
         name="capture_high_res_photo",
         description=(
-            "当用户说"看看上面写的什么"、"识别一下文字"、"查看标识牌内容"、"
-            "看看菜单或文件上的小字"等需要高分辨率图片来识别文字时调用。"
-            "此工具会自动切换到高分辨率模式进行拍摄，适合识别细小文字、标识牌、标签等。"
+            "When user says to read signs, menus, small text, or identify content "
+            "on labels and signs, this tool captures high resolution photo."
         ),
         input_model=CaptureHighResPhotoInput,
         output_model=CaptureHighResPhotoOutput,
@@ -548,3 +547,38 @@ class SearchWebTool(BaseTool):
                 message="搜索服务暂时不可用",
             )
         return ToolResult.success(data={"query": query, "search": result}, message="搜索完成")
+
+
+class StopDialogInput(BaseModel):
+    """停止对话 Tool 输入参数。"""
+    pass
+
+
+class StopDialogOutput(BaseModel):
+    """停止对话 Tool 输出结构。"""
+    stopped: bool = Field(description="是否已发送停止指令。")
+
+
+class StopDialogTool(BaseTool):
+    """停止对话 Tool。
+
+    当用户要求停止说话、闭嘴、退下等意图时调用，关闭当前音频会话并回到待唤醒状态。
+    """
+
+    spec = ToolSpec(
+        name="stop_dialog",
+        description=(
+            "当用户明确要求停止说话、闭嘴、退下、别说了、安静、停下等意图时调用。"
+            "调用后会停止当前播报并关闭语音会话，设备回到等待唤醒状态。"
+        ),
+        input_model=StopDialogInput,
+        output_model=StopDialogOutput,
+        progress_message=("好的，我先退下了。",),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        context.output.close_session(reason="user_stop_command", mode="close_after_reply")
+        return ToolResult.success(
+            data={"stopped": True},
+            message="好的，我先退下了。",
+        )

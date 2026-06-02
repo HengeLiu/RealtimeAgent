@@ -1,6 +1,5 @@
 #include "wake_word.h"
 #include "esp_log.h"
-#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_wn_iface.h"
@@ -39,12 +38,6 @@ typedef struct {
     size_t count;
 } wake_audio_chunk_t;
 
-// Detection buffers (allocated in PSRAM)
-static int16_t *s_detection_buffer = NULL;
-static int16_t *s_last_detection_buffer = NULL;
-#define DETECTION_BUFFER_SIZE (16000 * 3)
-#define LAST_DETECTION_BUFFER_SIZE 4800
-
 static void wake_word_detection_task(void *pvParameters);
 
 esp_err_t wake_word_init(void) {
@@ -55,26 +48,21 @@ esp_err_t wake_word_init(void) {
     ESP_LOGI(TAG, "Initializing WakeNet...");
 
     // Initialize models from "model" partition
-    ESP_LOGI(TAG, "Loading models from 'model' partition...");
     s_models = esp_srmodel_init("model");
     if (!s_models) {
-        ESP_LOGE(TAG, "Failed to initialize models - model partition may be empty or missing");
+        ESP_LOGE(TAG, "Failed to initialize models");
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "Models loaded, count=%d", s_models->num);
 
     // Filter for wakenet model (ESP_WN_PREFIX = "wn")
     char *model_name = esp_srmodel_filter(s_models, ESP_WN_PREFIX, NULL);
     if (!model_name) {
-        ESP_LOGE(TAG, "No wakenet model found in partition (checked %d models)", s_models->num);
-        for (int i = 0; i < s_models->num; i++) {
-            ESP_LOGW(TAG, "  model[%d]: %s", i, s_models->model_name[i]);
-        }
+        ESP_LOGE(TAG, "No wakenet model found");
         esp_srmodel_deinit(s_models);
         return ESP_FAIL;
     }
 
-    ESP_LOGI(TAG, "Using wake word model: %s", model_name);
+    ESP_LOGI(TAG, "Using model: %s", model_name);
 
     // Get wakenet interface handle
     s_wakenet = (esp_wn_iface_t *)esp_wn_handle_from_name(model_name);
@@ -95,8 +83,7 @@ esp_err_t wake_word_init(void) {
     // Get audio chunk size in samples
     int samp_chunksize = s_wakenet->get_samp_chunksize(s_model_data);
     s_audio_chunksize = samp_chunksize * sizeof(int16_t);
-    s_audio_buffer = (int16_t *)heap_caps_malloc(s_audio_chunksize, MALLOC_CAP_SPIRAM);
-    ESP_LOGI(TAG, "Audio buffer: %d bytes at %p (PSRAM)", s_audio_chunksize, s_audio_buffer);
+    s_audio_buffer = (int16_t *)malloc(s_audio_chunksize);
 
     if (!s_audio_buffer) {
         ESP_LOGE(TAG, "Failed to allocate audio buffer");
@@ -107,11 +94,10 @@ esp_err_t wake_word_init(void) {
 
     // Ring buffer for continuous audio (3 seconds at 16kHz = 48000 samples)
     s_ring_size = 48000 * sizeof(int16_t);
-    s_ring_buffer = (int16_t *)heap_caps_malloc(s_ring_size, MALLOC_CAP_SPIRAM);
-    ESP_LOGI(TAG, "Ring buffer: %d bytes at %p (PSRAM)", s_ring_size, s_ring_buffer);
+    s_ring_buffer = (int16_t *)malloc(s_ring_size);
     if (!s_ring_buffer) {
         ESP_LOGE(TAG, "Failed to allocate ring buffer");
-        heap_caps_free(s_audio_buffer);
+        free(s_audio_buffer);
         s_wakenet->destroy(s_model_data);
         esp_srmodel_deinit(s_models);
         return ESP_ERR_NO_MEM;
@@ -122,30 +108,12 @@ esp_err_t wake_word_init(void) {
     s_wake_audio_queue = xQueueCreate(WAKE_AUDIO_QUEUE_DEPTH, sizeof(wake_audio_chunk_t));
     if (!s_wake_audio_queue) {
         ESP_LOGE(TAG, "Failed to create wake audio queue");
-        heap_caps_free(s_ring_buffer);
-        heap_caps_free(s_audio_buffer);
+        free(s_ring_buffer);
+        free(s_audio_buffer);
         s_wakenet->destroy(s_model_data);
         esp_srmodel_deinit(s_models);
         return ESP_ERR_NO_MEM;
     }
-
-    // Allocate detection buffers in PSRAM (used only in detection task, not ISR)
-    s_detection_buffer = (int16_t *)heap_caps_malloc(DETECTION_BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    s_last_detection_buffer = (int16_t *)heap_caps_malloc(LAST_DETECTION_BUFFER_SIZE * sizeof(int16_t), MALLOC_CAP_SPIRAM);
-    if (!s_detection_buffer || !s_last_detection_buffer) {
-        ESP_LOGE(TAG, "Failed to allocate detection buffers in PSRAM");
-        if (s_detection_buffer) heap_caps_free(s_detection_buffer);
-        if (s_last_detection_buffer) heap_caps_free(s_last_detection_buffer);
-        vQueueDelete(s_wake_audio_queue);
-        heap_caps_free(s_ring_buffer);
-        heap_caps_free(s_audio_buffer);
-        s_wakenet->destroy(s_model_data);
-        esp_srmodel_deinit(s_models);
-        return ESP_ERR_NO_MEM;
-    }
-    ESP_LOGI(TAG, "Detection buffers: %d + %d bytes (PSRAM)",
-             (int)(DETECTION_BUFFER_SIZE * sizeof(int16_t)),
-             (int)(LAST_DETECTION_BUFFER_SIZE * sizeof(int16_t)));
 
     s_wake_word_inited = true;
     s_state = WAKE_WORD_STATE_IDLE;
@@ -163,7 +131,7 @@ esp_err_t wake_word_start(void) {
     ESP_LOGI(TAG, "Starting wake word detection...");
 
     s_ring_write_pos = 0;
-    xTaskCreatePinnedToCore(&wake_word_detection_task, "wake_word", 4096, NULL, 5, &s_wake_task, 1);
+    xTaskCreatePinnedToCore(&wake_word_detection_task, "wake_word", 8192, NULL, 5, &s_wake_task, 1);
 
     return ESP_OK;
 }
@@ -204,71 +172,54 @@ esp_err_t wake_word_trigger_detected(void) {
     return ESP_OK;
 }
 
-// Called from audio task to feed audio data to wake word detector
-static int s_feed_count = 0;
+// Called from audio ISR to feed audio data to wake word detector
 void wake_word_on_i2s_data(const int16_t *audio_samples, size_t num_samples) {
     if (!s_wake_word_inited) {
+        ESP_LOGW(TAG, "Wake word not initialized");
+        return;
+    }
+    
+    if (s_state != WAKE_WORD_STATE_IDLE) {
+        ESP_LOGW(TAG, "Wake word state not IDLE: %d", s_state);
         return;
     }
 
-    // Send to detection task via queue
     wake_audio_chunk_t chunk;
     chunk.count = num_samples > 512 ? 512 : num_samples;
     memcpy(chunk.samples, audio_samples, chunk.count * sizeof(int16_t));
 
-    if (xQueueSend(s_wake_audio_queue, &chunk, 0) != pdPASS) {
-        s_feed_count++;
-        if (s_feed_count <= 3 || s_feed_count % 500 == 0) {
-            ESP_LOGW(TAG, "Wake audio queue full! dropped %d", s_feed_count);
-        }
-    }
+    BaseType_t higher_priority_woken = 0;
+    xQueueSendFromISR(s_wake_audio_queue, &chunk, &higher_priority_woken);
 }
+
+// Detection task that receives audio and runs WakeNet
+static int16_t s_detection_buffer[16000 * 3];
+static int16_t s_last_detection_buffer[4800];
 
 static void wake_word_detection_task(void *pvParameters) {
     (void)pvParameters;
 
-    ESP_LOGI(TAG, "Wake word detection task started, waiting for audio...");
-    int loop_count = 0;
-    int no_data_count = 0;
+    ESP_LOGI(TAG, "Wake word detection task started");
 
     size_t detection_pos = 0;
     size_t last_detection_pos = 0;
 
     while (1) {
+        // Receive audio chunk
         wake_audio_chunk_t chunk;
-        BaseType_t received = xQueueReceive(s_wake_audio_queue, &chunk, pdMS_TO_TICKS(1000));
+        BaseType_t received = xQueueReceive(s_wake_audio_queue, &chunk, pdMS_TO_TICKS(100));
 
         if (received == pdTRUE) {
-            loop_count++;
-            no_data_count = 0;
-        } else {
-            no_data_count++;
-            if (no_data_count <= 5 || no_data_count % 10 == 0) {
-                ESP_LOGW(TAG, "No audio data for %d seconds (queue empty)", no_data_count);
-            }
-            continue;
-        }
-        {
-            if (loop_count <= 5 || loop_count % 100 == 0) {
-                // Log first few samples to verify audio data is real
-                int32_t sum = 0;
-                int peak = 0;
-                for (size_t i = 0; i < chunk.count; i++) {
-                    int v = chunk.samples[i];
-                    sum += v > 0 ? v : -v;
-                    int abs_v = v > 0 ? v : -v;
-                    if (abs_v > peak) peak = abs_v;
-                }
-                int avg = chunk.count > 0 ? (int)(sum / chunk.count) : 0;
-                ESP_LOGI(TAG, "Wake chunk #%d: samples=%d avg_amp=%d peak=%d", loop_count, (int)chunk.count, avg, peak);
-            }
+            // Add to ring buffer
             size_t samples_to_copy = chunk.count;
             size_t ring_samples = s_ring_size / sizeof(int16_t);
 
+            // Write to ring buffer (circular)
             if (s_ring_write_pos + samples_to_copy <= ring_samples) {
                 memcpy(s_ring_buffer + s_ring_write_pos, chunk.samples, samples_to_copy * sizeof(int16_t));
                 s_ring_write_pos += samples_to_copy;
             } else {
+                // Wrap around
                 size_t first_part = ring_samples - s_ring_write_pos;
                 memcpy(s_ring_buffer + s_ring_write_pos, chunk.samples, first_part * sizeof(int16_t));
                 memcpy(s_ring_buffer, chunk.samples + first_part, (samples_to_copy - first_part) * sizeof(int16_t));
@@ -298,19 +249,17 @@ static void wake_word_detection_task(void *pvParameters) {
                 int16_t *feed_ptr = s_detection_buffer + detection_pos - (s_audio_chunksize / sizeof(int16_t));
                 wakenet_state_t state = s_wakenet->detect(s_model_data, feed_ptr);
 
-                if (loop_count <= 3 || state == WAKENET_DETECTED) {
-                    ESP_LOGI(TAG, "detect#%d: state=%d det_pos=%d", loop_count, state, (int)detection_pos);
-                }
-
                 if (state == WAKENET_DETECTED) {
                     ESP_LOGI(TAG, "WakeNet detected! State=%d", state);
 
+                    // Trigger callback
                     s_state = WAKE_WORD_STATE_DETECTED;
                     if (s_callback) {
                         s_callback();
                     }
                     s_state = WAKE_WORD_STATE_IDLE;
 
+                    // Reset detection buffer after trigger
                     detection_pos = 0;
                     last_detection_pos = 0;
                 }

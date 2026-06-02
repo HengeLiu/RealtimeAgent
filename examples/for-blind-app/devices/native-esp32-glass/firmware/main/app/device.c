@@ -44,6 +44,23 @@ void audio_chat_device_add_vibrator(audio_chat_device_t *device)
     device->has_vibrator = 1;
 }
 
+void audio_chat_device_set_auth(audio_chat_device_t *device, const char *mode, const char *token)
+{
+    if (!device) return;
+    if (mode) copy_text(device->auth_mode, sizeof(device->auth_mode), mode);
+    if (token) copy_text(device->auth_token, sizeof(device->auth_token), token);
+}
+
+int audio_chat_device_to_json(const audio_chat_device_t *device, char *out, size_t out_size)
+{
+    if (!device || !out || out_size == 0) return -1;
+    int written = snprintf(out, out_size,
+        "{\"user_id\":\"%s\",\"device_id\":\"%s\",\"name\":\"%s\",\"role\":\"%s\"}",
+        device->user_id, device->device_id, device->name, device->role);
+    if (written < 0 || (size_t)written >= out_size) return -1;
+    return written;
+}
+
 int audio_chat_device_registration_json(const audio_chat_device_t *device, char *out, size_t out_size)
 {
     char sensors[256] = {0};
@@ -67,7 +84,12 @@ int audio_chat_device_registration_json(const audio_chat_device_t *device, char 
         actuator_len = snprintf(actuators, sizeof(actuators),
             ",\"actuators\":[{\"type\":\"vibrator\",\"commands\":[\"vibrate\"]}]");
     }
-    
+
+    char token_part[300] = {0};
+    if (device->auth_token[0]) {
+        snprintf(token_part, sizeof(token_part), ",\"token\":\"%s\"", device->auth_token);
+    }
+
     int written = snprintf(
         out,
         out_size,
@@ -76,7 +98,7 @@ int audio_chat_device_registration_json(const audio_chat_device_t *device, char 
         "\"device_name\":\"%s\","
         "\"client_type\":\"esp32-glass\","
         "\"sdk_version\":\"audio-chat-esp32-glass-0.1.0\","
-        "\"auth\":{\"mode\":\"disabled\"},"
+        "\"auth\":{\"mode\":\"%s\"%s},"
         "\"runtime\":{\"platform\":\"esp32\",\"language\":\"c\",\"version\":\"IDF v5.0\"},"
         "\"properties\":{"
         "\"device_role\":\"%s\","
@@ -90,6 +112,8 @@ int audio_chat_device_registration_json(const audio_chat_device_t *device, char 
         device->device_id,
         device->name,
         device->name,
+        device->auth_mode[0] ? device->auth_mode : "disabled",
+        token_part,
         device->role,
         sensors,
         actuators

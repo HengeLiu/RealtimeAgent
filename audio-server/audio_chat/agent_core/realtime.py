@@ -1126,11 +1126,11 @@ class RealtimeAudioAgentCore:
 
         self.tool_bridge.bind_tool_gateway(tool_gateway)
 
-    def open(self, user_id: str, session_id: str) -> None:
+    def open(self, user_id: str, session_id: str, trace_id: str | None = None) -> None:
         """打开用户 realtime provider 会话。
 
         主要逻辑：同一 user 已有同 session 时复用；session 变化时先关闭原会话，再打开新会话。
-        参数：`user_id` 为用户标识，`session_id` 为音频会话标识。
+        参数：`user_id` 为用户标识，`session_id` 为音频会话标识，`trace_id` 为链路追踪标识。
         返回值：无。
         异常情况：provider 初始化失败时抛出异常，并记录 `system.error.raised`。
         """
@@ -1186,7 +1186,7 @@ class RealtimeAudioAgentCore:
             raise
         self._sessions[user_id] = (session_id, provider)
         # 生成会话级 trace_id
-        self._trace_id_by_user[user_id] = create_unique_id("session_trace")
+        self._trace_id_by_user[user_id] = trace_id or create_unique_id("session_trace")
         self._record_event(
             "session.opened",
             user_id=user_id,
@@ -1206,15 +1206,23 @@ class RealtimeAudioAgentCore:
         返回值：无。
         异常情况：非 sensor.mic 或 provider append 失败时抛出异常。
         """
+        import logging
+        logger = logging.getLogger("audio_chat.server")
         if chunk.stream_type != "sensor.mic":
             raise ValueError("RealtimeAudioAgentCore only accepts sensor.mic")
         if chunk.session_id in self._failed_sessions:
+            logger.warning("append_audio_event: session %s is in failed_sessions, skipping", chunk.session_id)
             return
         self._audio_stream_by_session[chunk.session_id] = chunk.stream_id
         self._closed_audio_streams_by_session.setdefault(chunk.session_id, set()).discard(chunk.stream_id)
         self._cache_replay_audio(chunk)
+        if chunk.seq <= 3 or chunk.seq % 500 == 0:
+            logger.info("append_audio_event: seq=%d user_id=%s session_id=%s, opening provider...",
+                        chunk.seq, chunk.user_id, chunk.session_id)
         self.open(chunk.user_id, chunk.session_id)
         _session_id, provider = self._sessions[chunk.user_id]
+        if chunk.seq <= 3 or chunk.seq % 500 == 0:
+            logger.info("append_audio_event: provider=%s, appending audio...", type(provider).__name__)
         try:
             provider.append_audio(chunk)
         except Exception as exc:
@@ -1659,6 +1667,10 @@ class RealtimeAudioAgentCore:
         返回值：无。
         异常情况：无。
         """
+        import logging
+        logging.getLogger("audio_chat.server").error(
+            "Session FAILED: user_id=%s session_id=%s message=%s event=%s",
+            user_id, session_id, message, record.get("event", "unknown"))
         first_failure = session_id not in self._failed_sessions
         self._failed_sessions.add(session_id)
         existing = self._sessions.pop(user_id, None)

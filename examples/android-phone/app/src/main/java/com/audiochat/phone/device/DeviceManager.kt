@@ -5,6 +5,7 @@ import android.util.Log
 import com.audiochat.phone.protocol.AudioChatEvent
 import com.audiochat.phone.protocol.DeviceSupports
 import com.audiochat.phone.protocol.StreamChunk
+import com.audiochat.phone.protocol.StreamChunkCodec
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -47,8 +48,8 @@ class DeviceManager private constructor(
     private var listener: DeviceListener? = null
     private var context: Context? = null
 
-    private val isRegistered = AtomicBoolean(false)
-    private val isRunning = AtomicBoolean(false)
+    private val _isRegistered = AtomicBoolean(false)
+    private val _isRunning = AtomicBoolean(false)
     private var heartbeatJob: Job? = null
 
     init {
@@ -64,18 +65,18 @@ class DeviceManager private constructor(
     }
 
     override val isRegistered: Boolean
-        get() = isRegistered.get()
+        get() = _isRegistered.get()
 
     override val isRunning: Boolean
-        get() = isRunning.get()
+        get() = _isRunning.get()
 
     /**
      * 连接到服务器并注册设备
      */
     override suspend fun connect() {
-        if (isRunning.get()) return
+        if (_isRunning.get()) return
 
-        isRunning.set(true)
+        _isRunning.set(true)
 
         try {
             // 连接控制通道
@@ -97,7 +98,7 @@ class DeviceManager private constructor(
 
         } catch (e: Exception) {
             Log.e(TAG, "连接失败", e)
-            isRunning.set(false)
+            _isRunning.set(false)
             throw e
         }
     }
@@ -106,7 +107,7 @@ class DeviceManager private constructor(
      * 启动流连接和心跳
      */
     override fun start() {
-        if (!isRunning.get()) return
+        if (!_isRunning.get()) return
         startHeartbeat(DEFAULT_HEARTBEAT_INTERVAL_MS)
     }
 
@@ -114,8 +115,8 @@ class DeviceManager private constructor(
      * 断开连接
      */
     override fun disconnect() {
-        isRunning.set(false)
-        isRegistered.set(false)
+        _isRunning.set(false)
+        _isRegistered.set(false)
 
         heartbeatJob?.cancel()
         heartbeatJob = null
@@ -128,7 +129,7 @@ class DeviceManager private constructor(
      * 上传 RGB 图片
      */
     override fun uploadRgbImage(jpegData: ByteArray, requestId: String) {
-        if (!isRunning.get()) {
+        if (!_isRunning.get()) {
             Log.w(TAG, "未连接，无法上传图片")
             return
         }
@@ -232,8 +233,8 @@ class DeviceManager private constructor(
 
         override fun onControlDisconnected(code: Int, reason: String) {
             Log.w(TAG, "控制通道已关闭: code=$code reason=$reason")
-            isRunning.set(false)
-            isRegistered.set(false)
+            _isRunning.set(false)
+            _isRegistered.set(false)
             listener?.onEvent("control.disconnected", "code=$code reason=$reason")
             listener?.onReconnectNeeded()
         }
@@ -280,7 +281,7 @@ class DeviceManager private constructor(
         when (event.event_name) {
             "control.device.registered" -> {
                 Log.i(TAG, "设备注册成功!")
-                isRegistered.set(true)
+                _isRegistered.set(true)
 
                 // 提取心跳间隔
                 val heartbeatInterval = (event.payload["heartbeat_interval_seconds"] as? Number)?.toLong()
@@ -295,7 +296,7 @@ class DeviceManager private constructor(
 
             "control.device.register.failed" -> {
                 Log.e(TAG, "设备注册失败: ${event.payload}")
-                isRegistered.set(false)
+                _isRegistered.set(false)
             }
 
             "stream.control.open.requested" -> {
@@ -353,11 +354,11 @@ class DeviceManager private constructor(
      */
     private fun startHeartbeat(intervalMs: Long) {
         heartbeatJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive && isRunning.get()) {
+            while (isActive && _isRunning.get()) {
                 try {
                     delay(intervalMs)
 
-                    if (isRunning.get()) {
+                    if (_isRunning.get()) {
                         val heartbeatEvent = AudioChatEvent.createHeartbeatEvent(userId, deviceId)
                         connection.sendEvent(heartbeatEvent)
                         listener?.onHeartbeatReceived()

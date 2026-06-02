@@ -25,4 +25,9 @@ esp_err_t wake_word_trigger_detected(void);
 // Feed raw PCM audio to wake word detector from ISR callback
 void wake_word_on_i2s_data(const int16_t *audio_samples, size_t num_samples);
 
+// Get captured audio around wake word detection (~2 seconds)
+// Returns pointer to int16_t buffer, *num_samples filled with sample count
+// Data is valid until next wake word detection
+const int16_t* wake_word_get_captured_audio(size_t *num_samples);
+
 #endif // WAKE_WORD_H
