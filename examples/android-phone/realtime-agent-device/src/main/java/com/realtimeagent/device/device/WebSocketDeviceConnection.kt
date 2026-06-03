@@ -1,9 +1,9 @@
-package com.audiochat.phone.device
+package com.realtimeagent.device.device
 
 import android.util.Log
-import com.audiochat.phone.protocol.AudioChatEvent
-import com.audiochat.phone.protocol.StreamChunk
-import com.audiochat.phone.protocol.StreamChunkCodec
+import com.realtimeagent.device.protocol.AudioChatEvent
+import com.realtimeagent.device.protocol.StreamChunk
+import com.realtimeagent.device.protocol.StreamChunkCodec
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -12,10 +12,6 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import java.util.concurrent.TimeUnit
 
-/**
- * WebSocket 实现的设备连接
- * 实现 DeviceConnection 接口，负责底层 WebSocket 通信
- */
 class WebSocketDeviceConnection(
     private val serverUrl: String,
     private val userId: String,
@@ -24,7 +20,7 @@ class WebSocketDeviceConnection(
 ) : DeviceConnection {
 
     companion object {
-        private const val TAG = "WebSocketDeviceConnection"
+        private const val TAG = "WSDeviceConnection"
         private const val NORMAL_CLOSE = 1000
     }
 
@@ -59,7 +55,7 @@ class WebSocketDeviceConnection(
         if (_controlState == ConnectionState.CONNECTING) return
 
         val url = "$serverUrl/ws/control"
-        Log.i(TAG, "连接控制 WebSocket: $url")
+        Log.i(TAG, "Connecting control WebSocket: $url")
 
         val requestBuilder = Request.Builder().url(url)
         accessToken?.let {
@@ -74,7 +70,7 @@ class WebSocketDeviceConnection(
         if (_streamState == ConnectionState.CONNECTED) return true
 
         val url = "$serverUrl/ws/stream?device_id=$deviceId"
-        Log.i(TAG, "连接流 WebSocket: $url")
+        Log.i(TAG, "Connecting stream WebSocket: $url")
 
         val requestBuilder = Request.Builder().url(url)
         accessToken?.let {
@@ -86,8 +82,8 @@ class WebSocketDeviceConnection(
     }
 
     override fun disconnect() {
-        controlWs?.close(NORMAL_CLOSE, "客户端主动关闭")
-        streamWs?.close(NORMAL_CLOSE, "客户端主动关闭")
+        controlWs?.close(NORMAL_CLOSE, "Client disconnect")
+        streamWs?.close(NORMAL_CLOSE, "Client disconnect")
         controlWs = null
         streamWs = null
         _controlState = ConnectionState.DISCONNECTED
@@ -108,14 +104,14 @@ class WebSocketDeviceConnection(
             connectStream()
             true
         } catch (e: Exception) {
-            Log.e(TAG, "建立流连接失败", e)
+            Log.e(TAG, "Failed to establish stream connection", e)
             false
         }
     }
 
     private fun createControlListener() = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.i(TAG, "控制 WebSocket 已打开")
+            Log.i(TAG, "Control WebSocket opened")
             _controlState = ConnectionState.CONNECTED
             listener?.onControlConnected()
         }
@@ -123,22 +119,22 @@ class WebSocketDeviceConnection(
         override fun onMessage(webSocket: WebSocket, text: String) {
             try {
                 val event = AudioChatEvent.fromJson(text)
-                Log.d(TAG, "收到控制事件: ${event.event_name}")
+                Log.d(TAG, "Control event: ${event.event_name}")
                 listener?.onControlEvent(event)
             } catch (e: Exception) {
-                Log.e(TAG, "解析控制事件失败", e)
+                Log.e(TAG, "Failed to parse control event", e)
             }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.e(TAG, "控制 WebSocket 错误", t)
+            Log.e(TAG, "Control WebSocket error", t)
             _controlState = ConnectionState.ERROR
             listener?.onControlError(t)
             listener?.onReconnectNeeded("control")
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            Log.w(TAG, "控制 WebSocket 已关闭: code=$code reason=$reason")
+            Log.w(TAG, "Control WebSocket closed: code=$code reason=$reason")
             _controlState = ConnectionState.DISCONNECTED
             listener?.onControlDisconnected(code, reason)
             if (code != NORMAL_CLOSE) {
@@ -149,7 +145,7 @@ class WebSocketDeviceConnection(
 
     private fun createStreamListener() = object : WebSocketListener() {
         override fun onOpen(webSocket: WebSocket, response: Response) {
-            Log.i(TAG, "流 WebSocket 已打开")
+            Log.i(TAG, "Stream WebSocket opened")
             _streamState = ConnectionState.CONNECTED
             listener?.onStreamConnected()
         }
@@ -157,21 +153,21 @@ class WebSocketDeviceConnection(
         override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
             try {
                 val chunk = StreamChunkCodec.decode(bytes.toByteArray())
-                Log.d(TAG, "收到流数据: ${chunk.stream_type} seq=${chunk.seq}")
+                Log.d(TAG, "Stream chunk: ${chunk.stream_type} seq=${chunk.seq}")
                 listener?.onStreamChunk(chunk)
             } catch (e: Exception) {
-                Log.e(TAG, "解析流数据失败", e)
+                Log.e(TAG, "Failed to parse stream chunk", e)
             }
         }
 
         override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
-            Log.e(TAG, "流 WebSocket 错误", t)
+            Log.e(TAG, "Stream WebSocket error", t)
             _streamState = ConnectionState.ERROR
             listener?.onStreamError(t)
         }
 
         override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-            Log.w(TAG, "流 WebSocket 已关闭: code=$code reason=$reason")
+            Log.w(TAG, "Stream WebSocket closed: code=$code reason=$reason")
             _streamState = ConnectionState.DISCONNECTED
             listener?.onStreamDisconnected(code, reason)
         }

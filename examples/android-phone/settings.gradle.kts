@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "AudioChatPhone"
 include(":app")
+include(":realtime-agent-device")

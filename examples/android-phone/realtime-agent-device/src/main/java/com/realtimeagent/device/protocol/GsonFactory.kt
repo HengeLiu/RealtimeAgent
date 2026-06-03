@@ -1,13 +1,10 @@
-package com.audiochat.phone.protocol
+package com.realtimeagent.device.protocol
 
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import java.lang.reflect.Type
 
-/**
- * Gson 工厂
- */
 object GsonFactory {
     val gson: Gson = GsonBuilder()
         .setPrettyPrinting()

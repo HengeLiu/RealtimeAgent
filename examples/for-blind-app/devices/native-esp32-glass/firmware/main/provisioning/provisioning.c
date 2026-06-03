@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "cJSON.h"
 #include <string.h>
 #include <stdio.h>
 
@@ -79,7 +80,7 @@ static void on_ble_credentials(const char *ssid, const char *pass,
     s_cred_port = server_port;
     s_cred_received = true;
 
-    ESP_LOGI(TAG, "BLE credentials received: ssid=%s server=%s:%d",
+    ESP_LOGI(TAG, "BLE credentials received: ssid=%.3s*** server=%s:%d",
              s_cred_ssid, s_cred_server, s_cred_port);
 }
 
@@ -91,7 +92,10 @@ static void prov_task(void *pvParameters) {
     if (wifi_ret != ESP_OK && wifi_ret != ESP_ERR_INVALID_STATE) {
         ESP_LOGW(TAG, "esp_netif_init: %d", wifi_ret);
     }
-    esp_event_loop_create_default();
+    esp_err_t event_ret = esp_event_loop_create_default();
+    if (event_ret != ESP_OK && event_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "esp_event_loop_create_default: %d", event_ret);
+    }
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
     esp_wifi_init(&cfg);
 
@@ -105,11 +109,22 @@ static void prov_task(void *pvParameters) {
         return;
     }
 
-    ESP_LOGI(TAG, "Waiting for BLE credentials...");
+    ESP_LOGI(TAG, "Waiting for BLE credentials (timeout: 5min)...");
 
-    // Wait for credentials from BLE
+    // Wait for credentials from BLE with timeout
+    int wait_ticks = 0;
+    const int timeout_ticks = pdMS_TO_TICKS(300000); // 5 minutes
     while (!s_cred_received) {
         vTaskDelay(pdMS_TO_TICKS(200));
+        wait_ticks += pdMS_TO_TICKS(200);
+        if (wait_ticks >= timeout_ticks) {
+            ESP_LOGE(TAG, "BLE credential wait timed out");
+            ble_prov_stop();
+            s_state = PROV_STATE_ERROR;
+            s_prov_task = NULL;
+            vTaskDelete(NULL);
+            return;
+        }
     }
 
     // Step 2: Connect to WiFi
@@ -252,7 +267,13 @@ static esp_err_t call_register_api(const char *server_host, uint16_t server_port
         return ESP_FAIL;
     }
 
-    // Read response
+    // Read response with content_length validation
+    if (content_length <= 0 || content_length > 4096) {
+        ESP_LOGE(TAG, "Invalid content_length: %d", content_length);
+        esp_http_client_cleanup(client);
+        return ESP_FAIL;
+    }
+
     char *resp_buf = malloc(content_length + 1);
     if (!resp_buf) {
         esp_http_client_cleanup(client);
@@ -263,49 +284,31 @@ static esp_err_t call_register_api(const char *server_host, uint16_t server_port
     resp_buf[read_len] = '\0';
     esp_http_client_cleanup(client);
 
-    ESP_LOGI(TAG, "Register response: %s", resp_buf);
+    ESP_LOGI(TAG, "Register response received (%d bytes)", read_len);
 
-    // Parse JSON response (simple parser, no cJSON)
-    char *p;
-
-    p = strstr(resp_buf, "\"device_id\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p = strchr(p, '"');
-            if (p) {
-                p++;
-                char *end = strchr(p, '"');
-                if (end) {
-                    size_t len = end - p;
-                    if (len >= device_id_size) len = device_id_size - 1;
-                    strncpy(out_device_id, p, len);
-                }
-            }
-        }
-    }
-
-    p = strstr(resp_buf, "\"auth_token\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p = strchr(p, '"');
-            if (p) {
-                p++;
-                char *end = strchr(p, '"');
-                if (end) {
-                    size_t len = end - p;
-                    if (len >= token_size) len = token_size - 1;
-                    strncpy(out_token, p, len);
-                }
-            }
-        }
-    }
-
+    // Parse JSON response with cJSON
+    cJSON *root = cJSON_Parse(resp_buf);
     free(resp_buf);
 
-    if (out_device_id[0] == '\0') {
-        ESP_LOGE(TAG, "Failed to parse register response");
+    if (!root) {
+        ESP_LOGE(TAG, "Failed to parse JSON response");
+        return ESP_FAIL;
+    }
+
+    cJSON *device_id_item = cJSON_GetObjectItem(root, "device_id");
+    cJSON *auth_token_item = cJSON_GetObjectItem(root, "auth_token");
+
+    if (cJSON_IsString(device_id_item) && device_id_item->valuestring[0]) {
+        strncpy(out_device_id, device_id_item->valuestring, device_id_size - 1);
+    }
+    if (cJSON_IsString(auth_token_item) && auth_token_item->valuestring[0]) {
+        strncpy(out_token, auth_token_item->valuestring, token_size - 1);
+    }
+
+    cJSON_Delete(root);
+
+    if (out_device_id[0] == '\0' || out_token[0] == '\0') {
+        ESP_LOGE(TAG, "Missing device_id or auth_token in response");
         return ESP_FAIL;
     }
 

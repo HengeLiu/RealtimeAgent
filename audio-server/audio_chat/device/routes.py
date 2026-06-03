@@ -97,6 +97,8 @@ async def pair_device(request: web.Request) -> web.Response:
 async def register_device(request: web.Request) -> web.Response:
     """
     设备自注册（ESP32 调用，无需配对码）
+    TODO: Add shared-secret or HMAC challenge for production authentication
+    TODO: Persist registered devices to database (currently in-memory only)
 
     请求体:
         {
@@ -135,6 +137,7 @@ async def register_device(request: web.Request) -> web.Response:
 async def bind_device(request: web.Request) -> web.Response:
     """
     用户绑定设备（App 调用）
+    TODO: Require valid user JWT for production authentication
 
     请求体:
         {
@@ -174,13 +177,19 @@ async def bind_device(request: web.Request) -> web.Response:
 @routes.get('/api/device/registered')
 async def list_registered(request: web.Request) -> web.Response:
     """
-    列出所有已注册设备（调试用）
+    列出已注册设备。可选 ?hardware_id=xxx 过滤。
 
     返回:
         { "devices": [{ "hardware_id", "device_id", "bound", "user_id", "registered_at" }] }
     """
+    # TODO: Add authentication for production use
     pairing_service: PairingService = request.app[PAIRING_SERVICE_KEY]
+    hw_filter = request.query.get('hardware_id')
     devices = pairing_service.get_registered_devices()
+
+    if hw_filter:
+        devices = [d for d in devices if d.hardware_id == hw_filter]
+
     return web.json_response({
         'devices': [
             {

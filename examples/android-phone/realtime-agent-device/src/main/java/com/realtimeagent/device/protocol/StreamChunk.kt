@@ -1,14 +1,9 @@
-package com.audiochat.phone.protocol
+package com.realtimeagent.device.protocol
 
-import com.audiochat.phone.audio.AudioConstants
+import com.realtimeagent.device.audio.AudioConstants
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import java.util.UUID
 
-/**
- * Stream 数据块
- * 完全复刻 Python 端 StreamChunk 协议
- */
 data class StreamChunk(
     val user_id: String,
     val session_id: String,
@@ -39,20 +34,8 @@ data class StreamChunk(
     }
 }
 
-/**
- * Stream Chunk 编解码器
- * 完全复刻 Python 端 StreamChunkCodec 协议
- *
- * 二进制帧格式：
- * - 4 bytes big-endian header length
- * - header JSON bytes
- * - payload bytes
- */
 object StreamChunkCodec {
 
-    /**
-     * 编码 StreamChunk 为二进制数据
-     */
     fun encode(chunk: StreamChunk): ByteArray {
         val header = mutableMapOf(
             "version" to "audio-chat.v1",
@@ -77,40 +60,27 @@ object StreamChunkCodec {
         val headerBytes = headerJson.toByteArray(Charsets.UTF_8)
         val payloadBytes = chunk.payload
 
-        // 总长度 = 4 bytes (header length) + header + payload
         val totalLength = 4 + headerBytes.size + payloadBytes.size
         val buffer = ByteBuffer.allocate(totalLength).order(ByteOrder.BIG_ENDIAN)
 
-        // 写入 header 长度 (4 bytes big-endian)
         buffer.putInt(headerBytes.size)
-
-        // 写入 header JSON
         buffer.put(headerBytes)
-
-        // 写入 payload
         buffer.put(payloadBytes)
 
         return buffer.array()
     }
 
-    /**
-     * 解码二进制数据为 StreamChunk
-     */
     fun decode(data: ByteArray): StreamChunk {
         val buffer = ByteBuffer.wrap(data).order(ByteOrder.BIG_ENDIAN)
 
-        // 读取 header 长度
         val headerLength = buffer.int
 
-        // 读取 header JSON
         val headerBytes = ByteArray(headerLength)
         buffer.get(headerBytes)
         val headerJson = String(headerBytes, Charsets.UTF_8)
 
-        // 解析 header
         val header = GsonFactory.fromJson<Map<String, Any>>(headerJson)
 
-        // 读取 payload
         val payloadSize = (header["payload_size"] as Number).toInt()
         val payloadBytes = ByteArray(payloadSize)
         buffer.get(payloadBytes)
@@ -134,9 +104,6 @@ object StreamChunkCodec {
         )
     }
 
-    /**
-     * 创建音频 Chunk
-     */
     fun createAudioChunk(
         userId: String,
         sessionId: String,
@@ -155,14 +122,11 @@ object StreamChunkCodec {
             codec = "pcm16le",
             sample_rate = AudioConstants.INPUT_SAMPLE_RATE,
             channels = AudioConstants.INPUT_CHANNELS,
-            duration_ms = pcmData.size / 32, // 16kHz / 1000 * channels * 2bytes
+            duration_ms = pcmData.size / 32,
             final = isFinal
         )
     }
 
-    /**
-     * 创建图片 Chunk
-     */
     fun createImageChunk(
         userId: String,
         sessionId: String,

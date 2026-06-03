@@ -1,11 +1,7 @@
-package com.audiochat.phone.protocol
+package com.realtimeagent.device.protocol
 
 import java.util.UUID
 
-/**
- * AudioChat 协议事件
- * 完全复刻 Python 端 AudioChatEvent 协议
- */
 data class AudioChatEvent(
     val event_name: String,
     val user_id: String,
@@ -67,9 +63,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建设备注册事件
-         */
         fun createRegisterEvent(
             userId: String,
             deviceId: String,
@@ -79,7 +72,7 @@ data class AudioChatEvent(
             supports: DeviceSupports = DeviceSupports()
         ): AudioChatEvent {
             return AudioChatEvent(
-                event_name = "control.device.register.requested",
+                event_name = EventTypes.DEVICE_REGISTER_REQUESTED,
                 user_id = userId,
                 producer_id = deviceId,
                 session_id = deviceId,
@@ -98,12 +91,9 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建心跳事件
-         */
         fun createHeartbeatEvent(userId: String, deviceId: String): AudioChatEvent {
             return AudioChatEvent(
-                event_name = "control.device.heartbeat.received",
+                event_name = EventTypes.DEVICE_HEARTBEAT,
                 user_id = userId,
                 producer_id = deviceId,
                 session_id = deviceId,
@@ -111,9 +101,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建流打开响应事件
-         */
         fun createStreamInputOpenedEvent(
             userId: String,
             deviceId: String,
@@ -123,7 +110,7 @@ data class AudioChatEvent(
             extraPayload: Map<String, Any?> = emptyMap()
         ): AudioChatEvent {
             return AudioChatEvent(
-                event_name = "stream.input.opened",
+                event_name = EventTypes.STREAM_INPUT_OPENED,
                 user_id = userId,
                 producer_id = deviceId,
                 session_id = deviceId,
@@ -132,19 +119,16 @@ data class AudioChatEvent(
                 payload = mapOf(
                     "stream_type" to streamType,
                     "format" to mapOf(
-                        "codec" to if (streamType == "sensor.rgb") "jpeg" else "pcm16le",
-                        "sample_rate" to if (streamType == "sensor.mic") 16000 else 1,
+                        "codec" to if (streamType == StreamTypes.SENSOR_RGB) "jpeg" else "pcm16le",
+                        "sample_rate" to if (streamType == StreamTypes.SENSOR_MIC) 16000 else 1,
                         "channels" to 1,
-                        "chunk_ms" to if (streamType == "sensor.mic") 20 else 1
+                        "chunk_ms" to if (streamType == StreamTypes.SENSOR_MIC) 20 else 1
                     ),
                     "request_id" to requestId
                 ) + extraPayload
             )
         }
 
-        /**
-         * 创建流关闭事件
-         */
         fun createStreamInputClosedEvent(
             userId: String,
             deviceId: String,
@@ -153,7 +137,7 @@ data class AudioChatEvent(
             reason: String = ""
         ): AudioChatEvent {
             return AudioChatEvent(
-                event_name = "stream.input.closed",
+                event_name = EventTypes.STREAM_INPUT_CLOSED,
                 user_id = userId,
                 producer_id = deviceId,
                 session_id = deviceId,
@@ -166,9 +150,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建命令接受事件
-         */
         fun createCommandAcceptedEvent(
             userId: String,
             deviceId: String,
@@ -191,9 +172,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建命令完成事件
-         */
         fun createCommandCompletedEvent(
             userId: String,
             deviceId: String,
@@ -216,9 +194,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 创建命令失败事件
-         */
         fun createCommandFailedEvent(
             userId: String,
             deviceId: String,
@@ -237,9 +212,6 @@ data class AudioChatEvent(
             )
         }
 
-        /**
-         * 生成唯一 ID
-         */
         fun newId(prefix: String = ""): String {
             val uuid = UUID.randomUUID().toString().replace("-", "").substring(0, 12)
             return if (prefix.isNotEmpty()) "${prefix}_$uuid" else uuid

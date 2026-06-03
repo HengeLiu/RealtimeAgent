@@ -1,7 +1,7 @@
 # Add project specific ProGuard rules here.
 -keepattributes *Annotation*
--keep class com.audiochat.phone.protocol.** { *; }
--keep class com.audiochat.phone.network.** { *; }
+-keep class com.realtimeagent.device.protocol.** { *; }
+-keep class com.realtimeagent.device.device.** { *; }
 -dontwarn okio.**
 -dontwarn okhttp3.**
 

@@ -77,8 +77,8 @@ esp_err_t config_store_load(device_config_t *cfg) {
 
     nvs_close(h);
 
-    ESP_LOGI(TAG, "Config loaded: configured=%d ssid=%s device=%s user=%s fail=%d",
-             cfg->configured, cfg->wifi_ssid, cfg->device_id, cfg->user_id, cfg->wifi_fail_count);
+    ESP_LOGI(TAG, "Config loaded: configured=%d fail=%d device=%.8s***",
+             cfg->configured, cfg->wifi_fail_count, cfg->device_id);
     return ESP_OK;
 }
 
@@ -90,13 +90,21 @@ esp_err_t config_store_save(const device_config_t *cfg) {
         return ret;
     }
 
-    nvs_set_str(h, NVS_KEY_WIFI_SSID, cfg->wifi_ssid);
-    nvs_set_str(h, NVS_KEY_WIFI_PASS, cfg->wifi_pass);
-    nvs_set_str(h, NVS_KEY_DEVICE_ID, cfg->device_id);
-    nvs_set_str(h, NVS_KEY_USER_ID, cfg->user_id);
-    nvs_set_str(h, NVS_KEY_HW_ID, cfg->hw_id);
-    nvs_set_str(h, NVS_KEY_AUTH_TOKEN, cfg->auth_token);
-    nvs_set_str(h, NVS_KEY_SERVER_HOST, cfg->server_host);
+    esp_err_t write_ret;
+    write_ret = nvs_set_str(h, NVS_KEY_WIFI_SSID, cfg->wifi_ssid);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write ssid failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_WIFI_PASS, cfg->wifi_pass);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write pass failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_DEVICE_ID, cfg->device_id);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write device_id failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_USER_ID, cfg->user_id);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write user_id failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_HW_ID, cfg->hw_id);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write hw_id failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_AUTH_TOKEN, cfg->auth_token);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write token failed: %d", write_ret); nvs_close(h); return write_ret; }
+    write_ret = nvs_set_str(h, NVS_KEY_SERVER_HOST, cfg->server_host);
+    if (write_ret != ESP_OK) { ESP_LOGE(TAG, "NVS write host failed: %d", write_ret); nvs_close(h); return write_ret; }
     nvs_set_i32(h, NVS_KEY_SERVER_PORT, (int32_t)cfg->server_port);
     nvs_set_u8(h, NVS_KEY_CONFIGURED, cfg->configured ? 1 : 0);
     nvs_set_i32(h, NVS_KEY_FAIL_COUNT, (int32_t)cfg->wifi_fail_count);
@@ -105,8 +113,7 @@ esp_err_t config_store_save(const device_config_t *cfg) {
     nvs_close(h);
 
     if (ret == ESP_OK) {
-        ESP_LOGI(TAG, "Config saved: ssid=%s device=%s user=%s",
-                 cfg->wifi_ssid, cfg->device_id, cfg->user_id);
+        ESP_LOGI(TAG, "Config saved: device=%.8s***", cfg->device_id);
     } else {
         ESP_LOGE(TAG, "NVS commit failed: %d", ret);
     }

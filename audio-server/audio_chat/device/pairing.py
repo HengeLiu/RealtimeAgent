@@ -2,7 +2,7 @@
 设备配对服务 — 管理配对码生成、验证和设备绑定
 """
 import logging
-import random
+import secrets
 import string
 import time
 import uuid
@@ -60,9 +60,9 @@ class PairingService:
         self._cleanup_expired()
 
         # 生成唯一码
-        code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+        code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
         while code in self._codes:
-            code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            code = ''.join(secrets.choice(string.ascii_uppercase + string.digits) for _ in range(6))
 
         now = time.time()
         self._codes[code] = PairingCode(

@@ -1,9 +1,5 @@
-package com.audiochat.phone.protocol
+package com.realtimeagent.device.protocol
 
-/**
- * 设备能力声明
- * 完全复刻 Python 端 supports 结构
- */
 data class DeviceSupports(
     val sensors: List<SensorConfig> = listOf(
         SensorConfig(

@@ -1,14 +1,9 @@
-package com.audiochat.phone.protocol
+package com.realtimeagent.device.protocol
 
-/**
- * 设备能力常量
- */
 object DeviceConstants {
-    // 设备类型
     const val DEVICE_TYPE_PHONE = "phone"
     const val DEVICE_TYPE_GLASS = "glass"
 
-    // 端点角色
     val ROLE_PHONE = mapOf(
         "device_role" to DEVICE_TYPE_PHONE,
         "endpoint.role.phone" to true,
@@ -22,13 +17,11 @@ object DeviceConstants {
         "peer.video.sender" to true
     )
 
-    // 音频能力
     val AUDIO_CAPABILITIES = mapOf(
         "audio_chat.audio_input" to "sensor.mic",
         "audio_chat.audio_output" to "actuator.speaker"
     )
 
-    // 默认传感器配置
     val DEFAULT_SENSOR_CONFIG = listOf(
         mapOf(
             "type" to "rgb",
@@ -41,7 +34,6 @@ object DeviceConstants {
         )
     )
 
-    // 默认执行器配置
     val DEFAULT_ACTUATOR_CONFIG = listOf(
         mapOf(
             "type" to "vibrator",
@@ -50,19 +42,12 @@ object DeviceConstants {
     )
 }
 
-/**
- * 事件类型常量
- */
 object EventTypes {
-    // 设备注册
     const val DEVICE_REGISTER_REQUESTED = "control.device.register.requested"
     const val DEVICE_REGISTERED = "control.device.registered"
     const val DEVICE_REGISTER_FAILED = "control.device.register.failed"
-
-    // 心跳
     const val DEVICE_HEARTBEAT = "control.device.heartbeat.received"
 
-    // 流控制
     const val STREAM_INPUT_OPENED = "stream.input.opened"
     const val STREAM_INPUT_CLOSED = "stream.input.closed"
     const val STREAM_OUTPUT_OPENED = "stream.output.opened"
@@ -70,22 +55,15 @@ object EventTypes {
     const val STREAM_CONTROL_OPEN_REQUESTED = "stream.control.open.requested"
     const val STREAM_OUTPUT_CLOSE_REQUESTED = "stream.output.close.requested"
 
-    // 命令
     const val COMMAND_REQUESTED = "command.requested"
     const val COMMAND_COMPLETED = "command.completed"
     const val COMMAND_FAILED = "command.failed"
 
-    // 会话
     const val SESSION_CLOSE_REQUESTED = "control.session.close.requested"
-
-    // 唤醒/打断
     const val DEVICE_WAKE_REQUESTED = "control.device.wake.requested"
     const val DEVICE_INTERRUPT_REQUESTED = "control.device.interrupt.requested"
 }
 
-/**
- * 流类型常量
- */
 object StreamTypes {
     const val SENSOR_MIC = "sensor.mic"
     const val SENSOR_RGB = "sensor.rgb"

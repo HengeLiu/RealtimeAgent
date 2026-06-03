@@ -50,7 +50,7 @@ static char s_ssid[33] = {0};
 static char s_pass[65] = {0};
 static char s_server_host[64] = {0};
 static uint16_t s_server_port = 8766;
-static bool s_cred_flags[3] = {false};  // ssid, pass, server
+static volatile bool s_cred_flags[3] = {false};  // ssid, pass, server
 
 // Forward declarations
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
@@ -76,8 +76,8 @@ static esp_ble_adv_data_t s_adv_data = {
 };
 
 static esp_ble_adv_params_t s_adv_params = {
-    .adv_int_min = 0x20,
-    .adv_int_max = 0x40,
+    .adv_int_min = 0x00A0,  // 100ms
+    .adv_int_max = 0x0140,  // 200ms
     .adv_type = ADV_TYPE_IND,
     .own_addr_type = BLE_ADDR_TYPE_PUBLIC,
     .peer_addr = {0},
@@ -103,7 +103,7 @@ esp_err_t ble_prov_start(const char *device_name) {
     }
 
     // Reset state
-    memset(s_cred_flags, 0, sizeof(s_cred_flags));
+    memset((void *)s_cred_flags, 0, sizeof(s_cred_flags));
     s_ssid[0] = '\0';
     s_pass[0] = '\0';
     s_server_host[0] = '\0';
@@ -226,7 +226,7 @@ void ble_prov_send_status(const char *status) {
 
 static void check_credentials_complete(void) {
     if (s_cred_flags[0] && s_cred_flags[1] && s_cred_flags[2]) {
-        ESP_LOGI(TAG, "All credentials received: ssid=%s server=%s:%d",
+        ESP_LOGI(TAG, "All credentials received: ssid=%.3s*** server=%s:%d",
                  s_ssid, s_server_host, s_server_port);
         s_state = BLE_PROV_CRED_RECEIVED;
         if (s_cred_cb) {
@@ -244,7 +244,7 @@ static void handle_write(uint16_t handle, const uint8_t *data, uint16_t len) {
     if (handle == s_char_handles[CHAR_IDX_SSID]) {
         strncpy(s_ssid, buf, sizeof(s_ssid) - 1);
         s_cred_flags[0] = true;
-        ESP_LOGI(TAG, "SSID received: %s", s_ssid);
+        ESP_LOGI(TAG, "SSID received: %.3s***", s_ssid);
     }
     else if (handle == s_char_handles[CHAR_IDX_PASS]) {
         strncpy(s_pass, buf, sizeof(s_pass) - 1);

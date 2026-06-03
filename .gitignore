@@ -81,3 +81,30 @@ openaiglass-for-blind/host/phone/ios/**/xcuserdata/
 openaiglass-for-blind/host/phone/ios/**/*.xcuserstate
 openaiglass-for-blind/host/phone/models/*.mlpackage
 openaiglass-for-blind/host/phone/models/*.mlmodelc
+
+# ESP32 firmware build artifacts (new path)
+examples/for-blind-app/devices/native-esp32-glass/firmware/build/
+examples/for-blind-app/devices/native-esp32-glass/firmware/managed_components/
+examples/for-blind-app/devices/native-esp32-glass/firmware/sdkconfig
+examples/for-blind-app/devices/native-esp32-glass/firmware/sdkconfig.old
+examples/for-blind-app/devices/native-esp32-glass/firmware/sdkconfig.local
+examples/for-blind-app/devices/native-esp32-glass/firmware/sdkconfig.*.local
+examples/for-blind-app/devices/native-esp32-glass/firmware/dependencies.lock
+examples/for-blind-app/devices/native-esp32-glass/firmware/nvs_dump.bin
+examples/for-blind-app/devices/native-esp32-glass/firmware/temp_model/
+
+# Android build artifacts
+examples/android-phone/.gradle/
+examples/android-phone/.cxx/
+examples/android-phone/**/build/
+examples/android-phone/**/.cxx/
+examples/android-phone/local.properties
+examples/android-phone/dummy.bin
+examples/for-blind-app/**/dummy.bin
+
+# Logs and env
+*.log
+.env
+
+# IDE
+.trae/

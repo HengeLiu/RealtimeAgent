@@ -33,7 +33,7 @@ enum class ProvisionStep {
  * BLE provisioner for ESP32 Glass device.
  * Scans for devices with name prefix "Glass-", connects, and sends WiFi credentials.
  */
-class BleProvisioner(private val context: Context) {
+class BleProvisioner(private val context: Context, private val userId: String = "app-user") {
 
     companion object {
         private const val TAG = "BleProvisioner"
@@ -87,6 +87,7 @@ class BleProvisioner(private val context: Context) {
     )
 
     fun resetProvisioning() {
+        disconnect()
         pollingRunnable?.let { handler.removeCallbacks(it) }
         pollingRunnable = null
         step = ProvisionStep.SCANNING
@@ -144,6 +145,9 @@ class BleProvisioner(private val context: Context) {
     }
 
     private fun startPollingForDevice(serverHost: String, serverPort: Int) {
+        // Use the BLE device name suffix (e.g., "Glass-a1b2" → "a1b2") to match hardware_id
+        // This prevents binding the wrong device when multiple are being provisioned
+        val nameSuffix = foundDeviceName.removePrefix(BleConstants.DEVICE_NAME_PREFIX).lowercase()
         val registerUrl = "http://$serverHost:$serverPort/api/device/registered"
         var attempts = 0
         val maxAttempts = 24  // 2 minutes (5s interval)
@@ -166,13 +170,14 @@ class BleProvisioner(private val context: Context) {
                         val json = JSONObject(body)
                         val devices = json.optJSONArray("devices")
 
-                        // Find unbound device
+                        // Find unbound device matching our BLE device name suffix
                         var foundHardwareId: String? = null
                         if (devices != null) {
                             for (i in 0 until devices.length()) {
                                 val dev = devices.getJSONObject(i)
-                                if (!dev.optBoolean("bound", false)) {
-                                    foundHardwareId = dev.optString("hardware_id", "")
+                                val hwId = dev.optString("hardware_id", "")
+                                if (!dev.optBoolean("bound", false) && hwId.endsWith(nameSuffix)) {
+                                    foundHardwareId = hwId
                                     break
                                 }
                             }
@@ -222,7 +227,7 @@ class BleProvisioner(private val context: Context) {
             val bindUrl = "http://$serverHost:$serverPort/api/device/bind"
             val bindBody = JSONObject().apply {
                 put("hardware_id", hardwareId)
-                put("user_id", "app-user")  // TODO: use real user ID from auth
+                put("user_id", userId)
             }
             val body = bindBody.toString().toRequestBody("application/json".toMediaType())
             val request = Request.Builder()
@@ -405,16 +410,13 @@ class BleProvisioner(private val context: Context) {
                 BluetoothProfile.STATE_DISCONNECTED -> {
                     Log.i(TAG, "GATT disconnected (lastStatus=$lastStatus)")
                     isConnected = false
-                    if (lastStatus == "connecting") {
-                        handleBleStatus("prov_started")
-                    } else if (step == ProvisionStep.SENDING || step == ProvisionStep.CONNECTING) {
-                        handleBleStatus("disconnected")
-                    }
                     // If ESP32 sent "connecting" before disconnecting, it intentionally
                     // stopped BLE to start WiFi — not an error
                     if (lastStatus == "connecting") {
+                        handleBleStatus("prov_started")
                         handler.post { statusCallback?.invoke("prov_started") }
-                    } else {
+                    } else if (step == ProvisionStep.SENDING || step == ProvisionStep.CONNECTING) {
+                        handleBleStatus("disconnected")
                         handler.post { statusCallback?.invoke("disconnected") }
                     }
                 }
