@@ -8,7 +8,26 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+
+enum class ProvisionStep {
+    SCANNING,
+    FOUND_DEVICE,
+    ENTER_CREDENTIALS,
+    CONNECTING,
+    SENDING,
+    SUCCESS,
+    FAILED
+}
 
 /**
  * BLE provisioner for ESP32 Glass device.
@@ -26,7 +45,19 @@ class BleProvisioner(private val context: Context) {
     private var gatt: BluetoothGatt? = null
     private val handler = Handler(Looper.getMainLooper())
 
-    // State
+    // Observable state (survives recomposition since BleProvisioner is hoisted)
+    var step by mutableStateOf(ProvisionStep.SCANNING)
+        private set
+    var statusMessage by mutableStateOf("")
+        private set
+    var errorMessage by mutableStateOf("")
+        private set
+    var foundDeviceName: String = ""
+        private set
+    var foundDevice: BluetoothDevice? = null
+        private set
+    var isConnected: Boolean = false
+        private set
     private var isScanning = false
     private var statusCallback: ((String) -> Unit)? = null
     private var connectedCallback: (() -> Unit)? = null
@@ -34,21 +65,180 @@ class BleProvisioner(private val context: Context) {
     // Characteristics discovered
     private var ssidChar: BluetoothGattCharacteristic? = null
     private var passChar: BluetoothGattCharacteristic? = null
-    private var pairCodeChar: BluetoothGattCharacteristic? = null
     private var serverChar: BluetoothGattCharacteristic? = null
     private var statusChar: BluetoothGattCharacteristic? = null
 
     // Credential sending state
     private var credentialsToSend: Credentials? = null
     private var writeQueue = mutableListOf<Pair<BluetoothGattCharacteristic, ByteArray>>()
+    private var lastStatus: String? = null
+    private var pollingRunnable: Runnable? = null
+
+    private val httpClient = OkHttpClient.Builder()
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(5, TimeUnit.SECONDS)
+        .build()
 
     data class Credentials(
         val ssid: String,
         val password: String,
-        val pairingCode: String,
         val serverHost: String,
         val serverPort: Int
     )
+
+    fun resetProvisioning() {
+        pollingRunnable?.let { handler.removeCallbacks(it) }
+        pollingRunnable = null
+        step = ProvisionStep.SCANNING
+        statusMessage = ""
+        errorMessage = ""
+        foundDeviceName = ""
+        foundDevice = null
+        isConnected = false
+        lastStatus = null
+    }
+
+    fun onDeviceFound(name: String, device: BluetoothDevice) {
+        foundDeviceName = name
+        foundDevice = device
+        if (step == ProvisionStep.SCANNING) {
+            step = ProvisionStep.FOUND_DEVICE
+        }
+    }
+
+    fun onConnectRequested() {
+        step = ProvisionStep.CONNECTING
+    }
+
+    fun handleBleStatus(status: String) {
+        lastStatus = status
+        statusMessage = when (status) {
+            "connecting" -> "正在连接WiFi..."
+            "wifi_ok" -> "WiFi连接成功，正在配对..."
+            "pair_ok" -> {
+                step = ProvisionStep.SUCCESS
+                "配网成功！"
+            }
+            "prov_started" -> {
+                step = ProvisionStep.SENDING
+                // Start polling server to detect when ESP32 connects
+                val creds = credentialsToSend
+                if (creds != null) {
+                    startPollingForDevice(creds.serverHost, creds.serverPort)
+                }
+                "眼镜正在连接WiFi，请等待..."
+            }
+            "disconnected" -> {
+                step = ProvisionStep.FAILED
+                errorMessage = "设备连接断开，请重试"
+                "连接断开"
+            }
+            else -> {
+                if (status.startsWith("fail:")) {
+                    step = ProvisionStep.FAILED
+                    errorMessage = "配网失败: ${status.removePrefix("fail:")}"
+                }
+                status
+            }
+        }
+    }
+
+    private fun startPollingForDevice(serverHost: String, serverPort: Int) {
+        val registerUrl = "http://$serverHost:$serverPort/api/device/registered"
+        var attempts = 0
+        val maxAttempts = 24  // 2 minutes (5s interval)
+
+        pollingRunnable?.let { handler.removeCallbacks(it) }
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (step != ProvisionStep.SENDING) return
+                attempts++
+
+                Thread {
+                    try {
+                        // Check if device registered on server
+                        val request = Request.Builder().url(registerUrl).get().build()
+                        val response = httpClient.newCall(request).execute()
+                        val body = response.body?.string() ?: ""
+                        response.close()
+
+                        val json = JSONObject(body)
+                        val devices = json.optJSONArray("devices")
+
+                        // Find unbound device
+                        var foundHardwareId: String? = null
+                        if (devices != null) {
+                            for (i in 0 until devices.length()) {
+                                val dev = devices.getJSONObject(i)
+                                if (!dev.optBoolean("bound", false)) {
+                                    foundHardwareId = dev.optString("hardware_id", "")
+                                    break
+                                }
+                            }
+                        }
+
+                        if (foundHardwareId != null) {
+                            // Device found — try to bind
+                            val bindSuccess = bindDevice(serverHost, serverPort, foundHardwareId)
+                            handler.post {
+                                if (bindSuccess) {
+                                    step = ProvisionStep.SUCCESS
+                                    statusMessage = "眼镜已连接并绑定成功！"
+                                } else {
+                                    step = ProvisionStep.SUCCESS
+                                    statusMessage = "眼镜已连接到服务器！（绑定待完成）"
+                                }
+                            }
+                        } else if (attempts >= maxAttempts) {
+                            handler.post {
+                                step = ProvisionStep.FAILED
+                                errorMessage = "眼镜未能连接到服务器，请检查WiFi是否正确"
+                            }
+                        } else {
+                            handler.postDelayed(this, 5000)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Poll error: ${e.message}")
+                        if (attempts >= maxAttempts) {
+                            handler.post {
+                                step = ProvisionStep.FAILED
+                                errorMessage = "无法连接到服务器: ${e.message}"
+                            }
+                        } else {
+                            handler.postDelayed(this, 5000)
+                        }
+                    }
+                }.start()
+            }
+        }
+
+        pollingRunnable = runnable
+        handler.postDelayed(runnable, 5000)  // First check after 5s
+    }
+
+    private fun bindDevice(serverHost: String, serverPort: Int, hardwareId: String): Boolean {
+        return try {
+            val bindUrl = "http://$serverHost:$serverPort/api/device/bind"
+            val bindBody = JSONObject().apply {
+                put("hardware_id", hardwareId)
+                put("user_id", "app-user")  // TODO: use real user ID from auth
+            }
+            val body = bindBody.toString().toRequestBody("application/json".toMediaType())
+            val request = Request.Builder()
+                .url(bindUrl)
+                .post(body)
+                .build()
+            val response = httpClient.newCall(request).execute()
+            val success = response.isSuccessful
+            response.close()
+            Log.i(TAG, "Bind result: $success")
+            success
+        } catch (e: Exception) {
+            Log.w(TAG, "Bind error: ${e.message}")
+            false
+        }
+    }
 
     fun isBluetoothEnabled(): Boolean {
         return bluetoothAdapter?.isEnabled == true
@@ -69,11 +259,7 @@ class BleProvisioner(private val context: Context) {
 
         isScanning = true
 
-        val filters = listOf(
-            ScanFilter.Builder()
-                .setDeviceName(BleConstants.DEVICE_NAME_PREFIX)
-                .build()
-        )
+        val filters = listOf<ScanFilter>()
 
         val settings = ScanSettings.Builder()
             .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -85,6 +271,7 @@ class BleProvisioner(private val context: Context) {
                 val name = device.name ?: return
                 if (name.startsWith(BleConstants.DEVICE_NAME_PREFIX)) {
                     Log.i(TAG, "Found device: $name (${device.address})")
+                    onDeviceFound(name, device)
                     onFound(name, device)
                 }
             }
@@ -125,8 +312,9 @@ class BleProvisioner(private val context: Context) {
     }
 
     @SuppressLint("MissingPermission")
-    fun sendCredentials(ssid: String, pass: String, code: String, serverHost: String, serverPort: Int) {
-        credentialsToSend = Credentials(ssid, pass, code, serverHost, serverPort)
+    fun sendCredentials(ssid: String, pass: String, serverHost: String, serverPort: Int) {
+        step = ProvisionStep.SENDING
+        credentialsToSend = Credentials(ssid, pass, serverHost, serverPort)
 
         // If characteristics already discovered, send now
         if (ssidChar != null) {
@@ -141,16 +329,18 @@ class BleProvisioner(private val context: Context) {
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        pollingRunnable?.let { handler.removeCallbacks(it) }
+        pollingRunnable = null
         gatt?.disconnect()
         gatt?.close()
         gatt = null
         ssidChar = null
         passChar = null
-        pairCodeChar = null
         serverChar = null
         statusChar = null
         writeQueue.clear()
         credentialsToSend = null
+        lastStatus = null
     }
 
     @SuppressLint("MissingPermission")
@@ -165,9 +355,6 @@ class BleProvisioner(private val context: Context) {
         }
         passChar?.let {
             writeQueue.add(it to creds.password.toByteArray())
-        }
-        pairCodeChar?.let {
-            writeQueue.add(it to creds.pairingCode.toByteArray())
         }
         serverChar?.let {
             val serverInfo = "${creds.serverHost}:${creds.serverPort}"
@@ -212,11 +399,24 @@ class BleProvisioner(private val context: Context) {
             when (newState) {
                 BluetoothProfile.STATE_CONNECTED -> {
                     Log.i(TAG, "GATT connected, discovering services...")
+                    isConnected = true
                     gatt.discoverServices()
                 }
                 BluetoothProfile.STATE_DISCONNECTED -> {
-                    Log.i(TAG, "GATT disconnected")
-                    handler.post { statusCallback?.invoke("disconnected") }
+                    Log.i(TAG, "GATT disconnected (lastStatus=$lastStatus)")
+                    isConnected = false
+                    if (lastStatus == "connecting") {
+                        handleBleStatus("prov_started")
+                    } else if (step == ProvisionStep.SENDING || step == ProvisionStep.CONNECTING) {
+                        handleBleStatus("disconnected")
+                    }
+                    // If ESP32 sent "connecting" before disconnecting, it intentionally
+                    // stopped BLE to start WiFi — not an error
+                    if (lastStatus == "connecting") {
+                        handler.post { statusCallback?.invoke("prov_started") }
+                    } else {
+                        handler.post { statusCallback?.invoke("disconnected") }
+                    }
                 }
             }
         }
@@ -235,7 +435,6 @@ class BleProvisioner(private val context: Context) {
 
             ssidChar = service.getCharacteristic(BleConstants.CHAR_SSID)
             passChar = service.getCharacteristic(BleConstants.CHAR_PASS)
-            pairCodeChar = service.getCharacteristic(BleConstants.CHAR_PAIR_CODE)
             serverChar = service.getCharacteristic(BleConstants.CHAR_SERVER)
             statusChar = service.getCharacteristic(BleConstants.CHAR_STATUS)
 
@@ -243,11 +442,14 @@ class BleProvisioner(private val context: Context) {
 
             handler.post {
                 connectedCallback?.invoke()
+                connectedCallback = null  // Only fire once
                 enableStatusNotify()
 
                 // If credentials already queued, send them
                 if (credentialsToSend != null) {
                     writeCredentialsSequentially()
+                } else {
+                    step = ProvisionStep.ENTER_CREDENTIALS
                 }
             }
         }
@@ -266,7 +468,10 @@ class BleProvisioner(private val context: Context) {
             if (characteristic.uuid == BleConstants.CHAR_STATUS) {
                 val status = String(characteristic.value)
                 Log.i(TAG, "Status changed: $status")
-                handler.post { statusCallback?.invoke(status) }
+                handler.post {
+                    handleBleStatus(status)
+                    statusCallback?.invoke(status)
+                }
             }
         }
 

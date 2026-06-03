@@ -1,7 +1,6 @@
 package com.audiochat.phone.ui
 
 import android.annotation.SuppressLint
-import android.bluetooth.BluetoothDevice
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -18,16 +17,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.audiochat.phone.ble.BleProvisioner
-
-enum class ProvisionStep {
-    SCANNING,
-    FOUND_DEVICE,
-    ENTER_CREDENTIALS,
-    CONNECTING,
-    SENDING,
-    SUCCESS,
-    FAILED
-}
+import com.audiochat.phone.ble.ProvisionStep
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,24 +25,16 @@ fun ProvisionScreen(
     bleProvisioner: BleProvisioner,
     onDone: () -> Unit
 ) {
-    var step by remember { mutableStateOf(ProvisionStep.SCANNING) }
-    var deviceName by remember { mutableStateOf("") }
-    var foundDevice by remember { mutableStateOf<BluetoothDevice?>(null) }
+    // Only these are local UI state — everything else lives in BleProvisioner
     var ssid by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
-    var pairingCode by remember { mutableStateOf("") }
     var serverHost by remember { mutableStateOf("192.168.31.8") }
     var serverPort by remember { mutableStateOf("8766") }
-    var statusMessage by remember { mutableStateOf("") }
-    var errorMessage by remember { mutableStateOf("") }
 
-    // Cleanup on exit
-    DisposableEffect(Unit) {
-        onDispose {
-            bleProvisioner.stopScan()
-            bleProvisioner.disconnect()
-        }
-    }
+    // Read step from BleProvisioner — survives recomposition
+    val step = bleProvisioner.step
+    val statusMessage = bleProvisioner.statusMessage
+    val errorMessage = bleProvisioner.errorMessage
 
     Column(
         modifier = Modifier
@@ -61,7 +43,6 @@ fun ProvisionScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Title
         Text(
             text = "眼镜配网",
             fontSize = 24.sp,
@@ -69,35 +50,29 @@ fun ProvisionScreen(
             color = TextPrimary
         )
 
-        // Step indicator
         StepIndicator(step)
 
         when (step) {
             ProvisionStep.SCANNING -> {
                 ScanningSection(
                     bleProvisioner = bleProvisioner,
-                    onFound = { name, device ->
-                        deviceName = name
-                        foundDevice = device
-                        step = ProvisionStep.FOUND_DEVICE
-                    }
+                    onFound = { _, _ -> /* step managed by BleProvisioner */ }
                 )
             }
 
             ProvisionStep.FOUND_DEVICE -> {
                 FoundDeviceSection(
-                    deviceName = deviceName,
+                    deviceName = bleProvisioner.foundDeviceName,
                     onConnect = {
-                        foundDevice?.let { device ->
-                            step = ProvisionStep.CONNECTING
+                        bleProvisioner.foundDevice?.let { device ->
+                            bleProvisioner.onConnectRequested()
                             bleProvisioner.connect(device) {
-                                statusMessage = "设备已连接"
-                                step = ProvisionStep.ENTER_CREDENTIALS
+                                // Connected callback — step managed by BleProvisioner
                             }
                         }
                     },
                     onRescan = {
-                        step = ProvisionStep.SCANNING
+                        bleProvisioner.resetProvisioning()
                     }
                 )
             }
@@ -112,42 +87,18 @@ fun ProvisionScreen(
                     onSsidChange = { ssid = it },
                     password = password,
                     onPasswordChange = { password = it },
-                    pairingCode = pairingCode,
-                    onPairingCodeChange = { pairingCode = it },
                     serverHost = serverHost,
                     onServerHostChange = { serverHost = it },
                     serverPort = serverPort,
                     onServerPortChange = { serverPort = it },
                     onSubmit = {
-                        if (ssid.isBlank() || pairingCode.length != 6) {
-                            errorMessage = "请填写WiFi名称和6位配对码"
+                        if (ssid.isBlank()) {
                             return@EnterCredentialsSection
                         }
-                        step = ProvisionStep.SENDING
-                        errorMessage = ""
-
-                        bleProvisioner.observeStatus { status ->
-                            statusMessage = when (status) {
-                                "connecting" -> "正在连接WiFi..."
-                                "wifi_ok" -> "WiFi连接成功，正在配对..."
-                                "pair_ok" -> {
-                                    step = ProvisionStep.SUCCESS
-                                    "配网成功！"
-                                }
-                                else -> {
-                                    if (status.startsWith("fail:")) {
-                                        step = ProvisionStep.FAILED
-                                        errorMessage = "配网失败: ${status.removePrefix("fail:")}"
-                                    }
-                                    status
-                                }
-                            }
-                        }
-
+                        bleProvisioner.observeStatus { /* status handled by BleProvisioner */ }
                         bleProvisioner.sendCredentials(
                             ssid = ssid,
                             pass = password,
-                            code = pairingCode,
                             serverHost = serverHost,
                             serverPort = serverPort.toIntOrNull() ?: 8766
                         )
@@ -156,20 +107,20 @@ fun ProvisionScreen(
             }
 
             ProvisionStep.SENDING -> {
-                SendingSection(statusMessage = statusMessage)
+                SendingSection(statusMessage = statusMessage.ifBlank { "正在配网，请稍候..." })
             }
 
             ProvisionStep.SUCCESS -> {
-                SuccessSection(onDone = onDone)
+                SuccessSection(
+                    message = statusMessage.ifBlank { "配网已启动" },
+                    onDone = onDone
+                )
             }
 
             ProvisionStep.FAILED -> {
                 FailedSection(
-                    errorMessage = errorMessage,
-                    onRetry = {
-                        step = ProvisionStep.ENTER_CREDENTIALS
-                        errorMessage = ""
-                    },
+                    errorMessage = errorMessage.ifBlank { "未知错误" },
+                    onRetry = { bleProvisioner.resetProvisioning() },
                     onDone = onDone
                 )
             }
@@ -180,7 +131,7 @@ fun ProvisionScreen(
 @Composable
 fun StepIndicator(step: ProvisionStep) {
     val steps = listOf("搜索设备" to ProvisionStep.SCANNING, "连接设备" to ProvisionStep.CONNECTING,
-        "输入配置" to ProvisionStep.ENTER_CREDENTIALS, "配网中" to ProvisionStep.SENDING)
+        "WiFi配置" to ProvisionStep.ENTER_CREDENTIALS, "配网中" to ProvisionStep.SENDING)
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceEvenly
@@ -201,7 +152,7 @@ fun StepIndicator(step: ProvisionStep) {
 @Composable
 fun ScanningSection(
     bleProvisioner: BleProvisioner,
-    onFound: (String, BluetoothDevice) -> Unit
+    onFound: (String, android.bluetooth.BluetoothDevice) -> Unit
 ) {
     var isScanning by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -319,7 +270,6 @@ fun FoundDeviceSection(
 fun EnterCredentialsSection(
     ssid: String, onSsidChange: (String) -> Unit,
     password: String, onPasswordChange: (String) -> Unit,
-    pairingCode: String, onPairingCodeChange: (String) -> Unit,
     serverHost: String, onServerHostChange: (String) -> Unit,
     serverPort: String, onServerPortChange: (String) -> Unit,
     onSubmit: () -> Unit
@@ -346,20 +296,6 @@ fun EnterCredentialsSection(
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics { contentDescription = "输入WiFi密码" },
-            singleLine = true
-        )
-
-        Spacer(Modifier.height(16.dp))
-        Text("配对码", color = AccentBlue, fontWeight = FontWeight.Bold)
-        Spacer(Modifier.height(8.dp))
-
-        OutlinedTextField(
-            value = pairingCode,
-            onValueChange = { if (it.length <= 6) onPairingCodeChange(it) },
-            label = { Text("6位配对码") },
-            modifier = Modifier
-                .fillMaxWidth()
-                .semantics { contentDescription = "输入6位配对码" },
             singleLine = true
         )
 
@@ -409,7 +345,7 @@ fun SendingSection(statusMessage: String) {
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = statusMessage.ifBlank { "正在配网，请稍候..." },
+            text = statusMessage,
             color = TextPrimary,
             fontSize = 16.sp,
             modifier = Modifier.align(Alignment.CenterHorizontally)
@@ -418,7 +354,7 @@ fun SendingSection(statusMessage: String) {
 }
 
 @Composable
-fun SuccessSection(onDone: () -> Unit) {
+fun SuccessSection(message: String, onDone: () -> Unit) {
     DebugCard {
         Icon(
             Icons.Default.CheckCircle,
@@ -428,14 +364,14 @@ fun SuccessSection(onDone: () -> Unit) {
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            text = "配网成功！",
+            text = "配网已启动",
             color = AccentGreen,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
         Text(
-            text = "设备正在重启，请稍候...",
+            text = message,
             color = TextSecondary,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
@@ -475,7 +411,7 @@ fun FailedSection(
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )
         Text(
-            text = errorMessage.ifBlank { "未知错误" },
+            text = errorMessage,
             color = TextSecondary,
             modifier = Modifier.align(Alignment.CenterHorizontally)
         )

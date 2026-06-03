@@ -9,7 +9,6 @@ object BleConstants {
     // Characteristic UUIDs
     val CHAR_SSID: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef1")
     val CHAR_PASS: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef2")
-    val CHAR_PAIR_CODE: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef3")
     val CHAR_SERVER: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef4")
     val CHAR_STATUS: UUID = UUID.fromString("12345678-1234-5678-1234-56789abcdef5")
 

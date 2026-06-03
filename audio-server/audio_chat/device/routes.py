@@ -93,6 +93,108 @@ async def pair_device(request: web.Request) -> web.Response:
         return web.json_response({'error': str(e)}, status=500)
 
 
+@routes.post('/api/device/register')
+async def register_device(request: web.Request) -> web.Response:
+    """
+    设备自注册（ESP32 调用，无需配对码）
+
+    请求体:
+        {
+            "hardware_id": "hw-a1b2c3d4e5f6",
+            "device_name": "ESP32 Glass"
+        }
+
+    返回:
+        {
+            "device_id": "dev-glass-c3d4e5f6",
+            "auth_token": "eyJ...",
+            "bound": false
+        }
+    """
+    try:
+        pairing_service: PairingService = request.app[PAIRING_SERVICE_KEY]
+        data = await request.json()
+        hardware_id = data.get('hardware_id')
+        device_name = data.get('device_name', '')
+
+        if not hardware_id:
+            return web.json_response({'error': 'missing hardware_id'}, status=400)
+
+        result = pairing_service.register_device(hardware_id, device_name)
+        return web.json_response({
+            'device_id': result.device_id,
+            'auth_token': result.auth_token,
+            'bound': result.bound,
+        })
+    except Exception as e:
+        logger.error(f"Device registration failed: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@routes.post('/api/device/bind')
+async def bind_device(request: web.Request) -> web.Response:
+    """
+    用户绑定设备（App 调用）
+
+    请求体:
+        {
+            "hardware_id": "hw-a1b2c3d4e5f6",
+            "user_id": "user-1234"
+        }
+
+    返回:
+        {
+            "device_id": "dev-glass-c3d4e5f6",
+            "user_id": "user-1234",
+            "auth_token": "eyJ..."
+        }
+    """
+    try:
+        pairing_service: PairingService = request.app[PAIRING_SERVICE_KEY]
+        data = await request.json()
+        hardware_id = data.get('hardware_id')
+        user_id = data.get('user_id')
+
+        if not hardware_id or not user_id:
+            return web.json_response({'error': 'missing hardware_id or user_id'}, status=400)
+
+        result = pairing_service.bind_device(hardware_id, user_id)
+        return web.json_response({
+            'device_id': result.device_id,
+            'user_id': result.user_id,
+            'auth_token': result.auth_token,
+        })
+    except ValueError as e:
+        return web.json_response({'error': str(e)}, status=400)
+    except Exception as e:
+        logger.error(f"Device bind failed: {e}")
+        return web.json_response({'error': str(e)}, status=500)
+
+
+@routes.get('/api/device/registered')
+async def list_registered(request: web.Request) -> web.Response:
+    """
+    列出所有已注册设备（调试用）
+
+    返回:
+        { "devices": [{ "hardware_id", "device_id", "bound", "user_id", "registered_at" }] }
+    """
+    pairing_service: PairingService = request.app[PAIRING_SERVICE_KEY]
+    devices = pairing_service.get_registered_devices()
+    return web.json_response({
+        'devices': [
+            {
+                'hardware_id': d.hardware_id,
+                'device_id': d.device_id,
+                'bound': d.bound,
+                'user_id': d.user_id,
+                'registered_at': d.registered_at,
+            }
+            for d in devices
+        ]
+    })
+
+
 def register_device_routes(app: web.Application, pairing_service: PairingService):
     """注册设备配对路由"""
     app[PAIRING_SERVICE_KEY] = pairing_service

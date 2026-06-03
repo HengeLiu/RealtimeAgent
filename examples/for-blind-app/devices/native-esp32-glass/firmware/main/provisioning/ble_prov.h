@@ -15,7 +15,6 @@ typedef enum {
 
 // Callback when all credentials received from App
 typedef void (*ble_prov_cred_cb_t)(const char *ssid, const char *pass,
-                                    const char *pairing_code,
                                     const char *server_host, uint16_t server_port);
 
 // Start BLE advertising and GATT server with given device name (e.g. "Glass-XXXX")

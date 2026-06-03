@@ -32,6 +32,17 @@ class PairingResult:
     server_port: int
 
 
+@dataclass
+class RegisteredDevice:
+    """自注册设备信息（无配对码）"""
+    hardware_id: str
+    device_id: str
+    auth_token: str
+    bound: bool = False
+    user_id: str = ""
+    registered_at: float = field(default_factory=time.time)
+
+
 class PairingService:
     """配对码管理 + 设备绑定"""
 
@@ -41,6 +52,7 @@ class PairingService:
         self._server_port = server_port
         self._codes: dict[str, PairingCode] = {}  # code -> PairingCode
         self._bindings: dict[str, str] = {}  # hardware_id -> device_id
+        self._registered: dict[str, RegisteredDevice] = {}  # hardware_id -> RegisteredDevice
 
     def generate_pairing_code(self, user_id: str) -> str:
         """为用户生成 6 位配对码"""
@@ -106,6 +118,66 @@ class PairingService:
             server_host=self._server_host,
             server_port=self._server_port,
         )
+
+    def register_device(self, hardware_id: str, device_name: str = "") -> RegisteredDevice:
+        """设备自注册（无需配对码）。ESP32 调用。"""
+        if hardware_id in self._registered:
+            existing = self._registered[hardware_id]
+            logger.info(f"Device already registered: {hardware_id} -> {existing.device_id}")
+            return existing
+
+        # 生成 device_id
+        short = hardware_id.replace("hw-", "")[-8:] if hardware_id.startswith("hw-") else hardware_id[-8:]
+        device_id = f"dev-glass-{short}"
+        self._bindings[hardware_id] = device_id
+
+        # 签发 token（user_id 为占位符，绑定后会更新）
+        nonce = uuid.uuid4().hex
+        expires_at = int(time.time()) + TOKEN_TTL_SECONDS
+        auth_token = self._token_issuer.issue_token(
+            user_id="unbound",
+            device_id=device_id,
+            expires_at=expires_at,
+            nonce=nonce,
+        )
+
+        reg = RegisteredDevice(
+            hardware_id=hardware_id,
+            device_id=device_id,
+            auth_token=auth_token,
+            bound=False,
+        )
+        self._registered[hardware_id] = reg
+        logger.info(f"Device self-registered: {hardware_id} -> {device_id}")
+        return reg
+
+    def bind_device(self, hardware_id: str, user_id: str) -> RegisteredDevice:
+        """用户绑定设备。App 调用。"""
+        reg = self._registered.get(hardware_id)
+        if not reg:
+            raise ValueError("device_not_registered")
+        if reg.bound:
+            raise ValueError("device_already_bound")
+
+        # 重新签发带真实 user_id 的 token
+        nonce = uuid.uuid4().hex
+        expires_at = int(time.time()) + TOKEN_TTL_SECONDS
+        auth_token = self._token_issuer.issue_token(
+            user_id=user_id,
+            device_id=reg.device_id,
+            expires_at=expires_at,
+            nonce=nonce,
+        )
+
+        reg.user_id = user_id
+        reg.auth_token = auth_token
+        reg.bound = True
+        logger.info(f"Device bound: {hardware_id} -> {user_id}")
+        return reg
+
+    def get_registered_devices(self) -> list[RegisteredDevice]:
+        """返回所有已注册设备（供 debug API 使用）"""
+        return list(self._registered.values())
 
     def _cleanup_expired(self):
         now = time.time()

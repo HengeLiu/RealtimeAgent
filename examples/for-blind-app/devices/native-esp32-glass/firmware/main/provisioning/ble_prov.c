@@ -17,21 +17,18 @@ static const uint8_t SERVICE_UUID[16] = {
 // Characteristic UUIDs (offset from service UUID)
 // SSID:       ...f1
 // Password:   ...f2
-// PairCode:   ...f3
 // ServerInfo: ...f4
 // Status:     ...f5
 
 #define CHAR_IDX_SSID       0
 #define CHAR_IDX_PASS       1
-#define CHAR_IDX_PAIR_CODE  2
-#define CHAR_IDX_SERVER     3
-#define CHAR_IDX_STATUS     4
-#define CHAR_IDX_COUNT      5
+#define CHAR_IDX_SERVER     2
+#define CHAR_IDX_STATUS     3
+#define CHAR_IDX_COUNT      4
 
 static const uint8_t CHAR_UUIDS[CHAR_IDX_COUNT][16] = {
     {0xf1, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12},
     {0xf2, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12},
-    {0xf3, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12},
     {0xf4, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12},
     {0xf5, 0xde, 0xbc, 0x9a, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12, 0x78, 0x56, 0x34, 0x12},
 };
@@ -51,10 +48,9 @@ static bool s_status_notify_enabled = false;
 // Credential storage
 static char s_ssid[33] = {0};
 static char s_pass[65] = {0};
-static char s_pair_code[8] = {0};
 static char s_server_host[64] = {0};
 static uint16_t s_server_port = 8766;
-static bool s_cred_flags[4] = {false};  // ssid, pass, code, server
+static bool s_cred_flags[3] = {false};  // ssid, pass, server
 
 // Forward declarations
 static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if,
@@ -110,7 +106,6 @@ esp_err_t ble_prov_start(const char *device_name) {
     memset(s_cred_flags, 0, sizeof(s_cred_flags));
     s_ssid[0] = '\0';
     s_pass[0] = '\0';
-    s_pair_code[0] = '\0';
     s_server_host[0] = '\0';
     s_server_port = 8766;
     s_connected = false;
@@ -230,12 +225,12 @@ void ble_prov_send_status(const char *status) {
 }
 
 static void check_credentials_complete(void) {
-    if (s_cred_flags[0] && s_cred_flags[1] && s_cred_flags[2] && s_cred_flags[3]) {
-        ESP_LOGI(TAG, "All credentials received: ssid=%s code=%s server=%s:%d",
-                 s_ssid, s_pair_code, s_server_host, s_server_port);
+    if (s_cred_flags[0] && s_cred_flags[1] && s_cred_flags[2]) {
+        ESP_LOGI(TAG, "All credentials received: ssid=%s server=%s:%d",
+                 s_ssid, s_server_host, s_server_port);
         s_state = BLE_PROV_CRED_RECEIVED;
         if (s_cred_cb) {
-            s_cred_cb(s_ssid, s_pass, s_pair_code, s_server_host, s_server_port);
+            s_cred_cb(s_ssid, s_pass, s_server_host, s_server_port);
         }
     }
 }
@@ -256,11 +251,6 @@ static void handle_write(uint16_t handle, const uint8_t *data, uint16_t len) {
         s_cred_flags[1] = true;
         ESP_LOGI(TAG, "Password received (%d bytes)", (int)len);
     }
-    else if (handle == s_char_handles[CHAR_IDX_PAIR_CODE]) {
-        strncpy(s_pair_code, buf, sizeof(s_pair_code) - 1);
-        s_cred_flags[2] = true;
-        ESP_LOGI(TAG, "Pairing code received: %s", s_pair_code);
-    }
     else if (handle == s_char_handles[CHAR_IDX_SERVER]) {
         // Parse "host:port"
         char *colon = strchr(buf, ':');
@@ -273,7 +263,7 @@ static void handle_write(uint16_t handle, const uint8_t *data, uint16_t len) {
         } else {
             strncpy(s_server_host, buf, sizeof(s_server_host) - 1);
         }
-        s_cred_flags[3] = true;
+        s_cred_flags[2] = true;
         ESP_LOGI(TAG, "Server info received: %s:%d", s_server_host, s_server_port);
     }
 
@@ -323,13 +313,21 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                 props = s_char_props_write;
             }
 
+            // Initial empty value (Bluedroid requires non-NULL)
+            static uint8_t empty_val[1] = {0};
+            esp_attr_value_t attr_val = {
+                .attr_max_len = 256,
+                .attr_len = 0,
+                .attr_value = empty_val,
+            };
+
             esp_attr_control_t control = {
                 .auto_rsp = ESP_GATT_AUTO_RSP,
             };
 
             esp_ble_gatts_add_char(s_service_handle, &char_uuid,
                                     ESP_GATT_PERM_WRITE | ESP_GATT_PERM_READ,
-                                    props, NULL, &control);
+                                    props, &attr_val, &control);
         }
         break;
 
@@ -351,12 +349,18 @@ static void gatts_event_handler(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_
                         .len = ESP_UUID_LEN_16,
                         .uuid = {.uuid16 = ESP_GATT_UUID_CHAR_CLIENT_CONFIG},
                     };
+                    static uint8_t cccd_val[2] = {0, 0};
+                    esp_attr_value_t cccd_attr_val = {
+                        .attr_max_len = 2,
+                        .attr_len = 2,
+                        .attr_value = cccd_val,
+                    };
                     esp_attr_control_t control = {
                         .auto_rsp = ESP_GATT_AUTO_RSP,
                     };
                     esp_ble_gatts_add_char_descr(s_service_handle, &cccd_uuid,
                                                   ESP_GATT_PERM_WRITE | ESP_GATT_PERM_READ,
-                                                  NULL, &control);
+                                                  &cccd_attr_val, &control);
                 }
                 break;
             }

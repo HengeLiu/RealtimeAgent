@@ -159,8 +159,34 @@ esp_err_t wifi_manager_stop_ap(void) {
 }
 
 esp_err_t wifi_manager_scan_and_connect(const char *ssid, const char *password) {
+    // Ensure network stack is initialized (may not be if wifi_manager_init was skipped)
+    if (!s_initialized) {
+        ESP_ERROR_CHECK(esp_netif_init());
+        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        s_initialized = true;
+    }
+
+    if (!s_wifi_event_group) {
+        s_wifi_event_group = xEventGroupCreate();
+    }
+
+    if (!s_sta_netif) {
+        s_sta_netif = esp_netif_create_default_wifi_sta();
+    }
+
+    // Register event handlers if not already registered
+    static bool s_handlers_registered = false;
+    if (!s_handlers_registered) {
+        ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, &wifi_event_handler, NULL));
+        ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, &wifi_event_handler, NULL));
+        s_handlers_registered = true;
+    }
+
     s_retry_count = 0;
     s_wifi_state = WIFI_STATE_CONNECTING;
+
+    // Clear any stale event group bits from previous attempts
+    xEventGroupClearBits(s_wifi_event_group, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
 
     // Disconnect any existing STA connection
     esp_wifi_disconnect();
@@ -170,9 +196,10 @@ esp_err_t wifi_manager_scan_and_connect(const char *ssid, const char *password) 
     strncpy((char *)sta_config.sta.ssid, ssid, sizeof(sta_config.sta.ssid) - 1);
     strncpy((char *)sta_config.sta.password, password, sizeof(sta_config.sta.password) - 1);
 
-    // Switch to APSTA mode to keep AP running while connecting STA
-    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
+    ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta_config));
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
+    ESP_ERROR_CHECK(esp_wifi_start());
     ESP_ERROR_CHECK(esp_wifi_connect());
 
     ESP_LOGI(TAG, "STA connecting to: %s", ssid);
