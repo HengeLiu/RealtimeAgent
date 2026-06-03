@@ -36,14 +36,18 @@
 
 **Server SDK**
 
-- Omni + VL：已支持 Omni / Realtime 链路；VL 链路已具备 ASR、视觉模型、工具调用和 TTS 组合能力，后续还需要继续完善效果、延迟和稳定性。
-- Tool + Task：支持把一次性业务动作建模为 `Tool`，把持续运行、维护状态或消费 stream 的流程建模为后台 `Task`。
+- 设备会话运行时：提供设备注册、用户会话、控制 WebSocket、心跳、断联状态、音频 / 视觉 / speaker stream 生命周期管理和 debug API。
+- Omni/VL Agent Core：提供 Agent loop、上下文组装、工具调用、后台任务调度、输出播放仲裁、打断和输出恢复边界。
+- 自定义工具扩展：业务侧可以把一次性动作建模为 `Tool`，把持续流程建模为后台 `Task`。
+- 多模态执行链路：已具备 ASR、视觉模型、工具调用和 TTS 组合能力，并且可按应用需求切换 provider、模型和上下文策略。
+- 可观测性与排障：通过 `runs/` 记录模型请求、Agent 事件、工具事件、stream 事件、输出决策和播放决策，用于复盘真实会话和定位链路问题。
 
 **Device SDK**
 
-- Swift + JavaScript + C：当前重点覆盖 Swift Device SDK、浏览器 / JavaScript 端侧 SDK，以及面向 ESP32-S3、嵌入式 Linux 和自定义 C 运行时的 C Device SDK。
-- SDK + App：提供 Device SDK 和可运行的端侧 App / demo，开发者可以从 Web Chat、iOS 真机 demo 或 ESP32-S3 固件参考实现验证注册、音视频链路和控制事件，再接入自己的硬件。
-- 音视频采集 + 端侧回声抑制边界：支持端侧麦克风、相机和 speaker 链路接入；C / ESP32-S3 侧已经定义 AEC 和 WakeNet adapter 边界，具体 AEC/WakeNet 算法仍由板级实现接入。
+- 多语言端侧入口：当前覆盖 Swift、JavaScript 和 C。Swift 面向 iOS / macOS，JavaScript 面向浏览器、Node、Electron 和 WebView，C 面向 ESP32-S3、嵌入式 Linux 和自定义网络栈。
+- 端侧协议核心：提供设备注册、心跳、控制事件解析、自定义命令回执、stream open / close、stream chunk 编解码、诊断计数和基础日志接口。
+- 媒体与播放链路：Swift / JavaScript SDK 已封装麦克风、相机、speaker buffer 和播放链路；C SDK 提供协议 client、transport 抽象、speaker buffer 和 stream chunk 基础设施。
+- 硬件适配边界：端侧 App 或板级 BSP 负责具体麦克风、喇叭、相机、引脚、WakeNet 和 AEC 算法；Device SDK 负责把硬件输入输出映射为 server 可消费的标准设备能力。
 
 **开发支持**
 
