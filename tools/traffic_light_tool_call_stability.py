@@ -13,7 +13,7 @@ from openai import OpenAI
 
 DEFAULT_TEXT = "帮我看看红绿灯我现在可以过马路了吗"
 DEFAULT_REQUEST = (
-    "examples/device_app_demo/agent-server/runs/"
+    "examples/simple-agent-server/runs/"
     "user-browser-glass-001/dev-browser-glass-001/model-request.json"
 )
 

@@ -34,7 +34,7 @@ def test_audio_pipeline_contract_exposes_processors_and_preflight_status(tmp_pat
             "run",
             "realtime-agent.dev.preflight",
             "--config",
-            "examples/device_app_demo/agent-server/server.yaml",
+            "examples/simple-agent-server/server.yaml",
             "--report",
             str(report),
         ],

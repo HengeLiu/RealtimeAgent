@@ -273,7 +273,7 @@ uv pip install -e .
 ### 启动示例 server
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 默认地址：
@@ -288,6 +288,12 @@ http://127.0.0.1:8765
 curl http://127.0.0.1:8765/api/health
 curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
+```
+
+校验开发支持设备能力文件：
+
+```bash
+uv run realtime-agent.device.validate dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 ### 打开 Web Chat Device Demo
@@ -312,7 +318,7 @@ Web Chat 会作为浏览器 Device 接入 server，可用于验证：
 uv run realtime-agent.web-chat.open --print-url
 ```
 
-`examples/dev-support/devices/browser-glass`、Python phone 和 playback glass 仍可用于本地联调、协议验证和回放测试，但它们是开发支持组件，不是当前 README 推荐的第一入口。
+`dev-support/devices/browser-glass`、Python phone 和 playback glass 仍可用于本地联调、协议验证和回放测试，但它们是开发支持组件，不是当前 README 推荐的第一入口。
 
 ### 可选构建 ESP32-S3 固件参考端
 
@@ -339,7 +345,7 @@ uv run python -m pytest examples/device_app_demo/app-tests -q
 示例应用的运行产物默认写到：
 
 ```text
-examples/device_app_demo/agent-server/runs
+examples/simple-agent-server/runs
 ```
 
 排查时优先看：

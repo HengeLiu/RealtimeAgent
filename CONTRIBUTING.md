@@ -46,7 +46,7 @@ uv run python -m pytest -q
 
 ```bash
 uv run python -m pytest examples/device_app_demo/app-tests -q
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
+uv run realtime-agent.device.validate dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 完整测试策略见 [docs/testing.md](docs/testing.md)。

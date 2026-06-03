@@ -1,0 +1,47 @@
+id: look_front
+name: 看一下我前面有什么
+description: 使用音频样例触发看图工具，并上传一张 sensor.rgb fixture。
+
+device:
+  user_id: user-system-test
+  device_id: dev-python-playback-glass-look
+  name: Python 回放眼镜
+
+inputs:
+  audio:
+    path: testdata/audio-sample/看一下我前面有什么.wav
+    mode: realtime_chunks
+    chunk_ms: 20
+  sensors:
+    sensor.rgb:
+      fixtures:
+        - path: testdata/image-sample/刚子看电脑.jpeg
+          codec: jpeg
+
+expect:
+  events:
+    includes:
+      - control.device.registered
+      - control.audio_session.open.requested
+      - stream.control.open.requested
+      - stream.output.start.requested
+  streams:
+    includes:
+      - sensor.mic
+      - sensor.rgb
+      - actuator.speaker
+  tools:
+    called:
+      - capture_photo
+    succeeded:
+      - capture_photo
+  assets:
+    sensor.rgb:
+      min_count: 1
+  output:
+    min_audio_chunks: 1
+  errors:
+    disallow_system_error: true
+
+playback:
+  timeout_seconds: 35

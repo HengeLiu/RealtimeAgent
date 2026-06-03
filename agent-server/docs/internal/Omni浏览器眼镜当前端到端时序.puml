@@ -8,7 +8,7 @@ autonumber
 
 actor "用户" as User
 
-box "端侧：examples/dev-support/devices/browser-glass/index.html" #E8F2FF
+box "端侧：dev-support/devices/browser-glass/index.html" #E8F2FF
 participant "Browser Glass\nhandleControlMessage()" as Browser
 participant "Control WS\n/ws/control" as ControlWS
 participant "Stream WS\n/ws/stream\n当前实现上下行复用" as StreamWS
@@ -117,7 +117,7 @@ autonumber
 
 actor "用户" as User
 
-box "端侧：examples/dev-support/devices/browser-glass/index.html" #E8F2FF
+box "端侧：dev-support/devices/browser-glass/index.html" #E8F2FF
 participant "Browser Glass\nhandleControlMessage()" as Browser
 participant "Control WS\n/ws/control" as ControlWS
 participant "Stream WS\n/ws/stream\n当前实现上下行复用" as StreamWS

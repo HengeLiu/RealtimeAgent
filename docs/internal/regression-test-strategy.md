@@ -200,8 +200,8 @@ uv run python -m pytest \
   protocol/protocol-tests/test_protocol_contracts.py \
   protocol/protocol-tests/test_protocol_schema_examples.py \
   protocol/protocol-tests/test_stream_chunk_codec_contract.py \
-  devices/python/tests/protocol/test_events.py \
-  devices/python/tests/protocol/test_stream_codec.py \
+  dev-support/unit-tests/protocol/test_events.py \
+  dev-support/unit-tests/protocol/test_stream_codec.py \
   -q
 ```
 
@@ -339,11 +339,11 @@ Device SDK 的 L1 测试形式：
 
 当前已有基础：
 
-- `devices/python/tests/client/test_device_builder.py`
-- `devices/python/tests/protocol/test_events.py`
-- `devices/python/tests/protocol/test_stream_codec.py`
-- `devices/python/tests/client/test_contract_websocket.py`
-- `devices/typescript/tests/`
+- `dev-support/unit-tests/client/test_device_builder.py`
+- `dev-support/unit-tests/protocol/test_events.py`
+- `dev-support/unit-tests/protocol/test_stream_codec.py`
+- `dev-support/unit-tests/client/test_contract_websocket.py`
+- `devices/javascript/tests/`
 - `devices/c/tests/`
 
 ### 4.4 测试方法
@@ -419,7 +419,7 @@ SDK 层系统级集成测试必须自动化。方法级单元测试可以存在�
 
 ```bash
 uv run python -m pytest agent-server/tests -q
-uv run python -m pytest devices/python/tests -q
+uv run python -m pytest dev-support/unit-tests -q
 ```
 
 后续拆分为：
@@ -584,7 +584,7 @@ uv run realtime-agent.test.model.latency
 当前已有基础：
 
 - `examples/device_app_demo/tests/`
-- `examples/dev-support/tests/`
+- `dev-support/unit-tests/`
 - `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
 
 ### 6.3 测试档位
@@ -618,7 +618,7 @@ iOS、ESP32、真实摄像头、真实麦克风、真实模型。
 
 ```bash
 uv run python -m pytest examples/device_app_demo/tests -q
-uv run python -m pytest examples/dev-support/tests -q
+uv run python -m pytest dev-support/unit-tests -q
 uv run python -m pytest examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py -q
 ```
 
@@ -690,7 +690,7 @@ examples/device_app_demo/tests/
   replay/
   acceptance/
 
-examples/dev-support/tests/
+dev-support/unit-tests/
   browser/
   python_phone/
   python_playback_glass/
@@ -834,9 +834,9 @@ protocol/data/fixtures/
 | stream schema | `agent-server/realtime_agent/spec/realtime-agent-stream.schema.json` | stream header 字段约束。 |
 | AsyncAPI | `agent-server/realtime_agent/spec/realtime-agent-asyncapi.yaml` | WebSocket 通道和事件说明。 |
 | 错误码 | `agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml` | 标准错误码和建议处理。 |
-| Python Device SDK | `devices/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
-| TypeScript Device SDK | `devices/typescript/src/` | 浏览器 / Node 侧协议模型。 |
-| Swift / Kotlin / C SDK | `devices/<language>/` | 端侧协议模型和 stream codec。 |
+| Python Device SDK | `dev-support/python/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
+| JavaScript Device SDK | `devices/javascript/src/` | 浏览器 / Node 侧协议模型。 |
+| Swift / C SDK | `devices/swift/`、`devices/c/` | 端侧协议模型和 stream codec。 |
 | golden fixtures | `protocol/data/fixtures/` | 跨语言测试输入。 |
 
 协议变更流程必须写成固定 checklist：
@@ -970,8 +970,8 @@ uv run python -m pytest -m protocol -q
 主要产物：
 
 ```text
-devices/python/tests/
-devices/typescript/tests/
+dev-support/unit-tests/
+devices/javascript/tests/
 devices/swift/Tests/
 devices/kotlin/device/src/test/
 devices/c/tests/
@@ -981,8 +981,8 @@ runs/regression-reports/latest/l1-device-sdk-report.json
 验收命令：
 
 ```bash
-uv run python -m pytest devices/python/tests -q
-cd devices/typescript && npm test
+uv run python -m pytest dev-support/unit-tests -q
+cd devices/javascript && npm test
 cd devices/c && cmake -S . -B build && cmake --build build && ctest --test-dir build
 ```
 
@@ -1049,7 +1049,7 @@ uv run python -m pytest -m sdk -q
 
 ```text
 agent-server/protocol-tests/sdk/test_server_device_loopback.py
-devices/python/tests/client/test_contract_websocket.py
+dev-support/unit-tests/client/test_contract_websocket.py
 runs/regression-reports/latest/l1-interop-report.json
 ```
 
@@ -1063,7 +1063,7 @@ uv run python -m pytest -m sdk -m device_sdk -q
 
 ```bash
 uv run python -m pytest \
-  devices/python/tests/client/test_contract_websocket.py \
+  dev-support/unit-tests/client/test_contract_websocket.py \
   agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py \
   -q
 ```
@@ -1132,7 +1132,7 @@ examples/device_app_demo/tests/component/
 examples/device_app_demo/tests/integration/
 examples/device_app_demo/replay-tests/
 examples/device_app_demo/app-tests/acceptance/
-examples/dev-support/tests/
+dev-support/unit-tests/
 docs/how-to/cross-device-local-debug.md
 runs/regression-reports/latest/l3-app-report.json
 ```
@@ -1201,7 +1201,7 @@ uv run python -m pytest -m replay -q
 - 目标：给现有核心测试建立 P0/L1/L2/L3 marker，并输出轻量分层测试报告。
 - 实现：
   - 在 `pyproject.toml` 中新增 markers：`protocol_spec`、`protocol`、`sdk`、`device_sdk`、`model_provider`、`app`、`replay`、`hardware`。
-  - 把 `devices/python/tests` 加入 pytest `testpaths`，让 Python Device SDK contract 进入默认可发现范围。
+  - 把 `dev-support/unit-tests` 加入 pytest `testpaths`，让 Python Device SDK contract 进入默认可发现范围。
   - 新增根目录 `conftest.py`，在 pytest terminal summary 阶段写入 `runs/regression-reports/latest/*.json` 和 `summary.md`。
   - 给协议、Python Device SDK、Server SDK、真实 provider smoke 和一个稳定应用组件测试添加 marker。
   - 修正 `test_typed_device_context_api.py` 中命令调用测试，使其按系统级协议语义模拟端侧 `command.completed` 回执，而不是只断言投递。
@@ -1212,10 +1212,10 @@ uv run python -m pytest -m replay -q
   - `protocol/protocol-tests/test_protocol_contracts.py`
   - `protocol/protocol-tests/test_protocol_schema_examples.py`
   - `protocol/protocol-tests/test_stream_chunk_codec_contract.py`
-  - `devices/python/tests/protocol/test_events.py`
-  - `devices/python/tests/protocol/test_stream_codec.py`
-  - `devices/python/tests/client/test_device_builder.py`
-  - `devices/python/tests/client/test_contract_websocket.py`
+  - `dev-support/unit-tests/protocol/test_events.py`
+  - `dev-support/unit-tests/protocol/test_stream_codec.py`
+  - `dev-support/unit-tests/client/test_device_builder.py`
+  - `dev-support/unit-tests/client/test_contract_websocket.py`
   - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
   - `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
   - `agent-server/model-provider-tests/test_dashscope_providers.py`
@@ -1283,19 +1283,19 @@ uv run python -m pytest -m replay -q
 - 实现：
   - Python Device SDK 事件测试新增对 `protocol/data/fixtures/events` 的全量读取，确认端侧事件对象能消费协议黄金样例。
   - Python Device SDK 事件信封校验对齐 server 协议，拒绝点对点路由字段和媒体 payload。
-  - TypeScript Device SDK 事件信封校验对齐 server 协议，并新增读取协议黄金事件和反例事件的 Node 测试。
+  - JavaScript Device SDK 事件信封校验对齐 server 协议，并新增读取协议黄金事件和反例事件的 Node 测试。
   - 新增 `test_multilanguage_device_sdk_contracts.py`，在 `device_sdk` 分层中调用 TypeScript、Swift、C、Kotlin 各自原生测试命令；本机缺少工具时明确 skip。
   - 当前 Kotlin 仓库没有 `gradlew`，本机也没有系统 `gradle`，因此 Kotlin 原生 contract 在本轮报告中为 skip；这比伪造通过更符合回归测试目标。
 - 文件：
-  - `devices/python/src/realtime_agent_device/events.py`
-  - `devices/python/tests/protocol/test_events.py`
-  - `devices/python/tests/multilanguage/test_multilanguage_device_sdk_contracts.py`
-  - `devices/typescript/src/events.js`
-  - `devices/typescript/tests/device.test.js`
+  - `dev-support/python/realtime_agent_device/events.py`
+  - `dev-support/unit-tests/protocol/test_events.py`
+  - `dev-support/unit-tests/multilanguage/test_multilanguage_device_sdk_contracts.py`
+  - `devices/javascript/src/events.js`
+  - `devices/javascript/tests/device.test.js`
 - 验证：
   - `uv run python -m pytest -m device_sdk -q`，结果：`12 passed, 1 skipped`。
   - `uv run python -m pytest -m protocol -q`，结果：`26 passed`。
-  - `npm test`（`devices/typescript`），结果：`7 pass`。
+  - `npm test`（`devices/javascript`），结果：`7 pass`。
 - 运行证据：
   - `runs/regression-reports/latest/l1-device-sdk-report.json`
   - `runs/regression-reports/latest/l0-protocol-report.json`
@@ -1425,10 +1425,10 @@ uv run python -m pytest -m replay -q
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。
 - 文件：
   - `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
-  - `examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`
-  - `examples/dev-support/app-tests/network/test_network_server_playback.py`
-  - `examples/dev-support/unit-tests/browser/test_browser_device_example.py`
-  - `examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py`
+  - `dev-support/devices/python-glass/realtime_agent_python_glass/playback.py`
+  - `dev-support/app-tests/network/test_network_server_playback.py`
+  - `dev-support/unit-tests/browser/test_browser_device_example.py`
+  - `dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py`
   - `examples/device_app_demo/app-tests/acceptance/test_capability_template_playback.py`
   - `examples/device_app_demo/app-tests/acceptance/test_example_capabilities_playback.py`
   - `examples/device_app_demo/app-tests/acceptance/test_phone_visual_task_playback.py`
@@ -1441,9 +1441,9 @@ uv run python -m pytest -m replay -q
 - 验证：
   - `uv run python -m pytest -m app -q`，结果：`1 passed`。
   - `uv run python -m pytest -m replay -q`，结果：`3 passed`。
-  - `uv run python -m pytest examples/dev-support/unit-tests/playback/test_python_playback.py examples/dev-support/app-tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
-  - `uv run python -m pytest examples/dev-support/unit-tests/browser/test_browser_device_example.py examples/dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
-  - `uv run python -m pytest examples/dev-support/tests -q`，结果：`62 passed`。
+  - `uv run python -m pytest dev-support/unit-tests/playback/test_python_playback.py dev-support/app-tests/network/test_network_server_playback.py -q`，结果：`7 passed`。
+  - `uv run python -m pytest dev-support/unit-tests/browser/test_browser_device_example.py dev-support/unit-tests/python_phone_mock/test_python_phone_mock_vision_task.py -q`，结果：`19 passed`。
+  - `uv run python -m pytest dev-support/unit-tests -q`，结果：`62 passed`。
   - `uv run python -m pytest examples/device_app_demo/app-tests/acceptance/test_phone_visual_task_playback.py examples/device_app_demo/app-tests/config/test_app_name_launch.py examples/device_app_demo/app-tests/config/test_endpoint_config_sync.py examples/device_app_demo/app-tests/endpoints/test_esp32_s3_endpoint_contract.py examples/device_app_demo/app-tests -q`，结果：`23 passed`。
   - `uv run python -m pytest examples/device_app_demo/tests -q`，结果：`61 passed`。
 - 运行证据：

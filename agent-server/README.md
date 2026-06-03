@@ -42,7 +42,7 @@ agent-server/
 启动当前推荐示例 server：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 运行 Server SDK 相关测试：

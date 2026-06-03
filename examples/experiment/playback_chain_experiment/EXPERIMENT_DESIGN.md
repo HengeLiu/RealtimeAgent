@@ -39,7 +39,7 @@ Swift Device SDK 下一版需要同时支持三件事：
 ### 2.2 非目标
 
 - 不实现完整 `RealtimeAgentDeviceKit`。
-- 不连接 `examples/device_app_demo/agent-server`。
+- 不连接 `examples/simple-agent-server`。
 - 不验证模型 provider 的 `speech_started` 事件。
 - 不实现相机、视觉采样、设备注册、心跳和多设备协议。
 - 不把实验代码直接作为 SDK 正式实现。

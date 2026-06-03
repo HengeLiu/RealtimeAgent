@@ -133,7 +133,7 @@ legacy/
 
 1. `realtime_agent` 提供 server SDK 主包、CLI、Agent Core、Tool / Task 扩展面、Control Service、Stream Service、Asset Service、Output Service、回放和预检。
 2. `agent-server/realtime_agent` 下的 `protocol`、`device_capabilities` 和 `spec/` 定义多端必须共同遵守的公共协议、对象模型和 schema；当前不维护协议兼容性 golden 样例。
-3. `examples/dev-support/devices` 提供开发/测试支持组件，用来验证协议、降低联调门槛；`examples/*/devices` 下的应用端侧工程是参考实现。正式端侧由开发者在自己的工程中自行实现，不要求放入 SDK 目录。
+3. `dev-support/devices` 提供开发/测试支持组件，用来验证协议、降低联调门槛；`examples/*/devices` 下的应用端侧工程是参考实现。正式端侧由开发者在自己的工程中自行实现，不要求放入 SDK 目录。
 4. 业务项目只依赖 server SDK 的公开扩展面，不依赖 SDK 内部服务对象。
 
 因此，新 SDK 的核心不是“让业务开发者操作 WebSocket”，而是延续旧 SDK 中最有价值的抽象：开发者围绕 Tool、Task、Skill、Memory 和设备通讯写业务，SDK 隐藏设备注册、鉴权、订阅分发、stream 生命周期、资产缓存、任务事件回流、输出仲裁、运行产物和预检。
@@ -160,7 +160,7 @@ legacy/
 | 模块                   | 状态     | 当前依据                                                                                                                                                                                                                                                                                                                       |
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Control Service        | 已实现   | 设备注册、订阅匹配、事件发布和 debug API 已由 `agent-server/protocol-tests/sdk/runtime/test_control_service.py`、`tests/acceptance/test_protocol_routing_acceptance.py` 覆盖。                                                                                                                                                                               |
-| Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`、`examples/dev-support/app-tests/network/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
+| Stream Service         | 已实现   | stream chunk 编码、输入/输出 stream 生命周期和网络 playback 已由 `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`、`dev-support/app-tests/network/test_network_server_playback.py` 覆盖。                                                                                                                                                                 |
 | Audio Pipeline         | 部分实现 | 已有格式校验、mock provider 和最小音频链路；Vision 路线可复用 AudioSample 做无头回放，见 `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`；完整 wake 后会话生命周期、打断和清理属于 A 线路。                                                                                                                                           |
 | Asset Service          | 已实现   | `sensor.rgb` 等非音频 stream 可写入资产缓存，并由 Tool / Task 读取；见 `tests/test_phase2_assets_and_endpoint.py` 和 `tests/acceptance/test_architecture_module_alignment.py`。                                                                                                                                          |
 | Agent Core             | 部分实现 | Vision / Omni mock 链路、工具发现和 provider schema 已覆盖；VisionRealtimeAgentCore 已有 AudioSample -> mock ASR -> ToolGateway -> Streaming TTS 自动化回放；真实 provider 工具桥、TTS 首包指标和 Omni audio_delta 透传属于 E 线路。                                                                                                   |
@@ -185,7 +185,7 @@ legacy/
 | Tool / Task 协议原生扩展    | `agent-server/protocol-tests/acceptance/test_auto_discovery_developer_contract.py`、`agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py`、`agent-server/protocol-tests/acceptance/test_task_device_stream_contract.py`                                                                                                                                                                |
 | Vision 模型音频闭环           | `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`                                                                                                                                                                                     |
 | Output Service 与播放仲裁   | `agent-server/protocol-tests/sdk/runtime/test_phase2_providers_output.py`                                                                                                          |
-| H 线路迁移样板              | `examples/dev-support/agent-server/capabilities/tools.py`、`examples/dev-support/agent-server/capabilities/tasks.py`、`examples/device_app_demo/app-tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
+| H 线路迁移样板              | `dev-support/agent-server/capabilities/tools.py`、`dev-support/agent-server/capabilities/tasks.py`、`examples/device_app_demo/app-tests/acceptance/test_migration_template_contract.py`                                                                                                                             |
 | Memory / Skill / MCP 能力面 | `agent-server/protocol-tests/sdk/runtime/test_memory_service.py`、`agent-server/protocol-tests/sdk/extensions/test_skill_service.py`、`agent-server/protocol-tests/sdk/extensions/test_mcp_gateway.py`、`agent-server/protocol-tests/acceptance/test_indirect_device_context_contract.py`                                                                |
 
 ### 3.7 公开扩展 API
@@ -3138,7 +3138,7 @@ await context.devices.submit_text(
 ## 14. 开发支持组件和端侧参考工程
 
 `realtime-agent` 提供开发/测试支持组件和端侧参考工程，但不把这些实现作为 server SDK 的强依赖。
-`examples/dev-support/devices` 下的 browser-glass、python-phone、python-playback-glass
+`dev-support/devices` 下的 browser-glass、python-phone、python-playback-glass
 用于本地联调和系统测试支持；它们会以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。
 
 建议目录：
@@ -3147,7 +3147,7 @@ await context.devices.submit_text(
 examples/device_app_demo/devices/
   esp32-s3/
 examples/device_app_demo/ios/
-examples/dev-support/devices/
+dev-support/devices/
   browser-glass/
   python-glass/
   python-phone/
@@ -3313,7 +3313,7 @@ CLI 只负责通用 SDK 工作：配置读取、配置同步、进程管理、�
 ```bash
 uv run realtime-agent.config.sync \
   --app-root examples/device_app_demo \
-  --config examples/device_app_demo/agent-server/server.yaml
+  --config examples/simple-agent-server/server.yaml
 ```
 
 同步命令应做这些事：
@@ -3328,7 +3328,7 @@ uv run realtime-agent.config.sync \
 
 ```bash
 uv run realtime-agent.config.sync \
-  --config examples/device_app_demo/agent-server/server.yaml \
+  --config examples/simple-agent-server/server.yaml \
   --public-url http://192.168.1.23:8765
 ```
 
@@ -3345,7 +3345,7 @@ uv run realtime-agent.config.sync \
 
 ```bash
 uv run realtime-agent.server.run \
-  --config examples/device_app_demo/agent-server/server.yaml
+  --config examples/simple-agent-server/server.yaml
 ```
 
 业务项目启动时默认不需要指定业务装配入口。Tool / Task 由 YAML 中的自动发现配置加载：
@@ -3378,16 +3378,16 @@ Omni Realtime 联调启动：
 
 ```bash
 DASHSCOPE_API_KEY=xxx uv run realtime-agent.server.run \
-  --config examples/device_app_demo/agent-server/server.yaml
+  --config examples/simple-agent-server/server.yaml
 ```
 
 然后直接打开独立参考端侧页面：
 
 ```text
-examples/dev-support/devices/browser-glass/index.html
+dev-support/devices/browser-glass/index.html
 ```
 
-如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../examples/dev-support/devices/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=omni` 把音频交给 `OmniRealtimeAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 VisionRealtimeAgentCore ASR 和 TTS。
+如果页面不是从 `127.0.0.1:8765` 同源打开，需要通过 query 参数指定 server 地址，例如 `file:///.../dev-support/devices/browser-glass/index.html?server_url=http://127.0.0.1:8765`。页面点击“连接并注册”和“模拟唤醒”后，应持续上传 16 kHz PCM `sensor.mic` 20ms chunk。server 按 `agent.mode=omni` 把音频交给 `OmniRealtimeAgentCore`，Qwen Omni Realtime 返回 `response.audio.delta` 后通过 Output Service 原生音频入口下发 `actuator.speaker`，不经过 VisionRealtimeAgentCore ASR 和 TTS。
 
 如果要验证视觉输入，应确认日志中存在：
 
@@ -3407,7 +3407,7 @@ omni.visual_stream.close.requested
 后台启动、日志和停止已经提供 CLI，其中 `--dry-run` 可用于文档和包检查：
 
 ```bash
-uv run realtime-agent.server.start --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.start --config examples/simple-agent-server/server.yaml
 uv run realtime-agent.server.logs
 uv run realtime-agent.server.stop
 ```
@@ -3423,7 +3423,7 @@ uv run realtime-agent.dev.preflight \
   --report runs/preflight.json
 
 uv run realtime-agent.playback.glass \
-  --config examples/dev-support/devices/python-glass/playback.yaml
+  --config dev-support/devices/python-glass/playback.yaml
 ```
 
 回放配置至少包含：
@@ -3463,7 +3463,7 @@ Python Mock Endpoint 用于验证“同一 `user_id` 下多设备注册和订阅
 
 ```bash
 uv run python -m realtime_agent_python_phone_mock \
-  --config examples/dev-support/devices/python-phone/phone.mock.yaml
+  --config dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 mock 配置应允许声明调试属性和订阅：
@@ -3529,10 +3529,10 @@ ESP32 命令需要支持：
 本地研发：
 
 1. `uv pip install -e realtime-agent`
-2. 后续目标，当前未落地：`uv run realtime-agent.config.sync --config examples/device_app_demo/agent-server/server.yaml`
+2. 后续目标，当前未落地：`uv run realtime-agent.config.sync --config examples/simple-agent-server/server.yaml`
 3. `uv run realtime-agent.dev.preflight --report runs/preflight.json`
-4. `uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml`
-5. 另一个终端运行 `uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml`
+4. `uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml`
+5. 另一个终端运行 `uv run realtime-agent.playback.glass --config dev-support/devices/python-glass/playback.yaml`
 6. 查看 `runs/realtime-agent` 和 `/api/debug/*`
 
 多设备 mock：
@@ -3571,7 +3571,7 @@ ESP32 命令需要支持：
 
 ```bash
 uv run realtime-agent.dev.preflight \
-  --config examples/device_app_demo/agent-server/server.yaml \
+  --config examples/simple-agent-server/server.yaml \
   --require-server \
   --report runs/preflight-live.json
 ```
@@ -4227,7 +4227,7 @@ examples/
 ```bash
 uv run python -m pytest tests -q
 uv run realtime-agent.dev.preflight --report runs/preflight.json
-uv run realtime-agent.playback.glass --config examples/dev-support/devices/python-glass/playback.yaml
+uv run realtime-agent.playback.glass --config dev-support/devices/python-glass/playback.yaml
 ```
 
 ## 21. 第二阶段能力

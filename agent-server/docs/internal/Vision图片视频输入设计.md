@@ -356,7 +356,7 @@ source map 必须记录：
 
 ## 配置设计
 
-建议在 `examples/device_app_demo/agent-server/server.yaml` 中把 Vision 主模型升级为多模态模型：
+建议在 `examples/simple-agent-server/server.yaml` 中把 Vision 主模型升级为多模态模型：
 
 ```yaml
 agent:
@@ -504,10 +504,10 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
   - `agent-server/realtime_agent/config.py`
   - `agent-server/realtime_agent/app.py`
   - `agent-server/realtime_agent/preflight.py`
-  - `examples/device_app_demo/agent-server/server.yaml`
+  - `examples/simple-agent-server/server.yaml`
 - 验证：
   - `uv run python -m pytest agent-server/protocol-tests/sdk/config/test_config_sync.py -q` 已通过。
-  - `uv run realtime-agent.dev.preflight --config examples/device_app_demo/agent-server/server.yaml --report runs/default-app/text-vlm-preflight.json` 已通过。
+  - `uv run realtime-agent.dev.preflight --config examples/simple-agent-server/server.yaml --report runs/default-app/text-vlm-preflight.json` 已通过。
 
 ### Phase 2：Message 管理和工具结果图片拼接
 

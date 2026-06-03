@@ -60,10 +60,9 @@ def test_protocol_document_maps_protocol_assets_to_code() -> None:
         "agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml",
         "agent-server/realtime_agent/control/service.py",
         "agent-server/realtime_agent/stream/service.py",
-        "devices/python/src/realtime_agent_device/",
-        "devices/typescript/src/",
+        "dev-support/python/realtime_agent_device/",
+        "devices/javascript/src/",
         "devices/swift/",
-        "devices/kotlin/",
         "devices/c/",
         "protocol/data/fixtures/",
     ]

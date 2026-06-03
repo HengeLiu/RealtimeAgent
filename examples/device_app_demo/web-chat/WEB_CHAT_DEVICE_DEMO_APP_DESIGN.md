@@ -351,7 +351,7 @@ SDK 自身再通过 `devices/javascript` 的单元测试覆盖协议和媒体状
 启动 device app demo server：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 启动 Web Chat 本地页面：

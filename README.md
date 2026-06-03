@@ -74,7 +74,7 @@ uv pip install -e .
 启动示例 Agent server：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 默认服务地址：
@@ -96,7 +96,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 1. 启动 server：
 
    ```bash
-   uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+   uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
    ```
 2. 启动 Web Chat demo app：
 
@@ -132,7 +132,7 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```bash
    curl http://127.0.0.1:8765/api/debug/devices
    curl http://127.0.0.1:8765/api/debug/playback
-   find examples/device_app_demo/agent-server/runs -maxdepth 3 -type f | sort
+   find examples/simple-agent-server/runs -maxdepth 3 -type f | sort
    ```
 
 如果只想快速打开 Web Chat demo app，可以直接运行：
@@ -263,8 +263,8 @@ examples/device_app_demo/
 - Web Chat demo：`examples/device_app_demo/web-chat/`
 - Swift 真机 demo：`examples/device_app_demo/ios/`
 - ESP32-S3 固件参考实现：`examples/device_app_demo/esp32-s3/`
-- Python 手机视觉模拟组件：`examples/dev-support/devices/python-phone/`
-- Python playback glass：`examples/dev-support/devices/python-playback-glass/`
+- Python 手机视觉模拟组件：`dev-support/devices/python-phone/`
+- Python playback glass：`dev-support/devices/python-playback-glass/`
 
 当前示例清单见 [示例](examples/README.md)。
 
@@ -273,7 +273,7 @@ examples/device_app_demo/
 示例应用的运行产物默认写到：
 
 ```text
-examples/device_app_demo/agent-server/runs
+examples/simple-agent-server/runs
 ```
 
 最常用的文件：

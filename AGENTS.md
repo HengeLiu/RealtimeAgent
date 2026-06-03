@@ -9,7 +9,7 @@
 - Server SDK 负责设备注册、控制事件、数据流生命周期、Agent Core、工具 / 任务调度、输出播放仲裁和运行产物记录。
 - Device SDK / 端侧负责录音、播放、相机、传感器、震动、视频显示、硬件驱动和控制信令处理。
 - 业务能力通过应用目录下的 Tool / Task 暴露给 Agent，不写进 SDK 核心包。
-- `examples/dev-support/` 是开发和测试支持组件，不是正式产品形态。
+- `dev-support/` 是开发和测试支持组件，不是正式产品形态。
 - `legacy/` 只作为迁移参考，除非任务明确要求，不要从 `legacy/` 开始改主线功能。
 
 ## 权威文档入口
@@ -43,7 +43,7 @@ devices/                          # 多语言 Device SDK
 protocol/                         # 协议说明、协议数据资产和协议资产检查
 docs/                             # 社区向文档、教程、CLI、测试说明
 examples/device_app_demo/             # Swift Device SDK 真机验证示例
-examples/dev-support/             # browser-glass、Python phone、Python playback 等开发支持组件
+dev-support/             # browser-glass、Python phone、Python playback 等开发支持组件
 testdata/                         # 可复用测试和回放样例
 legacy/                           # 旧实现和迁移参考
 ```
@@ -130,7 +130,7 @@ WebSocket stream 正式入口只使用：
 
 ## 运行产物和排障
 
-`runs/` 是主要排障证据目录，默认位于应用目录下，例如 `examples/device_app_demo/agent-server/runs`。详细文件结构和排查顺序见 [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)。
+`runs/` 是主要排障证据目录，默认位于应用目录下，例如 `examples/simple-agent-server/runs`。详细文件结构和排查顺序见 [agent-server/docs/how-to/运行产物排查说明.md](agent-server/docs/how-to/运行产物排查说明.md)。
 
 排障时优先用真实运行证据定位：
 
@@ -182,8 +182,8 @@ WebSocket stream 正式入口只使用：
 开始改代码前先确认任务属于哪一层：
 
 - SDK 核心能力：改 `agent-server/realtime_agent/`，补 `agent-server/protocol-tests/`，必要时补 `agent-server/unit-tests/`。
-- Device SDK 或端侧参考：改 `devices/`、`examples/device_app_demo/ios/` 或 `examples/dev-support/devices/`，补端侧契约或联调说明。
-- 示例和开发支持能力：改对应 `examples/<app>/agent-server/capabilities/` 或 `examples/dev-support/`。
+- Device SDK 或端侧参考：改 `devices/`、`examples/device_app_demo/ios/` 或 `dev-support/devices/`，补端侧契约或联调说明。
+- 示例和开发支持能力：改对应 `examples/<app>/agent-server/capabilities/` 或 `dev-support/`。
 - 文档或协议：同步更新 docs、schema、测试和示例配置。
 
 遇到多设备、模型、ASR、TTS、数据流、播放仲裁、工具调用问题时，不要只凭命名推断实现状态；要用代码位置、测试命令、运行产物和日志说明真实链路。

@@ -52,10 +52,10 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 where = [
     "agent-server",
-    "devices/python/src",
-    "examples/dev-support/devices/python-glass",
-    "examples/dev-support/devices/python-playback-glass",
-    "examples/dev-support/devices/python-phone",
+    "dev-support/python",
+    "dev-support/devices/python-glass",
+    "dev-support/devices/python-playback-glass",
+    "dev-support/devices/python-phone",
 ]
 include = [
     "realtime_agent*",
@@ -74,10 +74,10 @@ pythonpath = [
     "agent-server",
     "agent-server/protocol-tests",
     "agent-server/model-provider-tests",
-    "devices/python/src",
-    "examples/dev-support/devices/python-glass",
-    "examples/dev-support/devices/python-playback-glass",
-    "examples/dev-support/devices/python-phone",
+    "dev-support/python",
+    "dev-support/devices/python-glass",
+    "dev-support/devices/python-playback-glass",
+    "dev-support/devices/python-phone",
 ]
 testpaths = [
     "protocol/unit-tests",
@@ -85,13 +85,11 @@ testpaths = [
     "agent-server/unit-tests",
     "agent-server/protocol-tests",
     "agent-server/model-provider-tests",
-    "devices/python/unit-tests",
-    "devices/python/protocol-tests",
     "examples/device_app_demo/app-tests",
-    "examples/dev-support/unit-tests",
-    "examples/dev-support/app-tests",
-    "examples/dev-support/replay-tests",
-    "examples/dev-support/hardware-tests",
+    "dev-support/unit-tests",
+    "dev-support/app-tests",
+    "dev-support/replay-tests",
+    "dev-support/hardware-tests",
 ]
 addopts = "-q"
 markers = [

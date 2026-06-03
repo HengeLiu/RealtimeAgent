@@ -356,10 +356,9 @@ agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 | Server stream | `agent-server/realtime_agent/stream/service.py` | stream 生命周期、逻辑流登记和 chunk 处理。 |
 | Server output | `agent-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker 音频下行链路。 |
 | Context API | `agent-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
-| Python Device SDK | `devices/python/src/realtime_agent_device/` | 端侧事件、builder、client、stream codec。 |
-| TypeScript Device SDK | `devices/typescript/src/` | 浏览器 / Node 侧协议模型。 |
+| Python dev-support 兼容层 | `dev-support/python/realtime_agent_device/` | 开发支持组件使用的端侧事件、builder、client、stream codec。 |
+| JavaScript Device SDK | `devices/javascript/src/` | 浏览器 / Node 侧协议模型。 |
 | Swift Device SDK | `devices/swift/` | Swift 协议模型和 stream codec。 |
-| Kotlin Device SDK | `devices/kotlin/` | Kotlin / JVM 协议模型和 stream codec。 |
 | C Device SDK | `devices/c/` | C / ESP32 最小协议核心。 |
 | golden fixtures | `protocol/data/fixtures/` | 跨语言测试输入。 |
 

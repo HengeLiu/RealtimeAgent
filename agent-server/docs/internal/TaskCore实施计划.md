@@ -195,7 +195,7 @@ stop
 
 1. `agent-server/realtime_agent/app.py`
 2. `agent-server/realtime_agent/tools.py`
-3. `examples/dev-support/agent-server/capabilities/tasks.py`
+3. `dev-support/agent-server/capabilities/tasks.py`
 4. `examples/device_app_demo/tests/`
 
 具体改动：

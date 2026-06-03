@@ -98,7 +98,7 @@ def test_server_start_stop_logs_dry_run_generate_files(tmp_path) -> None:
             "run",
             "realtime-agent.server.start",
             "--config",
-            "examples/device_app_demo/agent-server/server.yaml",
+            "examples/simple-agent-server/server.yaml",
             "--pid-file",
             str(pid_file),
             "--log-file",
@@ -172,7 +172,7 @@ def test_web_open_serve_print_url_uses_local_http_origin() -> None:
     assert completed.returncode == 0, completed.stderr
     url = completed.stdout.strip()
     assert url.startswith("http://127.0.0.1:8766/")
-    assert "/examples/dev-support/devices/browser-glass/index.html?" in url
+    assert "/dev-support/devices/browser-glass/index.html?" in url
     assert "server_url=http%3A%2F%2F127.0.0.1%3A8765" in url
 
 

@@ -240,7 +240,7 @@ def _wheel_contents_check(wheel_path: Path) -> dict:
         ".pyc",
         "runs/",
         "examples/",
-        "examples/dev-support/devices/browser-glass/",
+        "dev-support/devices/browser-glass/",
         "local.env",
         "AppConfig.json",
     )
@@ -327,25 +327,25 @@ def _endpoint_source_check(audio_root: Path) -> dict:
     required_files = {
         "ios_device_app_demo": [
             "examples/device_app_demo/README.md",
-            "examples/device_app_demo/agent-server/server.yaml",
+            "examples/simple-agent-server/server.yaml",
             "examples/device_app_demo/ios/DeviceDemo.xcodeproj/project.pbxproj",
             "examples/device_app_demo/ios/DeviceDemo/DeviceDemoRuntime.swift",
             "examples/device_app_demo/ios/DeviceDemo/Info.plist",
         ],
         "browser_glass": [
-            "examples/dev-support/devices/browser-glass/README.md",
-            "examples/dev-support/devices/browser-glass/index.html",
-            "examples/dev-support/devices/browser-glass/browser-glass.yaml",
+            "dev-support/devices/browser-glass/README.md",
+            "dev-support/devices/browser-glass/index.html",
+            "dev-support/devices/browser-glass/browser-glass.yaml",
         ],
         "python_phone_mock": [
-            "examples/dev-support/devices/python-phone/README.md",
-            "examples/dev-support/devices/python-phone/phone.mock.yaml",
-            "examples/dev-support/devices/python-phone/phone.preview.yaml",
-            "examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone_mock.py",
-            "examples/dev-support/devices/python-phone/realtime_agent_python_phone_mock/__main__.py",
+            "dev-support/devices/python-phone/README.md",
+            "dev-support/devices/python-phone/phone.mock.yaml",
+            "dev-support/devices/python-phone/phone.preview.yaml",
+            "dev-support/devices/python-phone/realtime_agent_python_phone_mock/phone_mock.py",
+            "dev-support/devices/python-phone/realtime_agent_python_phone_mock/__main__.py",
         ],
         "python_glass": [
-            "examples/dev-support/devices/python-glass/realtime_agent_python_glass/playback.py",
+            "dev-support/devices/python-glass/realtime_agent_python_glass/playback.py",
         ],
     }
     checks: dict[str, dict] = {}

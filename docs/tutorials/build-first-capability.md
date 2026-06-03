@@ -23,7 +23,7 @@ examples/<your-app>/agent-server/
 当前可参考最小 server 配置：
 
 ```text
-examples/dev-support/agent-server/
+dev-support/agent-server/
 ```
 
 ## 写一个 Tool
@@ -133,7 +133,7 @@ tasks:
 启动 server：
 
 ```bash
-uv run realtime-agent.server.run --config examples/dev-support/agent-server/server.yaml
+uv run realtime-agent.server.run --config dev-support/agent-server/server.yaml
 ```
 
 打开浏览器眼镜模拟组件：
@@ -151,7 +151,7 @@ curl http://127.0.0.1:8765/api/debug/devices
 查看运行产物：
 
 ```bash
-find examples/dev-support/agent-server/runs -maxdepth 4 -type f | sort
+find dev-support/agent-server/runs -maxdepth 4 -type f | sort
 ```
 
 排查模型请求、工具调用和设备事件时，优先看 [runs 目录产物说明](../../agent-server/docs/how-to/运行产物排查说明.md)。

@@ -41,7 +41,7 @@ def test_browser_device_capability_file_compiles_to_routes() -> None:
     预期结果：设备开发者不需要手写 routes，也能得到 RGB 和 haptic 订阅。
     """
 
-    result = compile_device_capabilities_file("examples/dev-support/devices/browser-glass/device.realtime-agent.yaml")
+    result = compile_device_capabilities_file("dev-support/devices/browser-glass/device.realtime-agent.yaml")
 
     assert set(result["payload"]["supports"]) == {"sensors", "actuators"}
     routes = compile_internal_routes_from_supports(result["payload"]["supports"])
@@ -305,7 +305,7 @@ def test_device_validate_cli_outputs_compiled_json(capsys) -> None:
 
     from realtime_agent.cli.device import validate
 
-    validate(["examples/dev-support/devices/browser-glass/device.realtime-agent.yaml", "--json"])
+    validate(["dev-support/devices/browser-glass/device.realtime-agent.yaml", "--json"])
 
     output = json.loads(capsys.readouterr().out)
     assert output["payload"]["device_id"] == "dev-browser-glass-001"

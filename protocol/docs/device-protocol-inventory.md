@@ -19,8 +19,8 @@
 | 控制 / stream WebSocket | `agent-server/realtime_agent/server.py` |
 | stream 生命周期 | `agent-server/realtime_agent/stream/service.py` |
 | 能力声明校验 | `agent-server/realtime_agent/device_capabilities.py` |
-| Python 回放端 | `examples/dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
-| 浏览器眼镜模拟组件 | `examples/dev-support/devices/browser-glass/index.html` |
+| Python 回放端 | `dev-support/devices/python-playback-glass/realtime_agent_python_playback_glass/protocol_client.py` |
+| 浏览器眼镜模拟组件 | `dev-support/devices/browser-glass/index.html` |
 | iOS SDK Demo | `examples/device_app_demo/ios/DeviceDemo/` |
 | ESP32-S3 参考端 | 外部端侧工程维护，本仓库仅保留协议和配置同步入口 |
 
@@ -45,7 +45,7 @@
 | `stream.input.opened` | device -> server | 输入 stream 已打开。 |
 | `stream.input.closed` | device -> server / server -> device | 输入 stream 已关闭。 |
 | `stream.input.failed` | device -> server / server -> device | 输入 stream 失败。 |
-| `stream.output.open.requested` | server -> device | 请求打开输出 stream。 |
+| `stream.output.start.requested` | server -> device | 请求打开输出 stream。 |
 | `stream.output.close.requested` | server -> device | 请求关闭输出 stream。 |
 | `stream.output.started` | device -> server | 输出播放开始。 |
 | `stream.output.finished` | device -> server | 输出播放完成。 |

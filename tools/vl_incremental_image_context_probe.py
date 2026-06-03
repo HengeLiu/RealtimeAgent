@@ -15,7 +15,7 @@ import yaml
 from openai import OpenAI
 
 
-DEFAULT_CONFIG = "examples/device_app_demo/agent-server/server.yaml"
+DEFAULT_CONFIG = "examples/simple-agent-server/server.yaml"
 DEFAULT_IMAGES = [
     "testdata/image-sample/基辅美食.jpeg",
     "testdata/image-sample/刚子等饭吃.jpeg",

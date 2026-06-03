@@ -13,7 +13,7 @@ def open_web(argv: list[str] | None = None) -> None:
     """打开 browser-glass 设备示例页面。
 
     主要逻辑：
-    1. 默认解析仓库内 `examples/dev-support/devices/browser-glass/index.html`。
+    1. 默认解析仓库内 `dev-support/devices/browser-glass/index.html`。
     2. 默认保持旧行为，输出或打开 file URL。
     3. `--serve` 会启动仓库根目录静态服务，供 ES module 正常导入本地 SDK。
     4. 非 `--print-url` 时按当前平台调用系统打开命令。
@@ -24,7 +24,7 @@ def open_web(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="realtime-agent.web.open", description="打开 realtime-agent browser-glass 设备示例")
-    parser.add_argument("--path", default="examples/dev-support/devices/browser-glass/index.html", help="browser-glass HTML 路径")
+    parser.add_argument("--path", default="dev-support/devices/browser-glass/index.html", help="browser-glass HTML 路径")
     parser.add_argument("--print-url", action="store_true", help="只打印 file URL，不打开浏览器")
     parser.add_argument("--serve", action="store_true", help="通过本地 HTTP 静态服务打开页面，支持浏览器 ES module 导入")
     parser.add_argument("--host", default="127.0.0.1", help="--serve 使用的监听地址")
@@ -68,7 +68,7 @@ def _serve_web(*, html_path: Path, host: str, port: int, print_url: bool, server
     """启动轻量本地静态服务并打开 browser-glass。
 
     主要逻辑：服务根目录固定为仓库根目录，使页面中的相对 module import 可以访问
-    `devices/typescript`。`--print-url` 模式只打印 HTTP URL 后立即退出，便于测试。
+    `devices/javascript`。`--print-url` 模式只打印 HTTP URL 后立即退出，便于测试。
     参数：`html_path` 为页面路径，`host/port` 为监听地址，`print_url` 控制是否只打印，
     `server_url` 为页面连接的 realtime-agent 服务地址。
     返回值：无。

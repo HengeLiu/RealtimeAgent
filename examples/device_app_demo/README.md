@@ -48,7 +48,7 @@ examples/device_app_demo/
 先启动 SDK Demo 专用 server。这个配置只用于验证端侧 SDK 的注册、控制事件、音频上行、单帧相机采集和喇叭下行播放链路，不加载外部业务能力：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 确认 iPhone 能访问 Mac 的局域网地址，例如：

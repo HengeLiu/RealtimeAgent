@@ -1,0 +1,2317 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>realtime-agent browser-glass</title>
+  <style>
+    body { margin: 24px; padding-bottom: 260px; color: #172033; background: #f6f8fb; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    main { background: #fff; border: 1px solid #d8dee8; border-radius: 8px; padding: 20px; }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    h2 { margin: 20px 0 8px; font-size: 16px; }
+    .row { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin: 14px 0; }
+    label { display: block; margin-bottom: 4px; font-weight: 600; }
+    input, select, textarea { width: 260px; padding: 7px 9px; border: 1px solid #aab5c5; border-radius: 6px; box-sizing: border-box; }
+    textarea { width: min(760px, 100%); min-height: 88px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    button { border: 1px solid #7d8ba1; background: #1f6feb; color: #fff; border-radius: 6px; padding: 8px 14px; cursor: pointer; }
+    button.secondary { background: #fff; color: #172033; }
+    button.warning { background: #b42318; }
+    button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .inline { display: flex; gap: 8px; align-items: center; min-height: 34px; }
+    .inline input { width: auto; }
+    .hidden { display: none !important; }
+    .panel { border-top: 1px solid #e5eaf2; padding-top: 8px; margin-top: 12px; }
+    .status { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin: 10px 0; }
+    .status div { background: #f7f9fc; border: 1px solid #dfe6f0; border-radius: 6px; padding: 8px; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .file-name { color: #5e6a7d; font-size: 13px; min-width: 180px; max-width: 520px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .record-command { min-height: 118px; }
+    .log-dock { position: fixed; left: 24px; right: 24px; bottom: 16px; z-index: 20; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; padding: 12px; border: 1px solid #cbd5e1; border-radius: 8px; background: rgba(246, 248, 251, 0.96); box-shadow: 0 10px 30px rgba(15, 23, 34, 0.16); }
+    .log-panel { border-top: 0; padding-top: 0; margin-top: 0; }
+    .log-panel h2 { margin: 0 0 6px; }
+    .log-box { width: 100%; height: 170px; min-height: 170px; resize: none; overflow: auto; background: #0f1722; color: #dbe7ff; padding: 10px; border-radius: 6px; border: 1px solid #243248; font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
+    .hint { color: #5e6a7d; font-size: 13px; margin: 4px 0 0; }
+    .visual-toolbar { display: grid; grid-template-columns: auto auto minmax(180px, 1fr); gap: 12px; align-items: center; margin: 14px 0; }
+    .visual-toolbar button { min-width: 104px; height: 36px; }
+    .visual-preview { display: grid !important; grid-template-columns: minmax(320px, 680px); gap: 12px; align-items: start; margin-top: 10px; }
+    .preview-stage label { margin-bottom: 8px; }
+    .preview-canvas { width: 100%; aspect-ratio: 16 / 9; background: #0f1722; border: 1px solid #253047; border-radius: 6px; object-fit: contain; box-sizing: border-box; }
+    .source-video { display: none; pointer-events: none; }
+    .frame-strip { display: flex; gap: 12px; max-width: min(100%, 900px); overflow-x: auto; padding: 12px 0 4px; }
+    .frame-thumb { flex: 0 0 auto; width: 78px; height: 54px; border: 2px solid #ef4444; border-radius: 6px; background: #0f1722; object-fit: cover; }
+    @media (max-width: 980px) { body { padding-bottom: 430px; } .log-dock { grid-template-columns: 1fr; } .log-box { height: 150px; min-height: 150px; } }
+    @media (max-width: 980px) { .visual-toolbar, .visual-preview { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>realtime-agent browser-glass</h1>
+    <p>浏览器设备示例：承担感知和执行角色，用于手动事件、真实麦克风、离线音频实时注入、摄像头/文件上传和下行播放测试。</p>
+    <div class="row">
+      <div><label for="serverUrl">Server URL</label><input id="serverUrl" /></div>
+      <div><label for="userId">User ID</label><input id="userId" /></div>
+      <div><label for="deviceId">Device ID</label><input id="deviceId" /></div>
+      <div><label for="deviceName">Name</label><input id="deviceName" /></div>
+      <label class="inline"><input id="autoConnect" type="checkbox" />自动连接</label>
+      <label class="inline"><input id="autoWake" type="checkbox" />连接后自动唤醒</label>
+      <button id="connect">连接并注册</button>
+      <button id="wake" disabled>模拟唤醒</button>
+      <button id="interrupt" class="secondary" disabled>模拟打断</button>
+      <button id="close" class="secondary" disabled>结束连续对话</button>
+    </div>
+
+    <div class="status">
+      <div id="connectionStatus">control=idle stream=idle</div>
+      <div id="sessionStatus">session=-</div>
+      <div id="micStatus">sensor.mic=idle</div>
+      <div id="rgbStatus">sensor.rgb=idle</div>
+    </div>
+
+    <section class="panel">
+      <h2>音频选择</h2>
+      <div class="row">
+        <div>
+          <label for="audioMode">模式</label>
+          <select id="audioMode">
+            <option value="live_mic">真实麦克风实时对话</option>
+            <option value="offline_realtime">离线音频实时注入</option>
+          </select>
+        </div>
+        <button id="chooseAudioSample" class="secondary" type="button">从样例目录选择音频</button>
+        <span id="audioSampleName" class="file-name">未选择音频</span>
+        <input id="audioFile" class="hidden" type="file" accept=".wav,.pcm,audio/*" />
+        <button id="startAudio" disabled>开始音频</button>
+        <button id="stopAudio" class="secondary" disabled>停止音频</button>
+      </div>
+      <p class="hint">离线音频会按 20ms chunk 实时注入。若服务端请求图片资产，会优先上传已选择的离线图片；没有选择图片时再打开摄像头抓拍。</p>
+    </section>
+
+    <section class="panel">
+      <h2>带图输入</h2>
+      <div class="visual-toolbar">
+        <button id="chooseImageSample" class="secondary" type="button">选择图片</button>
+        <input id="imageFile" class="hidden" type="file" accept="image/*" multiple />
+        <button id="chooseVideoSample" class="secondary" type="button">选择视频</button>
+        <input id="videoFile" class="hidden" type="file" accept="video/*" />
+        <span id="visualInputName" class="file-name">未选择图片或视频，按需使用摄像头</span>
+      </div>
+      <div id="visualPreviewArea" class="visual-preview">
+        <div class="preview-stage">
+          <label>采集帧预览</label>
+          <canvas id="visualFramePreview" class="preview-canvas" width="960" height="540"></canvas>
+          <video id="selectedVideoSource" class="source-video" muted playsinline preload="metadata"></video>
+        </div>
+        <p class="hint">图片和视频只能二选一。视频预览不能手动播放或暂停；收到 sensor.rgb 或 peer video 采集请求后会按视频自己的时间线播放，并从当前进度抽帧。</p>
+        <div id="capturedFrameStrip" class="frame-strip" aria-label="采集帧缩略图"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>录制 Case 草稿</h2>
+      <div class="row">
+        <div><label for="recordRunsRoot">Runs Root</label><input id="recordRunsRoot" /></div>
+        <div><label for="recordSessionId">Session ID</label><input id="recordSessionId" placeholder="默认使用最新 session" /></div>
+        <div><label for="recordOut">输出 YAML</label><input id="recordOut" /></div>
+        <button id="buildRecordCommand" class="secondary" type="button">生成录制命令</button>
+      </div>
+      <textarea id="recordCommand" class="record-command" readonly></textarea>
+      <p class="hint">命令会引用当前 user_id、device_id、已选择音频和图片路径；运行后仍需要人工确认 Case 断言严格度。</p>
+    </section>
+
+  </main>
+
+  <section class="log-dock">
+    <div class="log-panel">
+      <h2>运行日志</h2>
+      <textarea id="log" class="log-box" readonly></textarea>
+    </div>
+    <div class="log-panel">
+      <h2>广播事件</h2>
+      <textarea id="broadcastLog" class="log-box" readonly></textarea>
+    </div>
+  </section>
+
+  <script type="module">
+    import {
+      RealtimeAgentDeviceClient,
+      RealtimeAgentEvent,
+      DeviceBuilder,
+      StreamChunk,
+      StreamChunkCodec,
+      newId as sdkNewId,
+      wsUrl as sdkWsUrl,
+    } from "./sdk/realtime-agent-device-browser.js";
+
+    const PROTOCOL_VERSION = "realtime-agent.v1";
+    const SERVER_PRODUCER_ID = "server-main";
+    const INPUT_RATE = 16000;
+    const DEFAULT_CHUNK_MS = 20;
+    const MIC_CHUNK_BYTES = INPUT_RATE * DEFAULT_CHUNK_MS / 1000 * 2;
+    const OFFLINE_TAIL_SILENCE_MS = 800;
+    const RGB_CAPTURE_MAX_WIDTH = 960;
+    const RGB_CAPTURE_MAX_HEIGHT = 540;
+    const RGB_JPEG_QUALITY = 0.78;
+    const RGB_JPEG_MAX_BYTES = 180000;
+    const CAPTURE_PREVIEW_MIN_INTERVAL_MS = 500;
+    const CAPTURE_THUMBNAIL_MIN_INTERVAL_MS = 1000;
+    const CAPTURE_THUMBNAIL_MAX_COUNT = 8;
+    const BROWSER_CONFIG_STORAGE_KEY = "realtime-agent.browser-glass.v1";
+    const SAMPLE_HANDLE_DB = "realtime-agent.browser-glass.samples";
+    const SAMPLE_HANDLE_STORE = "handles";
+    const AUDIO_SAMPLE_DIR_KEY = "audio_sample_dir";
+    const IMAGE_SAMPLE_DIR_KEY = "image_sample_dir";
+    const VIDEO_SAMPLE_DIR_KEY = "video_sample_dir";
+    const AUDIO_SAMPLE_FILE_KEY = "audio_sample_file";
+    const IMAGE_SAMPLE_FILES_KEY = "image_sample_files";
+    const VIDEO_SAMPLE_FILE_KEY = "video_sample_file";
+    const DEFAULT_RECORD_RUNS_ROOT = "examples/simple-agent-server/runs";
+    const DEFAULT_RECORD_OUT = "dev-support/devices/python-playback-glass/cases/draft/recorded.yaml";
+    const DEFAULT_DEVICE_ID = "dev-browser-glass-001";
+    const DEFAULT_USER_ID = "user-browser-glass-001";
+    const DEFAULT_DEVICE_NAME = "浏览器调试设备";
+    const DEVICE_SUPPORTS = {
+      sensors: [
+        {
+          type: "rgb",
+          modes: ["single", "continuous"],
+          default: {
+            format: "jpeg",
+            frequency_hz: 1,
+            sample_count: 1,
+            duration_seconds: 0,
+            width: RGB_CAPTURE_MAX_WIDTH,
+            height: RGB_CAPTURE_MAX_HEIGHT,
+          },
+          external: {facing: "environment"},
+        },
+      ],
+      actuators: [
+        {
+          type: "vibrator",
+          commands: ["vibrate"],
+        },
+      ],
+    };
+    const logEl = document.getElementById("log");
+    const broadcastLogEl = document.getElementById("broadcastLog");
+    const connectButton = document.getElementById("connect");
+    const wakeButton = document.getElementById("wake");
+    const interruptButton = document.getElementById("interrupt");
+    const closeButton = document.getElementById("close");
+    const startAudioButton = document.getElementById("startAudio");
+    const stopAudioButton = document.getElementById("stopAudio");
+    const chooseAudioSampleButton = document.getElementById("chooseAudioSample");
+    const chooseImageSampleButton = document.getElementById("chooseImageSample");
+    const chooseVideoSampleButton = document.getElementById("chooseVideoSample");
+    const audioSampleNameEl = document.getElementById("audioSampleName");
+    const visualInputNameEl = document.getElementById("visualInputName");
+    const selectedVideoSourceEl = document.getElementById("selectedVideoSource");
+    const visualFramePreviewEl = document.getElementById("visualFramePreview");
+    const visualPreviewEl = document.getElementById("visualPreviewArea");
+    const capturedFrameStripEl = document.getElementById("capturedFrameStrip");
+    const buildRecordCommandButton = document.getElementById("buildRecordCommand");
+    const recordCommandEl = document.getElementById("recordCommand");
+    const connectionStatusEl = document.getElementById("connectionStatus");
+    const sessionStatusEl = document.getElementById("sessionStatus");
+    const micStatusEl = document.getElementById("micStatus");
+    const rgbStatusEl = document.getElementById("rgbStatus");
+    const params = new URLSearchParams(window.location.search);
+    const audioModeSelect = document.getElementById("audioMode");
+    const initialBrowserConfig = resolveInitialBrowserConfig(params);
+    applyBrowserConfig(initialBrowserConfig);
+    saveBrowserConfig();
+    document.getElementById("recordRunsRoot").value = DEFAULT_RECORD_RUNS_ROOT;
+    document.getElementById("recordOut").value = DEFAULT_RECORD_OUT;
+
+    let controlWs = null;
+    let streamWs = null;
+    let deviceClient = null;
+    let audioContext = null;
+    let micStream = null;
+    let cameraStream = null;
+    let micSource = null;
+    let processor = null;
+    let sessionId = null;
+    let inputStreamId = null;
+    let seq = 0;
+    let playbackWorkletNode = null;
+    let playbackWorkletReady = null;
+    let playbackWriteChain = Promise.resolve();
+    let playbackStreams = new Map();
+    let streamStates = new Map();
+    let offlineAudio = null;
+    let offlineTimer = null;
+    let activeAudioSource = "idle";
+    let outputStarted = new Set();
+    let outputClosed = new Set();
+    let pendingOutputClose = new Map();
+    let micPcmBuffer = new Uint8Array(0);
+    let openingMic = false;
+    let heartbeatTimer = null;
+    let sampleDbPromise = null;
+    let selectedAudioSampleFileHandle = null;
+    let selectedAudioSampleFile = null;
+    let selectedImageSampleFileHandles = [];
+    let selectedImageSampleFiles = [];
+    let selectedVideoSampleFileHandle = null;
+    let selectedVideoSampleFile = null;
+    let selectedVideoObjectUrl = "";
+    let lastCapturedPreviewAt = 0;
+    let lastCapturedThumbnailAt = 0;
+    let peerVideoSender = null;
+    const outputPlaybackStats = new Map();
+
+    function delay(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    function logTimestamp() {
+      return new Date().toLocaleTimeString("zh-CN", {
+        hour12: false,
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        fractionalSecondDigits: 3,
+      });
+    }
+
+    function log(line) {
+      const at = logTimestamp();
+      logEl.value += `[${at}] ${line}\n`;
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    function isQuietEventName(eventName) {
+      return eventName === "control.device.heartbeat.received" || String(eventName || "").startsWith("stream.");
+    }
+
+    function logBroadcastEvent(item) {
+      if (isQuietEventName(item.event_name)) return;
+      const at = logTimestamp();
+      const payload = JSON.stringify({
+        event_name: item.event_name,
+        session_id: item.session_id || null,
+        stream_id: item.stream_id || null,
+        stream_type: item.stream_type || null,
+        producer_id: item.producer_id || null,
+        payload: item.payload || {},
+      });
+      broadcastLogEl.value += `[${at}] ${payload}\n`;
+      broadcastLogEl.scrollTop = broadcastLogEl.scrollHeight;
+    }
+
+    function shellQuote(value) {
+      return `'${String(value).replace(/'/g, `'\\''`)}'`;
+    }
+
+    function selectedAudioPathForRecord() {
+      const file = selectedAudioSampleFile || document.getElementById("audioFile").files[0];
+      if (!file) return "";
+      return `testdata/audio-sample/${file.name}`;
+    }
+
+    function selectedImagePathsForRecord() {
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
+      return files.map((file) => `testdata/image-sample/${file.name}`);
+    }
+
+    function buildPlaybackRecordCommand() {
+      const args = [
+        "uv run python -m realtime_agent_python_playback_glass record",
+        "--runs-root", shellQuote(document.getElementById("recordRunsRoot").value || DEFAULT_RECORD_RUNS_ROOT),
+        "--user-id", shellQuote(document.getElementById("userId").value || DEFAULT_USER_ID),
+        "--device-id", shellQuote(currentDeviceId()),
+      ];
+      const recordSessionId = document.getElementById("recordSessionId").value.trim();
+      if (recordSessionId) args.push("--session-id", shellQuote(recordSessionId));
+      const audioPath = selectedAudioPathForRecord();
+      if (audioPath) args.push("--audio", shellQuote(audioPath));
+      for (const path of selectedImagePathsForRecord()) {
+        args.push("--image", shellQuote(`sensor.rgb=${path}`));
+      }
+      args.push("--out", shellQuote(document.getElementById("recordOut").value || DEFAULT_RECORD_OUT));
+      recordCommandEl.value = args.join(" \\\n  ");
+      recordCommandEl.focus();
+      recordCommandEl.select();
+      log("generated python-playback-glass record command");
+    }
+
+    function setStreamState(streamId, patch) {
+      if (!streamId) return;
+      const current = streamStates.get(streamId) || {stream_id: streamId, seq: 0, bytes_sent: 0, bytes_received: 0};
+      streamStates.set(streamId, {...current, ...patch});
+      renderStatus();
+    }
+
+    function renderStatus() {
+      const controlState = controlWs ? ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][controlWs.readyState] : "idle";
+      const streamState = streamWs ? ["CONNECTING", "OPEN", "CLOSING", "CLOSED"][streamWs.readyState] : "idle";
+      connectionStatusEl.textContent = `control=${controlState} stream=${streamState}`;
+      sessionStatusEl.textContent = `session=${sessionId || "-"} audio=${activeAudioSource}`;
+      const micState = inputStreamId ? streamStates.get(inputStreamId) : null;
+      micStatusEl.textContent = micState
+        ? `sensor.mic=${micState.state || "open"} seq=${micState.seq || 0} bytes=${micState.bytes_sent || 0}`
+        : "sensor.mic=idle";
+      const rgbItems = Array.from(streamStates.values()).filter((item) => item.stream_type === "sensor.rgb");
+      const latestRgb = rgbItems[rgbItems.length - 1];
+      rgbStatusEl.textContent = latestRgb
+        ? `sensor.rgb=${latestRgb.state || "open"} seq=${latestRgb.seq || 0} bytes=${latestRgb.bytes_sent || 0}`
+        : "sensor.rgb=idle";
+      updateSessionButtons();
+      updateAudioButtons();
+    }
+
+    function updateSessionButtons() {
+      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
+      const dialogOpen = Boolean(sessionId);
+      wakeButton.disabled = !registered || dialogOpen;
+      interruptButton.disabled = !dialogOpen;
+      closeButton.disabled = !dialogOpen;
+    }
+
+    function updateAudioButtons() {
+      const registered = Boolean(controlWs && controlWs.readyState === WebSocket.OPEN);
+      const sending = isAudioSending();
+      const offlineMode = audioModeSelect.value === "offline_realtime";
+      const canStartNextSegment = Boolean(inputStreamId && activeAudioSource === "offline_paused" && offlineMode);
+      startAudioButton.disabled = !registered || !sessionId || sending || Boolean(inputStreamId && !canStartNextSegment);
+      startAudioButton.textContent = sending ? "音频发送中" : (canStartNextSegment ? "上传下一段" : "开始音频");
+      stopAudioButton.disabled = !inputStreamId && !openingMic;
+    }
+
+    function enableRegisteredControls() {
+      connectButton.disabled = true;
+      renderStatus();
+    }
+
+    function setFieldVisible(id, visible) {
+      document.getElementById(id).classList.toggle("hidden", !visible);
+    }
+
+    function updateInputModePanels() {
+      const audioMode = audioModeSelect.value;
+      const offlineAudio = audioMode === "offline_realtime";
+      chooseAudioSampleButton.classList.toggle("hidden", !offlineAudio);
+      audioSampleNameEl.classList.toggle("hidden", !offlineAudio);
+    }
+
+    function defaultServerUrl() {
+      return "http://127.0.0.1:8765";
+    }
+
+    function normalizeServerUrl(raw) {
+      const value = String(raw || "").trim().replace(/\/$/, "");
+      if (!value) return "http://127.0.0.1:8765";
+      try {
+        const url = new URL(value);
+        if (url.hostname === "0.0.0.0" || url.hostname === "[::]" || url.hostname === "::") {
+          url.hostname = "127.0.0.1";
+        }
+        return url.toString().replace(/\/$/, "");
+      } catch (err) {
+        return value;
+      }
+    }
+
+    function loadStoredBrowserConfig() {
+      try {
+        const raw = window.localStorage.getItem(BROWSER_CONFIG_STORAGE_KEY);
+        if (!raw) return {};
+        const data = JSON.parse(raw);
+        return data && typeof data === "object" ? data : {};
+      } catch (err) {
+        log(`读取浏览器本地配置失败: ${err.message}`);
+        return {};
+      }
+    }
+
+    function usableStoredServerUrl(value) {
+      const normalized = normalizeServerUrl(value);
+      if (!normalized) return "";
+      if ((location.protocol === "http:" || location.protocol === "https:") && normalized === `${location.protocol}//${location.host}`) {
+        return "";
+      }
+      return normalized;
+    }
+
+    function resolveInitialBrowserConfig(searchParams) {
+      const stored = loadStoredBrowserConfig();
+      return {
+        server_url: normalizeServerUrl(searchParams.get("server_url") || usableStoredServerUrl(stored.server_url) || defaultServerUrl()),
+        user_id: searchParams.get("user_id") || stored.user_id || DEFAULT_USER_ID,
+        device_id: searchParams.get("device_id") || stored.device_id || DEFAULT_DEVICE_ID,
+        name: searchParams.get("name") || stored.name || DEFAULT_DEVICE_NAME,
+        audio_mode: selectOptionValue("audioMode", searchParams.get("audio_mode") || stored.audio_mode, "live_mic"),
+        auto_connect: parseStoredBoolean(searchParams.get("auto_connect"), stored.auto_connect, false),
+        auto_wake: parseStoredBoolean(searchParams.get("auto_wake"), stored.auto_wake, false),
+      };
+    }
+
+    function selectOptionValue(selectId, value, fallback) {
+      const select = document.getElementById(selectId);
+      const allowed = new Set(Array.from(select.options).map((option) => option.value));
+      return allowed.has(value) ? value : fallback;
+    }
+
+    function parseStoredBoolean(raw, storedValue, fallback) {
+      if (raw !== null && raw !== undefined) return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase());
+      if (storedValue !== undefined) return Boolean(storedValue);
+      return fallback;
+    }
+
+    function applyBrowserConfig(config) {
+      document.getElementById("serverUrl").value = normalizeServerUrl(config.server_url);
+      document.getElementById("userId").value = config.user_id;
+      document.getElementById("deviceId").value = config.device_id;
+      document.getElementById("deviceName").value = config.name;
+      audioModeSelect.value = config.audio_mode;
+      document.getElementById("autoConnect").checked = Boolean(config.auto_connect);
+      document.getElementById("autoWake").checked = Boolean(config.auto_wake);
+    }
+
+    function readBrowserConfigFromForm() {
+      return {
+        server_url: normalizeServerUrl(document.getElementById("serverUrl").value),
+        user_id: document.getElementById("userId").value.trim() || DEFAULT_USER_ID,
+        device_id: document.getElementById("deviceId").value.trim() || DEFAULT_DEVICE_ID,
+        name: document.getElementById("deviceName").value.trim() || DEFAULT_DEVICE_NAME,
+        audio_mode: audioModeSelect.value,
+        auto_connect: document.getElementById("autoConnect").checked,
+        auto_wake: document.getElementById("autoWake").checked,
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    function saveBrowserConfig() {
+      try {
+        const config = readBrowserConfigFromForm();
+        window.localStorage.setItem(BROWSER_CONFIG_STORAGE_KEY, JSON.stringify(config));
+      } catch (err) {
+        log(`保存浏览器本地配置失败: ${err.message}`);
+      }
+    }
+
+    function bindBrowserConfigPersistence() {
+      const ids = [
+        "serverUrl",
+        "userId",
+        "deviceId",
+        "deviceName",
+        "audioMode",
+        "autoConnect",
+        "autoWake",
+      ];
+      for (const id of ids) {
+        const element = document.getElementById(id);
+        if (!element) continue;
+        element.addEventListener("input", saveBrowserConfig);
+        element.addEventListener("change", () => {
+          saveBrowserConfig();
+          if (id === "audioMode") updateInputModePanels();
+        });
+      }
+    }
+
+    function openSampleHandleDb() {
+      if (sampleDbPromise) return sampleDbPromise;
+      sampleDbPromise = new Promise((resolve, reject) => {
+        if (!window.indexedDB) {
+          reject(new Error("当前浏览器不支持 IndexedDB，无法记住样例目录"));
+          return;
+        }
+        const request = indexedDB.open(SAMPLE_HANDLE_DB, 1);
+        request.onupgradeneeded = () => request.result.createObjectStore(SAMPLE_HANDLE_STORE);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("open IndexedDB failed"));
+      });
+      return sampleDbPromise;
+    }
+
+    async function putSampleHandle(key, value) {
+      const db = await openSampleHandleDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(SAMPLE_HANDLE_STORE, "readwrite");
+        tx.objectStore(SAMPLE_HANDLE_STORE).put(value, key);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error || new Error("save sample handle failed"));
+      });
+    }
+
+    async function getSampleHandle(key) {
+      const db = await openSampleHandleDb();
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(SAMPLE_HANDLE_STORE, "readonly");
+        const request = tx.objectStore(SAMPLE_HANDLE_STORE).get(key);
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error || new Error("load sample handle failed"));
+      });
+    }
+
+    async function hasFileHandlePermission(handle) {
+      if (!handle || typeof handle.queryPermission !== "function") return false;
+      const permission = await handle.queryPermission({mode: "read"});
+      return permission === "granted";
+    }
+
+    async function requestFileHandlePermission(handle) {
+      if (!handle || typeof handle.requestPermission !== "function") return false;
+      const permission = await handle.requestPermission({mode: "read"});
+      return permission === "granted";
+    }
+
+    function summarizeFiles(files, emptyText) {
+      if (!files.length) return emptyText;
+      if (files.length === 1) return files[0].name;
+      return `${files[0].name} 等 ${files.length} 个文件`;
+    }
+
+    function setSelectedAudioSample(fileHandle, file) {
+      selectedAudioSampleFileHandle = fileHandle || null;
+      selectedAudioSampleFile = file || null;
+      audioSampleNameEl.textContent = file ? file.name : "未选择音频";
+    }
+
+    function setSelectedImageSamples(fileHandles, files) {
+      selectedImageSampleFileHandles = fileHandles || [];
+      selectedImageSampleFiles = files || [];
+      if (selectedImageSampleFiles.length) clearSelectedVideoSample();
+      updateVisualInputState();
+    }
+
+    function setSelectedVideoSample(fileHandle, file) {
+      if (file) clearSelectedImageSamples();
+      selectedVideoSampleFileHandle = fileHandle || null;
+      selectedVideoSampleFile = file || null;
+      if (selectedVideoObjectUrl) {
+        URL.revokeObjectURL(selectedVideoObjectUrl);
+        selectedVideoObjectUrl = "";
+      }
+      selectedVideoSourceEl.pause();
+      selectedVideoSourceEl.removeAttribute("src");
+      selectedVideoSourceEl.load();
+      if (!file) {
+        selectedVideoSourceEl.style.display = "none";
+        updateVisualInputState();
+        return;
+      }
+      selectedVideoObjectUrl = URL.createObjectURL(file);
+      selectedVideoSourceEl.src = selectedVideoObjectUrl;
+      selectedVideoSourceEl.style.display = "none";
+      selectedVideoSourceEl.loop = true;
+      selectedVideoSourceEl.load();
+      updateVisualInputState();
+      renderSelectedVideoPreview().catch((err) => log(`video preview failed: ${err.message}`));
+    }
+
+    function clearSelectedImageSamples() {
+      selectedImageSampleFileHandles = [];
+      selectedImageSampleFiles = [];
+      const imageInput = document.getElementById("imageFile");
+      if (imageInput) imageInput.value = "";
+    }
+
+    function clearSelectedVideoSample() {
+      selectedVideoSampleFileHandle = null;
+      selectedVideoSampleFile = null;
+      const videoInput = document.getElementById("videoFile");
+      if (videoInput) videoInput.value = "";
+      if (selectedVideoObjectUrl) {
+        URL.revokeObjectURL(selectedVideoObjectUrl);
+        selectedVideoObjectUrl = "";
+      }
+      selectedVideoSourceEl.pause();
+      selectedVideoSourceEl.removeAttribute("src");
+      selectedVideoSourceEl.style.display = "none";
+      selectedVideoSourceEl.load();
+    }
+
+    function activeVisualInputKind() {
+      if (selectedVideoSampleFile || document.getElementById("videoFile").files.length) return "video";
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) return "image";
+      return "camera";
+    }
+
+    function updateVisualInputState() {
+      const active = activeVisualInputKind();
+      showVisualPreview();
+      if (active === "image") {
+        visualInputNameEl.textContent = summarizeFiles(selectedImageSampleFiles, "已选择图片");
+        visualInputNameEl.title = "当前使用图片输入";
+      } else if (active === "video") {
+        const file = selectedVideoSampleFile || document.getElementById("videoFile").files[0];
+        visualInputNameEl.textContent = file ? file.name : "已选择视频";
+        visualInputNameEl.title = "当前使用视频输入";
+      } else {
+        visualInputNameEl.textContent = "未选择图片或视频，按需使用摄像头";
+        visualInputNameEl.title = "当前使用摄像头输入";
+      }
+      visualPreviewEl.classList.toggle("source-image", active === "image");
+      visualPreviewEl.classList.toggle("source-video", active === "video");
+      visualPreviewEl.classList.toggle("source-camera", active === "camera");
+      renderStatus();
+    }
+
+    function showVisualPreview() {
+      visualPreviewEl.hidden = false;
+      visualPreviewEl.style.display = "grid";
+      visualFramePreviewEl.style.display = "block";
+    }
+
+    async function chooseFileFromSampleDirectory({kind, accept, multiple}) {
+      if (!window.showOpenFilePicker || !window.showDirectoryPicker) {
+        return chooseFileWithHiddenInput(kind);
+      }
+      const dirKey = kind === "audio" ? AUDIO_SAMPLE_DIR_KEY : (kind === "video" ? VIDEO_SAMPLE_DIR_KEY : IMAGE_SAMPLE_DIR_KEY);
+      const fileKey = kind === "audio" ? AUDIO_SAMPLE_FILE_KEY : (kind === "video" ? VIDEO_SAMPLE_FILE_KEY : IMAGE_SAMPLE_FILES_KEY);
+      let dirHandle = await getSampleHandle(dirKey).catch(() => null);
+      if (!dirHandle || !(await hasFileHandlePermission(dirHandle))) {
+        dirHandle = await window.showDirectoryPicker({mode: "read"});
+        if (!(await requestFileHandlePermission(dirHandle))) throw new Error("未授权读取样例目录");
+        await putSampleHandle(dirKey, dirHandle);
+      }
+      const handles = await window.showOpenFilePicker({
+        startIn: dirHandle,
+        multiple,
+        types: [{description: kind === "audio" ? "音频样例" : (kind === "video" ? "视频样例" : "图片样例"), accept}],
+      });
+      await putSampleHandle(fileKey, multiple ? handles : handles[0]);
+      const files = await Promise.all(handles.map((handle) => handle.getFile()));
+      if (kind === "audio") {
+        setSelectedAudioSample(handles[0], files[0]);
+      } else if (kind === "video") {
+        setSelectedVideoSample(handles[0], files[0]);
+      } else {
+        setSelectedImageSamples(handles, files);
+        renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
+      }
+      log(`selected ${kind} sample ${summarizeFiles(files, "")}`);
+    }
+
+    function chooseFileWithHiddenInput(kind) {
+      return new Promise((resolve, reject) => {
+        const input = document.getElementById(kind === "audio" ? "audioFile" : (kind === "video" ? "videoFile" : "imageFile"));
+        input.onchange = () => {
+          const files = Array.from(input.files || []);
+          if (!files.length) {
+            reject(new Error(kind === "audio" ? "请选择音频文件" : (kind === "video" ? "请选择视频文件" : "请选择图片文件")));
+            return;
+          }
+          if (kind === "audio") setSelectedAudioSample(null, files[0]);
+          else if (kind === "video") setSelectedVideoSample(null, files[0]);
+          else {
+            setSelectedImageSamples([], files);
+            renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
+          }
+          resolve();
+        };
+        input.click();
+      });
+    }
+
+    async function restoreSampleSelections() {
+      try {
+        const audioHandle = await getSampleHandle(AUDIO_SAMPLE_FILE_KEY).catch(() => null);
+        if (audioHandle && await hasFileHandlePermission(audioHandle)) {
+          setSelectedAudioSample(audioHandle, await audioHandle.getFile());
+        }
+        const imageHandles = await getSampleHandle(IMAGE_SAMPLE_FILES_KEY).catch(() => null);
+        const handles = Array.isArray(imageHandles) ? imageHandles : (imageHandles ? [imageHandles] : []);
+        const permitted = [];
+        for (const handle of handles) {
+          if (await hasFileHandlePermission(handle)) permitted.push(handle);
+        }
+        if (permitted.length) {
+          setSelectedImageSamples(permitted, await Promise.all(permitted.map((handle) => handle.getFile())));
+          renderSelectedImagePreview().catch((err) => log(`image preview failed: ${err.message}`));
+        }
+        const videoHandle = await getSampleHandle(VIDEO_SAMPLE_FILE_KEY).catch(() => null);
+        if (videoHandle && await hasFileHandlePermission(videoHandle)) {
+          setSelectedVideoSample(videoHandle, await videoHandle.getFile());
+        }
+      } catch (err) {
+        log(`恢复样例文件选择失败: ${err.message}`);
+      }
+    }
+
+    function newId(prefix) {
+      return sdkNewId(prefix);
+    }
+
+    function wsUrl(path, query = {}) {
+      const normalized = normalizeServerUrl(document.getElementById("serverUrl").value);
+      document.getElementById("serverUrl").value = normalized;
+      return sdkWsUrl(normalized, path, query);
+    }
+
+    function event(event_name, payload = {}, extra = {}) {
+      const deviceId = currentDeviceId();
+      return new RealtimeAgentEvent({
+        eventName: event_name,
+        userId: document.getElementById("userId").value,
+        producerId: deviceId,
+        payload,
+        sessionId: extra.session_id || null,
+        streamId: extra.stream_id || null,
+        streamType: extra.stream_type || null,
+      }).toObject();
+    }
+
+    function currentDeviceId() {
+      const input = document.getElementById("deviceId");
+      const value = input.value.trim();
+      if (value) return value;
+      input.value = DEFAULT_DEVICE_ID;
+      saveBrowserConfig();
+      return DEFAULT_DEVICE_ID;
+    }
+
+    function sendEvent(item) {
+      if (!controlWs || controlWs.readyState !== WebSocket.OPEN) throw new Error("control websocket is not open");
+      if (!deviceClient) throw new Error("device sdk client is not ready");
+      deviceClient.sendEvent(item);
+      if (!isQuietEventName(item.event_name)) log(`send ${item.event_name}`);
+    }
+
+    function safeSendEvent(item) {
+      try {
+        sendEvent(item);
+      } catch (err) {
+        log(`send failed ${item.event_name}: ${err.message}`);
+      }
+    }
+
+    function isAudioSending() {
+      return openingMic || activeAudioSource === "live_mic" || activeAudioSource === "offline_realtime";
+    }
+
+    function outputStats(streamId) {
+      const key = String(streamId || "");
+      if (!outputPlaybackStats.has(key)) {
+        outputPlaybackStats.set(key, {
+          openedAt: null,
+          firstChunkAt: null,
+          playbackScheduledAt: null,
+          bytes: 0,
+          chunks: 0,
+          audioMs: 0,
+        });
+      }
+      return outputPlaybackStats.get(key);
+    }
+
+    function markOutputOpen(streamId) {
+      const stats = outputStats(streamId);
+      stats.openedAt = performance.now();
+      log(`playback output open requested stream_id=${streamId}`);
+    }
+
+    function recordOutputChunk(chunk, durationMs) {
+      const stats = outputStats(chunk.stream_id);
+      const now = performance.now();
+      stats.bytes += chunk.payload.byteLength;
+      stats.chunks += 1;
+      stats.audioMs += durationMs;
+      if (!stats.firstChunkAt) {
+        stats.firstChunkAt = now;
+        const sinceOpenMs = stats.openedAt ? Math.round(now - stats.openedAt) : null;
+        log(`playback first audio chunk stream_id=${chunk.stream_id} bytes=${chunk.payload.byteLength} sample_rate=${chunk.sample_rate || INPUT_RATE} duration_ms=${durationMs} since_open_ms=${sinceOpenMs ?? "-"}`);
+      }
+    }
+
+    function markPlaybackScheduled(streamId, scheduledStart, durationSeconds) {
+      const stats = outputStats(streamId);
+      if (stats.playbackScheduledAt) return;
+      const now = performance.now();
+      stats.playbackScheduledAt = now;
+      const delayMs = audioContext ? Math.max(0, Math.round((scheduledStart - audioContext.currentTime) * 1000)) : null;
+      const sinceFirstChunkMs = stats.firstChunkAt ? Math.round(now - stats.firstChunkAt) : null;
+      log(`playback scheduled stream_id=${streamId} scheduled_delay_ms=${delayMs ?? "-"} chunk_duration_ms=${Math.round(durationSeconds * 1000)} since_first_chunk_ms=${sinceFirstChunkMs ?? "-"} audio_context_state=${audioContext ? audioContext.state : "-"}`);
+    }
+
+    function summarizeOutputPlayback(streamId, reason) {
+      const stats = outputPlaybackStats.get(String(streamId || ""));
+      if (!stats) return;
+      const now = performance.now();
+      const wallMs = stats.openedAt ? Math.round(now - stats.openedAt) : null;
+      const sinceFirstChunkMs = stats.firstChunkAt ? Math.round(now - stats.firstChunkAt) : null;
+      log(`playback ${reason} stream_id=${streamId} chunks=${stats.chunks} bytes=${stats.bytes} audio_ms=${stats.audioMs} wall_ms=${wallMs ?? "-"} since_first_chunk_ms=${sinceFirstChunkMs ?? "-"}`);
+      outputPlaybackStats.delete(String(streamId || ""));
+    }
+
+    async function ensureStreamSocketOpen() {
+      if (streamWs && streamWs.readyState === WebSocket.OPEN) return;
+      if (streamWs && streamWs.readyState === WebSocket.CONNECTING) {
+        await waitStreamSocketOpen();
+        return;
+      }
+      openStreamSocket();
+      await waitStreamSocketOpen();
+    }
+
+    function openStreamSocket() {
+      if (!deviceClient) {
+        deviceClient = createDeviceClient(currentDeviceId());
+      }
+      const streamUrl = wsUrl("/ws/stream", {device_id: currentDeviceId()});
+      log(`connect ${streamUrl}`);
+      streamWs = deviceClient.ensureStream();
+      streamWs.binaryType = "arraybuffer";
+      streamWs.onmessage = (message) => {
+        if (typeof message.data !== "string") handleStreamChunk(decodeStreamChunk(message.data));
+        else log(`stream text ${message.data}`);
+      };
+      streamWs.onopen = () => { log("stream ws open"); renderStatus(); };
+      streamWs.onclose = (evt) => { log(`stream ws closed code=${evt.code} reason=${evt.reason || "-"}`); renderStatus(); };
+      streamWs.onerror = () => { log("stream ws error"); renderStatus(); };
+      renderStatus();
+    }
+
+    async function waitStreamSocketOpen() {
+      if (!streamWs) throw new Error("stream websocket is not created");
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("stream websocket open timeout")), 5000);
+        const previousOpen = streamWs.onopen;
+        const previousError = streamWs.onerror;
+        streamWs.onopen = (evt) => {
+          clearTimeout(timer);
+          if (previousOpen) previousOpen(evt);
+          resolve();
+        };
+        streamWs.onerror = (evt) => {
+          clearTimeout(timer);
+          if (previousError) previousError(evt);
+          reject(new Error("stream websocket error"));
+        };
+      });
+    }
+
+    async function waitStreamSocketBufferedDrain(timeoutMs = 3000) {
+      if (!streamWs || streamWs.readyState !== WebSocket.OPEN) return;
+      const startedAt = Date.now();
+      while (streamWs.bufferedAmount > 0) {
+        if (Date.now() - startedAt > timeoutMs) {
+          throw new Error("stream websocket buffered data drain timeout");
+        }
+        await delay(20);
+      }
+    }
+
+    function closeStreamSocket(reason = "dialog_closed") {
+      if (!streamWs) {
+        renderStatus();
+        return;
+      }
+      if (streamWs.readyState === WebSocket.OPEN || streamWs.readyState === WebSocket.CONNECTING) {
+        try {
+          log(`close stream ws reason=${reason}`);
+          streamWs.close(1000, reason);
+        } catch (err) {
+          log(`close stream ws failed: ${err.message}`);
+        }
+      }
+      streamWs = null;
+      renderStatus();
+    }
+
+    function encodeStreamChunk(chunk) {
+      return StreamChunkCodec.encode(new StreamChunk({
+        version: chunk.version || PROTOCOL_VERSION,
+        userId: chunk.user_id,
+        sessionId: chunk.session_id,
+        streamId: chunk.stream_id,
+        streamType: chunk.stream_type,
+        seq: chunk.seq,
+        timestampMs: chunk.timestamp_ms || Date.now(),
+        codec: chunk.codec || "pcm16le",
+        sampleRate: chunk.sample_rate || INPUT_RATE,
+        channels: chunk.channels || 1,
+        durationMs: chunk.duration_ms || DEFAULT_CHUNK_MS,
+        final: Boolean(chunk.final),
+        metadata: chunk.metadata || {},
+        payload: chunk.payload,
+      }));
+    }
+
+    function decodeStreamChunk(raw) {
+      const chunk = StreamChunkCodec.decode(raw);
+      return {
+        version: chunk.version,
+        user_id: chunk.userId,
+        session_id: chunk.sessionId,
+        stream_id: chunk.streamId,
+        stream_type: chunk.streamType,
+        seq: chunk.seq,
+        timestamp_ms: chunk.timestampMs,
+        codec: chunk.codec,
+        sample_rate: chunk.sampleRate,
+        channels: chunk.channels,
+        duration_ms: chunk.durationMs,
+        final: chunk.final,
+        metadata: chunk.metadata,
+        payload: chunk.payload,
+      };
+    }
+
+    function floatToPcm16(samples) {
+      const out = new ArrayBuffer(samples.length * 2);
+      const view = new DataView(out);
+      for (let i = 0; i < samples.length; i += 1) {
+        const value = Math.max(-1, Math.min(0.999969, samples[i]));
+        view.setInt16(i * 2, value * 32767, true);
+      }
+      return new Uint8Array(out);
+    }
+
+    function concatBytes(a, b) {
+      const out = new Uint8Array(a.byteLength + b.byteLength);
+      out.set(a, 0);
+      out.set(b, a.byteLength);
+      return out;
+    }
+
+    function sendMicPayload(payload) {
+      streamWs.send(encodeStreamChunk({
+        user_id: document.getElementById("userId").value,
+        session_id: currentDeviceId(),
+        stream_id: inputStreamId,
+        stream_type: "sensor.mic",
+        seq: seq++,
+        payload,
+        codec: "pcm16le",
+        sample_rate: INPUT_RATE,
+        channels: 1,
+        duration_ms: DEFAULT_CHUNK_MS,
+        final: false,
+      }));
+      const current = streamStates.get(inputStreamId) || {};
+      setStreamState(inputStreamId, {
+        stream_type: "sensor.mic",
+        state: "open",
+        seq,
+        bytes_sent: (current.bytes_sent || 0) + payload.byteLength,
+      });
+    }
+
+    function sendFinalMicPayload(reason = "audio_segment_closed") {
+      if (!streamWs || streamWs.readyState !== WebSocket.OPEN || !inputStreamId || !sessionId) return;
+      const payload = micPcmBuffer.byteLength > 0 ? micPcmBuffer : new Uint8Array(0);
+      streamWs.send(encodeStreamChunk({
+        user_id: document.getElementById("userId").value,
+        session_id: currentDeviceId(),
+        stream_id: inputStreamId,
+        stream_type: "sensor.mic",
+        seq: seq++,
+        payload,
+        codec: "pcm16le",
+        sample_rate: INPUT_RATE,
+        channels: 1,
+        duration_ms: payload.byteLength > 0 ? DEFAULT_CHUNK_MS : 0,
+        final: true,
+        metadata: {reason},
+      }));
+      const current = streamStates.get(inputStreamId) || {};
+      setStreamState(inputStreamId, {
+        stream_type: "sensor.mic",
+        state: "final_sent",
+        seq,
+        bytes_sent: (current.bytes_sent || 0) + payload.byteLength,
+      });
+      log(`send final sensor.mic bytes=${payload.byteLength} reason=${reason}`);
+      micPcmBuffer = new Uint8Array(0);
+    }
+
+    function markMicInputClosed(streamId, reason = "server_closed") {
+      if (!streamId || streamId !== inputStreamId) return false;
+      if (offlineTimer) {
+        clearInterval(offlineTimer);
+        offlineTimer = null;
+      }
+      if (processor) processor.disconnect();
+      if (micSource) micSource.disconnect();
+      if (micStream) micStream.getTracks().forEach((track) => track.stop());
+      offlineAudio = null;
+      setStreamState(streamId, {stream_type: "sensor.mic", state: "closed", close_reason: reason});
+      inputStreamId = null;
+      processor = null; micSource = null; micStream = null;
+      micPcmBuffer = new Uint8Array(0);
+      activeAudioSource = audioModeSelect.value === "offline_realtime" ? "offline_paused" : "idle";
+      log(`sensor.mic closed by server stream_id=${streamId} reason=${reason}`);
+      renderStatus();
+      return true;
+    }
+
+    function pcm16ToFloat(payload) {
+      const view = new DataView(payload.buffer, payload.byteOffset, payload.byteLength);
+      const out = new Float32Array(payload.byteLength / 2);
+      for (let i = 0; i < out.length; i += 1) out[i] = view.getInt16(i * 2, true) / 32768;
+      return out;
+    }
+
+    function resampleLinear(input, fromRate, toRate) {
+      if (fromRate === toRate) return input;
+      const ratio = fromRate / toRate;
+      const out = new Float32Array(Math.max(1, Math.floor(input.length / ratio)));
+      for (let i = 0; i < out.length; i += 1) {
+        const pos = i * ratio;
+        const left = Math.floor(pos);
+        const frac = pos - left;
+        const a = input[left] || 0;
+        const b = input[left + 1] || a;
+        out[i] = a * (1 - frac) + b * frac;
+      }
+      return out;
+    }
+
+    function buildRegistrationPayload(deviceId) {
+      const builder = DeviceBuilder.define(deviceId)
+        .user(document.getElementById("userId").value)
+        .name(document.getElementById("deviceName").value || "浏览器调试设备")
+        .role("glass")
+        .runtime({platform: "browser", language: "javascript", version: navigator.userAgent})
+        .sensorRgb({
+          modes: ["single", "continuous"],
+          format: "jpeg",
+          frequencyHz: 1,
+          sampleCount: 1,
+          width: RGB_CAPTURE_MAX_WIDTH,
+          height: RGB_CAPTURE_MAX_HEIGHT,
+          external: {facing: "environment"},
+        })
+        .actuatorVibrator(["vibrate"]);
+      const payload = builder.registrationPayload();
+      return {
+        ...payload,
+        device_name: "browser-glass",
+        client_type: "browser-glass",
+        sdk_version: "realtime-agent-browser-glass-0.1.0",
+        auth: {mode: "disabled"},
+        supports: DEVICE_SUPPORTS,
+        properties: {
+          ...payload.properties,
+          "audio.aec": "browser_webrtc",
+          "audio.input.sample_rate": INPUT_RATE,
+          "audio.input.chunk_ms": DEFAULT_CHUNK_MS,
+          "realtime_agent.audio_input": "sensor.mic",
+          "realtime_agent.audio_output": "actuator.speaker",
+          "camera.facing": "environment",
+          "device_role": "glass",
+          "endpoint.role.glass": true,
+          "peer.video.sender": true,
+          "debug.manual_events": true,
+          "debug.file_upload": true,
+        },
+      };
+    }
+
+    function createDeviceClient(deviceId) {
+      const payload = buildRegistrationPayload(deviceId);
+      return new RealtimeAgentDeviceClient({
+        serverUrl: normalizeServerUrl(document.getElementById("serverUrl").value),
+        device: {
+          user_id: document.getElementById("userId").value,
+          ...payload,
+        },
+      });
+    }
+
+    async function connect() {
+      saveBrowserConfig();
+      const deviceId = currentDeviceId();
+      deviceClient = createDeviceClient(deviceId);
+      const controlUrl = wsUrl("/ws/control");
+      log(`connect ${controlUrl}`);
+      controlWs = deviceClient.connectControl();
+      controlWs.onmessage = (message) => handleControlEvent(RealtimeAgentEvent.fromObject(JSON.parse(message.data)).toObject());
+      controlWs.onerror = () => log("control ws error");
+      controlWs.onclose = (evt) => {
+        log(`control ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+        stopPeerVideoSender("control_ws_closed", null, {notify: false});
+      };
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("control websocket open timeout")), 5000);
+        controlWs.onopen = () => {
+          clearTimeout(timer);
+          log("control ws open");
+          resolve();
+        };
+        controlWs.onerror = () => {
+          clearTimeout(timer);
+          log("control ws error");
+          reject(new Error("control websocket error"));
+        };
+      });
+      sendEvent(event("control.device.register.requested", buildRegistrationPayload(deviceId)));
+    }
+
+    function startHeartbeat() {
+      if (heartbeatTimer) clearInterval(heartbeatTimer);
+      heartbeatTimer = setInterval(() => {
+        if (!controlWs || controlWs.readyState !== WebSocket.OPEN) return;
+        sendEvent(event("control.device.heartbeat.received", {
+          connection_state: "online",
+          client_type: "browser-glass",
+        }));
+      }, 10000);
+    }
+
+    async function handleControlEvent(item) {
+      logBroadcastEvent(item);
+      if (!isQuietEventName(item.event_name)) log(`recv ${item.event_name}`);
+      if (item.event_name === "control.device.registered") {
+        enableRegisteredControls();
+        log(`registered connection_id=${item.payload.connection_id}`);
+        startHeartbeat();
+        if (document.getElementById("autoWake").checked && !sessionId) {
+          sendWakeDetected("auto_wake");
+        }
+      } else if (item.event_name === "control.audio_session.open.requested") {
+        if (inputStreamId || openingMic) {
+          log("audio session already active; ignore duplicate open request");
+          return;
+        }
+        sessionId = currentDeviceId();
+        sendEvent(event("control.audio_session.opened", {reason: "browser_device_opened"}, {session_id: sessionId}));
+        renderStatus();
+        log("audio session opened; waiting for manual start audio");
+      } else if (item.event_name === "stream.output.start.requested" && item.stream_type === "actuator.speaker") {
+        markOutputOpen(item.stream_id);
+        await ensureStreamSocketOpen();
+        sendEvent(event("stream.output.ready", {stream_type: "actuator.speaker", reason: "browser_device_ready"}, {
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: item.stream_type,
+        }));
+      } else if (item.event_name === "stream.output.close.requested" || item.event_name === "stream.output.finish.requested") {
+        pendingOutputClose.set(item.stream_id, item);
+        log(`playback finish requested stream_id=${item.stream_id}`);
+        closeOutputWhenDrained(item.stream_id);
+      } else if (item.event_name === "stream.input.closed" && item.stream_type === "sensor.mic") {
+        markMicInputClosed(item.stream_id, (item.payload && item.payload.reason) || "server_closed");
+      } else if (item.event_name === "stream.control.open.requested" && item.stream_type === "sensor.rgb") {
+        await handleRgbConfigure(item);
+      } else if (item.event_name === "stream.control.close.requested" && item.stream_type === "sensor.rgb") {
+        stopContinuousRgb("server_close_requested");
+      } else if (item.event_name === "command.requested") {
+        await handleDeviceCommand(item);
+      } else if (item.event_name === "stream.output.start.requested" && item.stream_type === "actuator.haptic") {
+        sendEvent(event("stream.output.started", {stream_type: "actuator.haptic"}, {
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
+        }));
+        sendEvent(event("stream.output.finished", {stream_type: "actuator.haptic"}, {
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
+        }));
+        sendEvent(event("stream.output.closed", {stream_type: "actuator.haptic", reason: "browser_device_haptic_logged"}, {
+          session_id: currentDeviceId(), stream_id: item.stream_id, stream_type: "actuator.haptic",
+        }));
+      } else if (
+        item.event_name === "stream.output.cancel.requested"
+        || item.event_name === "stream.output.cancelled"
+        || item.event_name === "stream.output.failed"
+      ) {
+        const reason = (item.payload && item.payload.reason) || "server_cancelled";
+        stopOutputPlayback(item.stream_id, reason);
+      } else if (item.event_name === "audio.speech.started") {
+        stopAllOutputPlayback("server_speech_started");
+      } else if (item.event_name === "control.audio_session.close.requested") {
+        await closeAudioSessionByServerRequest();
+      }
+    }
+
+    async function handleDeviceCommand(item) {
+      const payload = item.payload || {};
+      const command = payload.command || "";
+      if (command === "peer.video.sender.start") {
+        await startPeerVideoSender(item);
+        return;
+      }
+      if (command === "peer.video.sender.start.stop") {
+        await stopPeerVideoSender("server_stop", item);
+        return;
+      }
+      sendCommandEvent("command.failed", item, {
+        message: `unsupported command: ${command}`,
+      });
+    }
+
+    function sendCommandEvent(eventName, commandEvent, payload = {}) {
+      const commandPayload = commandEvent.payload || {};
+      sendEvent(event(eventName, {
+        command_id: commandPayload.command_id,
+        command: commandPayload.command,
+        ...payload,
+      }, {session_id: currentDeviceId()}));
+    }
+
+    async function startPeerVideoSender(commandEvent) {
+      const payload = commandEvent.payload || {};
+      const params = payload.params || {};
+      const receiver = params.receiver || {};
+      const url = receiver.url || "";
+      if (!url) {
+        sendCommandEvent("command.failed", commandEvent, {message: "peer video receiver url is required"});
+        return;
+      }
+      await stopPeerVideoSender("restart");
+      sendCommandEvent("command.accepted", commandEvent, {
+        peer_session_id: params.peer_session_id,
+        task_type: params.task_type,
+        role: "sender",
+        message: "peer video sender accepted",
+      });
+      sendCommandEvent("command.progress", commandEvent, {
+        peer_session_id: params.peer_session_id,
+        task_type: params.task_type,
+        role: "sender",
+        status: "peer.sender.connecting",
+        data: {receiver},
+      });
+      log(`peer.video.sender.start url=${url}`);
+      const ws = new WebSocket(url);
+      ws.binaryType = "arraybuffer";
+      peerVideoSender = {
+        ws,
+        timer: null,
+        commandEvent,
+        params,
+        frameSeq: 0,
+        stopped: false,
+        terminalReported: false,
+      };
+      ws.onopen = () => {
+        log("peer.sender.connected");
+        sendCommandEvent("command.progress", commandEvent, {
+          peer_session_id: params.peer_session_id,
+          task_type: params.task_type,
+          role: "sender",
+          status: "peer.sender.connected",
+        });
+        const fps = Math.max(1, Number((params.source || {}).fps || 5));
+        const intervalMs = Math.max(100, Math.round(1000 / fps));
+        peerVideoSender.timer = setInterval(() => {
+          sendPeerVideoFrame(peerVideoSender, fps).catch((err) => {
+            log(`peer.video.frame.failed ${err.message}`);
+          });
+        }, intervalMs);
+      };
+      ws.onerror = () => {
+        log("peer video sender ws error");
+        failPeerVideoSender(commandEvent, "peer video sender websocket error");
+      };
+      ws.onclose = (evt) => {
+        log(`peer video sender ws closed code=${evt.code} reason=${evt.reason || "-"}`);
+        if (peerVideoSender && !peerVideoSender.stopped) {
+          failPeerVideoSender(commandEvent, `peer video sender websocket closed: ${evt.reason || evt.code || "closed"}`);
+        }
+      };
+    }
+
+    async function sendPeerVideoFrame(sender, fps = 5) {
+      if (!sender || sender.stopped || !sender.ws || sender.ws.readyState !== WebSocket.OPEN) return;
+      const frame = await capturePeerVideoFrame({
+        fps,
+        previewThrottleMs: CAPTURE_PREVIEW_MIN_INTERVAL_MS,
+        thumbnailThrottleMs: CAPTURE_THUMBNAIL_MIN_INTERVAL_MS,
+      });
+      sender.ws.send(frame.bytes);
+      sender.frameSeq += 1;
+    }
+
+    async function capturePeerVideoFrame(options = {}) {
+      return await captureVisualFrame(options);
+    }
+
+    function failPeerVideoSender(commandEvent, message) {
+      if (peerVideoSender) {
+        peerVideoSender.terminalReported = true;
+        peerVideoSender.stopped = true;
+        if (peerVideoSender.timer) clearInterval(peerVideoSender.timer);
+        stopSelectedVideoCapture();
+      }
+      sendCommandEvent("command.failed", commandEvent, {
+        message,
+        error_code: "peer_video_sender_failed",
+      });
+      peerVideoSender = null;
+    }
+
+    async function stopPeerVideoSender(reason = "manual_stop", commandEvent = null, options = {}) {
+      const notify = options.notify !== false;
+      if (peerVideoSender) {
+        peerVideoSender.stopped = true;
+        if (peerVideoSender.timer) clearInterval(peerVideoSender.timer);
+        if (peerVideoSender.ws && [WebSocket.OPEN, WebSocket.CONNECTING].includes(peerVideoSender.ws.readyState)) {
+          peerVideoSender.ws.close(1000, reason);
+        }
+        stopSelectedVideoCapture();
+        log(`peer.video.sender.stop reason=${reason}`);
+        peerVideoSender = null;
+      }
+      if (commandEvent && notify) {
+        sendCommandEvent("command.completed", commandEvent, {
+          target_command_id: ((commandEvent.payload || {}).params || {}).command_id,
+          result: {stopped: true, reason},
+        });
+      }
+    }
+
+    async function handleRgbConfigure(item) {
+      const mode = (item.payload && item.payload.mode) || "single";
+      if (mode === "stop") {
+        await stopContinuousRgb("server_stop");
+        return;
+      }
+      if (mode === "continuous") {
+        if (hasSelectedVideo()) {
+          await uploadSelectedVideoFramesRealtime(item);
+          return;
+        }
+        await uploadSingleVisualSnapshot(item);
+        return;
+      }
+      await uploadSingleVisualSnapshot(item);
+    }
+
+    async function uploadSingleVisualSnapshot(item = null) {
+      if (hasSelectedVideo()) {
+        await uploadRgbImages([await captureVisualFrame({fps: Number((item && item.payload && item.payload.frequency_hz) || 1)})], item, "video_frame_captured");
+        return;
+      }
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
+        await uploadSelectedImages(item);
+        return;
+      }
+      await uploadRgbImages([await captureLiveCameraFrame()], item, "camera_frame_captured");
+    }
+
+    async function uploadSelectedImages(item = null) {
+      await uploadRgbImages(await readSelectedImageFrames(), item, "images_uploaded");
+    }
+
+    async function uploadRgbImages(images, item = null, reason = "images_uploaded") {
+      const requestId = item && item.payload && item.payload.request_id;
+      const payload = (item && item.payload) || {};
+      const rgbStreamId = newId("stream_rgb");
+      const activeSession = currentDeviceId();
+      try {
+        await ensureStreamSocketOpen();
+        if (!images.length) throw new Error("没有可上传的图片帧");
+        sendEvent(event("stream.input.opened", {
+          stream_type: "sensor.rgb",
+          format: {codec: "jpeg", sample_rate: 1, channels: 1, chunk_ms: 1},
+          request_id: requestId,
+          image_count: images.length,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: 0, bytes_sent: 0, opened_at: Date.now()});
+        await delay(120);
+        let bytesSent = 0;
+        for (let index = 0; index < images.length; index += 1) {
+          const image = images[index];
+          const encoded = encodeStreamChunk({
+            user_id: document.getElementById("userId").value,
+            session_id: activeSession,
+            stream_id: rgbStreamId,
+            stream_type: "sensor.rgb",
+            seq: index,
+            payload: image.bytes,
+            codec: "jpeg",
+            sample_rate: 1,
+            channels: 1,
+            duration_ms: 1,
+            final: index === images.length - 1,
+            metadata: {
+              request_id: requestId,
+              turn_id: payload.turn_id,
+              ttl_seconds: payload.ttl_seconds,
+              capture_reason: payload.capture_reason || payload.reason || reason,
+              captured_at_ms: Date.now(),
+              sequence_index: index,
+              direction: payload.direction || "front",
+              width: image.width,
+              height: image.height,
+              image_index: index,
+              image_count: images.length,
+              reason: payload.reason || reason,
+            },
+          });
+          const bufferedBefore = streamWs.bufferedAmount;
+          streamWs.send(encoded);
+          log(`send sensor.rgb chunk stream_id=${rgbStreamId} seq=${index} bytes=${image.bytes.byteLength} encoded=${encoded.byteLength} request_id=${requestId || "-"} ws_state=${streamWs.readyState} buffered_before=${bufferedBefore} buffered_after=${streamWs.bufferedAmount}`);
+          bytesSent += image.bytes.byteLength;
+        }
+        await waitStreamSocketBufferedDrain();
+        await delay(80);
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason,
+          request_id: requestId,
+          image_count: images.length,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: images.length, bytes_sent: bytesSent, close_reason: reason});
+        log(`send sensor.rgb images count=${images.length} bytes=${bytesSent} request_id=${requestId || "-"}`);
+      } catch (err) {
+        log(`capture sensor.rgb failed: ${err.message}`);
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "capture_failed",
+          error: err.message,
+          request_id: requestId,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+      }
+    }
+
+    async function uploadSelectedVideoFramesRealtime(item = null) {
+      const payload = (item && item.payload) || {};
+      const requestId = payload.request_id;
+      const fps = Math.max(1, Number(payload.frequency_hz || payload.fps || 5));
+      const sampleCount = Number(payload.sample_count || 0);
+      const durationSeconds = Number(payload.duration_seconds || 0);
+      const fallbackCount = selectedVideoSourceEl.duration ? Math.ceil(selectedVideoSourceEl.duration * fps) : fps;
+      const frameCount = Math.max(1, Math.min(600, sampleCount || Math.ceil(durationSeconds * fps) || fallbackCount));
+      const intervalMs = Math.max(100, Math.round(1000 / fps));
+      const rgbStreamId = newId("stream_rgb");
+      const activeSession = currentDeviceId();
+      let bytesSent = 0;
+      try {
+        await ensureStreamSocketOpen();
+        await ensureSelectedVideoReady();
+        sendEvent(event("stream.input.opened", {
+          stream_type: "sensor.rgb",
+          format: {codec: "jpeg", sample_rate: fps, channels: 1, chunk_ms: intervalMs},
+          request_id: requestId,
+          image_count: frameCount,
+          source: "selected_video",
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: 0, bytes_sent: 0, opened_at: Date.now()});
+        await delay(120);
+        for (let index = 0; index < frameCount; index += 1) {
+          const startedAt = Date.now();
+          const image = await captureSelectedVideoFrame({
+            fps,
+            previewThrottleMs: CAPTURE_PREVIEW_MIN_INTERVAL_MS,
+            thumbnailThrottleMs: CAPTURE_THUMBNAIL_MIN_INTERVAL_MS,
+          });
+          streamWs.send(encodeStreamChunk({
+            user_id: document.getElementById("userId").value,
+            session_id: activeSession,
+            stream_id: rgbStreamId,
+            stream_type: "sensor.rgb",
+            seq: index,
+            payload: image.bytes,
+            codec: "jpeg",
+            sample_rate: fps,
+            channels: 1,
+            duration_ms: intervalMs,
+            final: index === frameCount - 1,
+            metadata: {
+              request_id: requestId,
+              turn_id: payload.turn_id,
+              ttl_seconds: payload.ttl_seconds,
+              capture_reason: payload.capture_reason || payload.reason || "video_frames_uploaded",
+              captured_at_ms: Date.now(),
+              sequence_index: index,
+              direction: payload.direction || "front",
+              width: image.width,
+              height: image.height,
+              image_index: index,
+              image_count: frameCount,
+              video_time_seconds: selectedVideoSourceEl.currentTime,
+              reason: payload.reason || "video_frames_uploaded",
+            },
+          }));
+          bytesSent += image.bytes.byteLength;
+          setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "open", seq: index + 1, bytes_sent: bytesSent});
+          const remaining = intervalMs - (Date.now() - startedAt);
+          if (index < frameCount - 1 && remaining > 0) await delay(remaining);
+        }
+        await waitStreamSocketBufferedDrain();
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "video_frames_uploaded",
+          request_id: requestId,
+          image_count: frameCount,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+        setStreamState(rgbStreamId, {stream_type: "sensor.rgb", state: "closed", seq: frameCount, bytes_sent: bytesSent, close_reason: "video_frames_uploaded"});
+        log(`send sensor.rgb video frames count=${frameCount} fps=${fps} bytes=${bytesSent} request_id=${requestId || "-"}`);
+      } catch (err) {
+        log(`capture sensor.rgb video failed: ${err.message}`);
+        sendEvent(event("stream.input.closed", {
+          stream_type: "sensor.rgb",
+          reason: "capture_failed",
+          error: err.message,
+          request_id: requestId,
+        }, {session_id: activeSession, stream_id: rgbStreamId, stream_type: "sensor.rgb"}));
+      }
+    }
+
+    async function readSelectedImageFrames() {
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
+      if (!files.length) throw new Error("请选择图片文件");
+      const images = [];
+      for (const file of files) {
+        images.push(await imageFileToJpegFrame(file));
+      }
+      return images;
+    }
+
+    function hasSelectedVideo() {
+      return Boolean(selectedVideoSampleFile || document.getElementById("videoFile").files.length);
+    }
+
+    async function captureVisualFrame(options = {}) {
+      if (hasSelectedVideo()) return await captureSelectedVideoFrame(options);
+      if (selectedImageSampleFiles.length || document.getElementById("imageFile").files.length) {
+        const frames = await readSelectedImageFrames();
+        return frames[0];
+      }
+      return await captureLiveCameraFrame();
+    }
+
+    async function imageFileToJpegFrame(file) {
+      const bitmap = await createImageBitmap(file);
+      const canvas = document.createElement("canvas");
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / bitmap.width, RGB_CAPTURE_MAX_HEIGHT / bitmap.height);
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      const frame = await encodeBoundedJpegFrame(canvas, canvas.width, canvas.height);
+      renderCapturedFramePreview(canvas, canvas.width, canvas.height, "image");
+      return frame;
+    }
+
+    async function renderSelectedImagePreview() {
+      const files = selectedImageSampleFiles.length
+        ? selectedImageSampleFiles
+        : Array.from(document.getElementById("imageFile").files || []);
+      if (!files.length) return;
+      const bitmap = await createImageBitmap(files[0]);
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / bitmap.width, RGB_CAPTURE_MAX_HEIGHT / bitmap.height);
+      const width = Math.max(1, Math.round(bitmap.width * scale));
+      const height = Math.max(1, Math.round(bitmap.height * scale));
+      visualFramePreviewEl.width = width;
+      visualFramePreviewEl.height = height;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.clearRect(0, 0, width, height);
+      ctx.drawImage(bitmap, 0, 0, width, height);
+    }
+
+    async function renderSelectedVideoPreview() {
+      showVisualPreview();
+      drawPreviewPlaceholder("正在加载视频预览");
+      await ensureSelectedVideoReady();
+      selectedVideoSourceEl.pause();
+      if (selectedVideoSourceEl.currentTime !== 0) {
+        selectedVideoSourceEl.currentTime = 0;
+        await waitForVideoSeek(selectedVideoSourceEl);
+      }
+      await waitForVideoPaint(selectedVideoSourceEl, 120);
+      drawVideoFrameToPreview("video preview");
+    }
+
+    async function ensureSelectedVideoTimelineRunning() {
+      await ensureSelectedVideoReady();
+      if (selectedVideoSourceEl.ended || selectedVideoSourceEl.currentTime >= selectedVideoSourceEl.duration) {
+        selectedVideoSourceEl.currentTime = 0;
+        await waitForVideoSeek(selectedVideoSourceEl);
+      }
+      if (selectedVideoSourceEl.paused) {
+        await selectedVideoSourceEl.play();
+      }
+    }
+
+    function stopSelectedVideoCapture() {
+      selectedVideoSourceEl.pause();
+    }
+
+    async function captureSelectedVideoFrame(options = {}) {
+      const fps = Math.max(1, Number(options.fps || 1));
+      await ensureSelectedVideoTimelineRunning();
+      await waitForVideoPaint(selectedVideoSourceEl, Math.round(1000 / fps));
+      const sourceWidth = selectedVideoSourceEl.videoWidth || RGB_CAPTURE_MAX_WIDTH;
+      const sourceHeight = selectedVideoSourceEl.videoHeight || RGB_CAPTURE_MAX_HEIGHT;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(selectedVideoSourceEl, 0, 0, width, height);
+      renderCapturedFramePreview(canvas, width, height, `video ${selectedVideoSourceEl.currentTime.toFixed(2)}s`, {
+        previewThrottleMs: Number(options.previewThrottleMs || 0),
+        thumbnailThrottleMs: Number(options.thumbnailThrottleMs || 0),
+      });
+      return await encodeBoundedJpegFrame(canvas, width, height);
+    }
+
+    function drawVideoFrameToPreview(label) {
+      const sourceWidth = selectedVideoSourceEl.videoWidth || RGB_CAPTURE_MAX_WIDTH;
+      const sourceHeight = selectedVideoSourceEl.videoHeight || RGB_CAPTURE_MAX_HEIGHT;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      visualFramePreviewEl.width = width;
+      visualFramePreviewEl.height = height;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.drawImage(selectedVideoSourceEl, 0, 0, width, height);
+      ctx.fillStyle = "rgba(15, 23, 34, 0.72)";
+      ctx.fillRect(8, 8, Math.min(width - 16, 360), 28);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "14px ui-monospace, Menlo, monospace";
+      ctx.fillText(label || "video preview", 18, 27);
+    }
+
+    function drawPreviewPlaceholder(text) {
+      visualFramePreviewEl.width = RGB_CAPTURE_MAX_WIDTH;
+      visualFramePreviewEl.height = RGB_CAPTURE_MAX_HEIGHT;
+      const ctx = visualFramePreviewEl.getContext("2d");
+      ctx.fillStyle = "#0f1722";
+      ctx.fillRect(0, 0, visualFramePreviewEl.width, visualFramePreviewEl.height);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "24px -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText(text || "等待采集帧", visualFramePreviewEl.width / 2, visualFramePreviewEl.height / 2);
+      ctx.textAlign = "start";
+    }
+
+    async function ensureSelectedVideoReady() {
+      const file = selectedVideoSampleFile || document.getElementById("videoFile").files[0];
+      if (!file) throw new Error("请选择视频文件");
+      if (!selectedVideoSampleFile && !selectedVideoSourceEl.src) setSelectedVideoSample(null, file);
+      if (selectedVideoSourceEl.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) return;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("video load timeout")), 5000);
+        selectedVideoSourceEl.onloadeddata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        selectedVideoSourceEl.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error("video load failed"));
+        };
+        selectedVideoSourceEl.load();
+      });
+    }
+
+    function waitForVideoSeek(video) {
+      return new Promise((resolve) => {
+        if (!video.seeking) {
+          resolve();
+          return;
+        }
+        video.onseeked = () => resolve();
+      });
+    }
+
+    async function waitForVideoPaint(video, fallbackMs) {
+      if (typeof video.requestVideoFrameCallback === "function") {
+        await new Promise((resolve) => {
+          const timer = setTimeout(resolve, Math.max(80, Math.min(300, fallbackMs || 120)));
+          video.requestVideoFrameCallback(() => {
+            clearTimeout(timer);
+            resolve();
+          });
+        });
+        return;
+      }
+      await delay(Math.max(40, Math.min(200, fallbackMs || 120)));
+    }
+
+    function renderCapturedFramePreview(sourceCanvas, width, height, label, options = {}) {
+      const now = Date.now();
+      const previewThrottleMs = Math.max(0, Number(options.previewThrottleMs || 0));
+      const thumbnailThrottleMs = Math.max(0, Number(options.thumbnailThrottleMs || 0));
+      const shouldUpdatePreview = !previewThrottleMs || now - lastCapturedPreviewAt >= previewThrottleMs;
+      const shouldUpdateThumbnail = !thumbnailThrottleMs || now - lastCapturedThumbnailAt >= thumbnailThrottleMs;
+      if (!shouldUpdatePreview && !shouldUpdateThumbnail) return;
+      if (shouldUpdatePreview) {
+        lastCapturedPreviewAt = now;
+      }
+      if (shouldUpdateThumbnail) {
+        lastCapturedThumbnailAt = now;
+      }
+      if (!shouldUpdatePreview) {
+        appendCapturedFrameThumbnail(sourceCanvas, width, height);
+        return;
+      }
+      const canvas = visualFramePreviewEl;
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(sourceCanvas, 0, 0, width, height);
+      ctx.fillStyle = "rgba(15, 23, 34, 0.72)";
+      ctx.fillRect(8, 8, Math.min(width - 16, 360), 28);
+      ctx.fillStyle = "#dbe7ff";
+      ctx.font = "14px ui-monospace, Menlo, monospace";
+      ctx.fillText(`captured ${label || "frame"}`, 18, 27);
+      if (shouldUpdateThumbnail) appendCapturedFrameThumbnail(sourceCanvas, width, height);
+    }
+
+    function appendCapturedFrameThumbnail(sourceCanvas, width, height) {
+      const thumb = document.createElement("canvas");
+      thumb.className = "frame-thumb";
+      thumb.width = 156;
+      thumb.height = 108;
+      thumb.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height, 0, 0, thumb.width, thumb.height);
+      capturedFrameStripEl.appendChild(thumb);
+      while (capturedFrameStripEl.children.length > CAPTURE_THUMBNAIL_MAX_COUNT) {
+        capturedFrameStripEl.removeChild(capturedFrameStripEl.firstElementChild);
+      }
+      capturedFrameStripEl.scrollLeft = capturedFrameStripEl.scrollWidth;
+    }
+
+    async function captureLiveCameraFrame() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("browser camera API unavailable");
+      }
+      if (!cameraStream) {
+        cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: {facingMode: "environment", width: {ideal: RGB_CAPTURE_MAX_WIDTH}, height: {ideal: RGB_CAPTURE_MAX_HEIGHT}},
+          audio: false,
+        });
+        const track = cameraStream.getVideoTracks()[0];
+        log(`camera settings ${JSON.stringify(track.getSettings())}`);
+      }
+      return await captureJpegFrame(cameraStream);
+    }
+
+    async function stopContinuousRgb(reason = "manual_stop") {
+      if (cameraStream) cameraStream.getTracks().forEach((track) => track.stop());
+      cameraStream = null;
+    }
+
+    async function captureJpegFrame(stream) {
+      const video = document.createElement("video");
+      video.muted = true;
+      video.playsInline = true;
+      video.srcObject = stream;
+      await new Promise((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("camera frame timeout")), 3000);
+        video.onloadedmetadata = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      await video.play();
+      await delay(150);
+      const settings = stream.getVideoTracks()[0].getSettings();
+      const sourceWidth = video.videoWidth || settings.width || 640;
+      const sourceHeight = video.videoHeight || settings.height || 480;
+      const scale = Math.min(1, RGB_CAPTURE_MAX_WIDTH / sourceWidth, RGB_CAPTURE_MAX_HEIGHT / sourceHeight);
+      const width = Math.max(1, Math.round(sourceWidth * scale));
+      const height = Math.max(1, Math.round(sourceHeight * scale));
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      canvas.getContext("2d").drawImage(video, 0, 0, width, height);
+      video.pause();
+      renderCapturedFramePreview(canvas, width, height, "camera");
+      return await encodeBoundedJpegFrame(canvas, width, height);
+    }
+
+    async function encodeBoundedJpegFrame(sourceCanvas, sourceWidth, sourceHeight) {
+      const primary = await encodeJpegFromCanvas(sourceCanvas, sourceWidth, sourceHeight, RGB_JPEG_QUALITY);
+      if (primary.bytes.byteLength <= RGB_JPEG_MAX_BYTES) return primary;
+      const fallbackScale = 0.65;
+      const width = Math.max(1, Math.round(sourceWidth * fallbackScale));
+      const height = Math.max(1, Math.round(sourceHeight * fallbackScale));
+      const fallbackCanvas = document.createElement("canvas");
+      fallbackCanvas.width = width;
+      fallbackCanvas.height = height;
+      fallbackCanvas.getContext("2d").drawImage(sourceCanvas, 0, 0, width, height);
+      const fallback = await encodeJpegFromCanvas(fallbackCanvas, width, height, 0.62);
+      if (fallback.bytes.byteLength > RGB_JPEG_MAX_BYTES) {
+        log(`jpeg frame still large after fallback compression bytes=${fallback.bytes.byteLength}`);
+      }
+      return fallback;
+    }
+
+    async function encodeJpegFromCanvas(canvas, width, height, quality) {
+      const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", quality));
+      if (!blob) throw new Error("jpeg encode failed");
+      return {bytes: new Uint8Array(await blob.arrayBuffer()), width, height};
+    }
+
+    async function openAudioInput() {
+      const mode = audioModeSelect.value;
+      if (mode === "live_mic") {
+        await openMicStream();
+        return;
+      }
+      await openOfflineAudioStream();
+    }
+
+    async function readSelectedAudioAsPcm16() {
+      const file = selectedAudioSampleFile || document.getElementById("audioFile").files[0];
+      if (!file) throw new Error("请选择 WAV/PCM 音频文件");
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      if (file.name.toLowerCase().endsWith(".pcm")) return bytes;
+      audioContext = audioContext || new AudioContext();
+      await audioContext.resume();
+      const buffer = await audioContext.decodeAudioData(bytes.buffer.slice(0));
+      const channel = buffer.getChannelData(0);
+      return floatToPcm16(resampleLinear(channel, buffer.sampleRate, INPUT_RATE));
+    }
+
+    async function openOfflineAudioStream() {
+      if (openingMic) return;
+      if (inputStreamId && activeAudioSource !== "offline_paused") return;
+      openingMic = true;
+      renderStatus();
+      try {
+        await ensureStreamSocketOpen();
+        offlineAudio = await readSelectedAudioAsPcm16();
+        const tailSilenceChunks = Math.ceil(OFFLINE_TAIL_SILENCE_MS / DEFAULT_CHUNK_MS);
+        const tailSilenceBytes = tailSilenceChunks * MIC_CHUNK_BYTES;
+        if (tailSilenceBytes > 0) {
+          const audioWithTail = new Uint8Array(offlineAudio.byteLength + tailSilenceBytes);
+          audioWithTail.set(offlineAudio, 0);
+          offlineAudio = audioWithTail;
+        }
+        const reuseStream = Boolean(inputStreamId);
+        inputStreamId = inputStreamId || newId("stream_in");
+        if (!reuseStream) seq = 0;
+        activeAudioSource = "offline_realtime";
+        if (!reuseStream) {
+          sendEvent(event("stream.input.opened", {
+            stream_type: "sensor.mic",
+            format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
+            source: activeAudioSource,
+          }, {session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic"}));
+        } else {
+          log(`resume sensor.mic stream_id=${inputStreamId}`);
+        }
+        setStreamState(inputStreamId, {
+          stream_type: "sensor.mic",
+          state: "open",
+          seq,
+          bytes_sent: (streamStates.get(inputStreamId) || {}).bytes_sent || 0,
+          opened_at: Date.now(),
+        });
+        closeButton.disabled = false;
+        renderStatus();
+        sendOfflineAudioRealtime();
+      } finally {
+        openingMic = false;
+        renderStatus();
+      }
+    }
+
+    function sendOfflineAudioRealtime() {
+      if (!offlineAudio || !inputStreamId) return;
+      let offset = 0;
+      offlineTimer = setInterval(() => {
+        if (!inputStreamId || !offlineAudio) {
+          clearInterval(offlineTimer);
+          offlineTimer = null;
+          return;
+        }
+        if (offset >= offlineAudio.byteLength) {
+          clearInterval(offlineTimer);
+          offlineTimer = null;
+          log(`offline realtime audio complete bytes=${offlineAudio.byteLength}`);
+          finishOfflineAudioFile();
+          return;
+        }
+        const end = Math.min(offset + MIC_CHUNK_BYTES, offlineAudio.byteLength);
+        const chunk = offlineAudio.slice(offset, end);
+        sendMicPayload(chunk.byteLength === MIC_CHUNK_BYTES ? chunk : concatBytes(chunk, new Uint8Array(MIC_CHUNK_BYTES - chunk.byteLength)));
+        offset = end;
+      }, DEFAULT_CHUNK_MS);
+    }
+
+    function finishOfflineAudioFile() {
+      sendFinalMicPayload("offline_segment_completed");
+      offlineAudio = null;
+      activeAudioSource = "offline_paused";
+      log("offline audio segment finished; sensor.mic stays open and waits for next segment");
+      renderStatus();
+    }
+
+    async function stopOfflineTimers() {
+      if (offlineTimer) clearInterval(offlineTimer);
+      offlineTimer = null;
+      offlineAudio = null;
+    }
+
+    async function openMicStream() {
+      if (openingMic || inputStreamId) return;
+      openingMic = true;
+      renderStatus();
+      audioContext = audioContext || new AudioContext();
+      await audioContext.resume();
+      try {
+        await ensureStreamSocketOpen();
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+        const track = micStream.getAudioTracks()[0];
+        log(`mic settings ${JSON.stringify(track.getSettings())}`);
+        inputStreamId = newId("stream_in");
+        seq = 0;
+        micPcmBuffer = new Uint8Array(0);
+        activeAudioSource = "live_mic";
+        sendEvent(event("stream.input.opened", {
+          stream_type: "sensor.mic",
+          format: {codec: "pcm16le", sample_rate: INPUT_RATE, channels: 1, chunk_ms: DEFAULT_CHUNK_MS},
+        }, {session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic"}));
+        setStreamState(inputStreamId, {
+          stream_type: "sensor.mic",
+          state: "open",
+          seq: 0,
+          bytes_sent: 0,
+          opened_at: Date.now(),
+        });
+        await delay(120);
+        micSource = audioContext.createMediaStreamSource(micStream);
+        processor = audioContext.createScriptProcessor(2048, 1, 1);
+        processor.onaudioprocess = (evt) => {
+          if (!streamWs || streamWs.readyState !== WebSocket.OPEN || !inputStreamId) return;
+          const input = evt.inputBuffer.getChannelData(0);
+          const pcm16 = floatToPcm16(resampleLinear(input, audioContext.sampleRate, INPUT_RATE));
+          micPcmBuffer = concatBytes(micPcmBuffer, pcm16);
+          while (micPcmBuffer.byteLength >= MIC_CHUNK_BYTES) {
+            sendMicPayload(micPcmBuffer.slice(0, MIC_CHUNK_BYTES));
+            micPcmBuffer = micPcmBuffer.slice(MIC_CHUNK_BYTES);
+          }
+        };
+        micSource.connect(processor);
+        processor.connect(audioContext.destination);
+        closeButton.disabled = false;
+        renderStatus();
+      } finally {
+        openingMic = false;
+        renderStatus();
+      }
+    }
+
+    function handleStreamChunk(chunk) {
+      if (chunk.stream_type === "actuator.haptic") {
+        log(`recv haptic chunk bytes=${chunk.payload.byteLength}`);
+        return;
+      }
+      if (chunk.stream_type !== "actuator.speaker") return;
+      if (outputClosed.has(chunk.stream_id)) {
+        log(`drop audio chunk for closed output stream_id=${chunk.stream_id} seq=${chunk.seq}`);
+        return;
+      }
+      const durationMs = Math.round((chunk.payload.byteLength / 2) / (chunk.sample_rate || INPUT_RATE) * 1000);
+      recordOutputChunk(chunk, durationMs);
+      if (!outputStarted.has(chunk.stream_id)) {
+        outputStarted.add(chunk.stream_id);
+        sendEvent(event("stream.output.started", {stream_type: "actuator.speaker"}, {
+          session_id: currentDeviceId(), stream_id: chunk.stream_id, stream_type: chunk.stream_type,
+        }));
+      }
+      playbackWriteChain = playbackWriteChain
+        .then(() => playPcm16(chunk))
+        .catch((err) => log(`playback write failed stream_id=${chunk.stream_id}: ${err.message}`));
+    }
+
+    async function ensureAudioContext() {
+      audioContext = audioContext || new AudioContext();
+      if (audioContext.state !== "running") await audioContext.resume();
+      return audioContext;
+    }
+
+    function playbackWorkletCode() {
+      return `
+        class PcmPlaybackProcessor extends AudioWorkletProcessor {
+          constructor() {
+            super();
+            this.queue = [];
+            this.current = null;
+            this.finished = new Set();
+            this.openStreams = new Set();
+            this.underrunFrames = 0;
+            this.underrunEvents = 0;
+            this.wasUnderrun = false;
+            this.port.onmessage = (event) => this.handleMessage(event.data || {});
+          }
+
+          handleMessage(message) {
+            if (message.type === "push") {
+              const samples = message.samples instanceof Float32Array
+                ? message.samples
+                : new Float32Array(message.samples || 0);
+              this.queue.push({streamId: message.streamId, samples, offset: 0});
+              this.openStreams.add(message.streamId);
+              return;
+            }
+            if (message.type === "finish") {
+              this.finished.add(message.streamId);
+              this.maybeNotifyDrained(message.streamId);
+              return;
+            }
+            if (message.type === "stop") {
+              this.queue = this.queue.filter((item) => item.streamId !== message.streamId);
+              if (this.current && this.current.streamId === message.streamId) this.current = null;
+              this.finished.delete(message.streamId);
+              this.openStreams.delete(message.streamId);
+              return;
+            }
+            if (message.type === "stopAll") {
+              this.queue = [];
+              this.current = null;
+              this.finished.clear();
+              this.openStreams.clear();
+            }
+          }
+
+          hasQueuedStream(streamId) {
+            if (this.current && this.current.streamId === streamId) return true;
+            return this.queue.some((item) => item.streamId === streamId);
+          }
+
+          maybeNotifyDrained(streamId) {
+            if (!this.finished.has(streamId) || this.hasQueuedStream(streamId)) return;
+            this.finished.delete(streamId);
+            this.openStreams.delete(streamId);
+            this.port.postMessage({type: "drained", streamId});
+          }
+
+          nextSample() {
+            while (!this.current || this.current.offset >= this.current.samples.length) {
+              const finishedStreamId = this.current ? this.current.streamId : null;
+              this.current = this.queue.shift() || null;
+              if (finishedStreamId) this.maybeNotifyDrained(finishedStreamId);
+              if (!this.current) return 0;
+            }
+            const value = this.current.samples[this.current.offset] || 0;
+            this.current.offset += 1;
+            return value;
+          }
+
+          process(_inputs, outputs) {
+            const output = outputs[0] && outputs[0][0];
+            if (!output) return true;
+            for (let i = 0; i < output.length; i += 1) {
+              const hadData = this.current || this.queue.length > 0;
+              output[i] = this.nextSample();
+              const hasOpenStreams = this.openStreams.size > 0;
+              if (!hadData && hasOpenStreams) {
+                this.underrunFrames += 1;
+                if (!this.wasUnderrun) {
+                  this.underrunEvents += 1;
+                  this.wasUnderrun = true;
+                  this.port.postMessage({
+                    type: "underrun",
+                    frames: this.underrunFrames,
+                    events: this.underrunEvents,
+                  });
+                }
+              } else if (hadData) {
+                this.wasUnderrun = false;
+              }
+            }
+            if (this.current && this.current.offset >= this.current.samples.length) {
+              const streamId = this.current.streamId;
+              this.current = null;
+              this.maybeNotifyDrained(streamId);
+            }
+            return true;
+          }
+        }
+
+        registerProcessor("pcm-playback-processor", PcmPlaybackProcessor);
+      `;
+    }
+
+    async function ensurePlaybackWorklet() {
+      const context = await ensureAudioContext();
+      if (playbackWorkletNode) return playbackWorkletNode;
+      if (!context.audioWorklet) throw new Error("AudioWorklet is not supported by this browser");
+      if (!playbackWorkletReady) {
+        const blob = new Blob([playbackWorkletCode()], {type: "application/javascript"});
+        const url = URL.createObjectURL(blob);
+        playbackWorkletReady = context.audioWorklet.addModule(url).finally(() => URL.revokeObjectURL(url));
+      }
+      await playbackWorkletReady;
+      playbackWorkletNode = new AudioWorkletNode(context, "pcm-playback-processor", {
+        numberOfInputs: 0,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+      });
+      playbackWorkletNode.port.onmessage = (event) => {
+        const message = event.data || {};
+        if (message.type === "drained") {
+          const state = playbackStreams.get(message.streamId);
+          if (state) state.drained = true;
+          closeOutputWhenDrained(message.streamId);
+          return;
+        }
+        if (message.type === "underrun") {
+          log(`playback worklet underrun frames=${message.frames} events=${message.events}`);
+        }
+      };
+      playbackWorkletNode.connect(context.destination);
+      log("playback worklet ready");
+      return playbackWorkletNode;
+    }
+
+    async function playPcm16(chunk) {
+      if (outputClosed.has(chunk.stream_id)) return;
+      const node = await ensurePlaybackWorklet();
+      if (outputClosed.has(chunk.stream_id)) return;
+      const samples = resampleLinear(pcm16ToFloat(chunk.payload), chunk.sample_rate || INPUT_RATE, audioContext.sampleRate);
+      const state = playbackStreams.get(chunk.stream_id) || {queuedFrames: 0, finished: false, drained: false};
+      state.queuedFrames += samples.length;
+      playbackStreams.set(chunk.stream_id, state);
+      markPlaybackScheduled(chunk.stream_id, audioContext.currentTime, samples.length / audioContext.sampleRate);
+      node.port.postMessage(
+        {type: "push", streamId: chunk.stream_id, samples},
+        [samples.buffer],
+      );
+    }
+
+    function closeOutputWhenDrained(streamId) {
+      const request = pendingOutputClose.get(streamId);
+      if (!request || !outputStarted.has(streamId)) return;
+      const state = playbackStreams.get(streamId);
+      if (state && !state.finished && playbackWorkletNode) {
+        state.finished = true;
+        playbackWorkletNode.port.postMessage({type: "finish", streamId});
+        return;
+      }
+      if (state && !state.drained) return;
+      pendingOutputClose.delete(streamId);
+      if (outputClosed.has(streamId)) return;
+      outputClosed.add(streamId);
+      playbackStreams.delete(streamId);
+      summarizeOutputPlayback(streamId, "drained");
+      sendEvent(event("stream.output.finished", {stream_type: "actuator.speaker"}, {
+        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
+      }));
+    }
+
+    function stopOutputPlayback(streamId, reason) {
+      if (playbackWorkletNode) playbackWorkletNode.port.postMessage({type: "stop", streamId});
+      playbackStreams.delete(streamId);
+      pendingOutputClose.delete(streamId);
+      if (outputClosed.has(streamId)) return;
+      outputClosed.add(streamId);
+      summarizeOutputPlayback(streamId, `stopped reason=${reason}`);
+      sendEvent(event("stream.output.closed", {stream_type: "actuator.speaker", reason}, {
+        session_id: currentDeviceId(), stream_id: streamId, stream_type: "actuator.speaker",
+      }));
+    }
+
+    function stopAllOutputPlayback(reason) {
+      const streamIds = Array.from(playbackStreams.keys());
+      for (const streamId of streamIds) stopOutputPlayback(streamId, reason);
+      if (playbackWorkletNode) playbackWorkletNode.port.postMessage({type: "stopAll"});
+    }
+
+    async function waitPlaybackDrained(timeoutMs = 10000) {
+      const startedAt = Date.now();
+      while (Array.from(playbackStreams.values()).some((state) => !state.drained)) {
+        if (Date.now() - startedAt > timeoutMs) {
+          log("playback drain timeout before audio session close");
+          break;
+        }
+        await delay(30);
+      }
+    }
+
+    async function closeAudioSessionByServerRequest() {
+      await stopMic();
+      await waitPlaybackDrained();
+      sendEvent(event("control.audio_session.closed", {reason: "browser_device_closed"}, {session_id: currentDeviceId()}));
+      sessionId = null;
+      closeStreamSocket("audio_session_closed");
+      renderStatus();
+    }
+
+    async function stopMic() {
+      await stopOfflineTimers();
+      if (processor) processor.disconnect();
+      if (micSource) micSource.disconnect();
+      if (activeAudioSource !== "offline_paused") sendFinalMicPayload("audio_segment_closed");
+      if (micStream) micStream.getTracks().forEach((track) => track.stop());
+      if (inputStreamId) {
+        sendEvent(event("stream.input.closed", {stream_type: "sensor.mic", reason: "audio_segment_closed"}, {
+          session_id: currentDeviceId(), stream_id: inputStreamId, stream_type: "sensor.mic",
+        }));
+        setStreamState(inputStreamId, {stream_type: "sensor.mic", state: "closed", close_reason: "audio_segment_closed"});
+      }
+      processor = null; micSource = null; micStream = null; inputStreamId = null; micPcmBuffer = new Uint8Array(0); activeAudioSource = "idle";
+      renderStatus();
+    }
+
+    function sendWakeDetected(wakeSource = "browser_device_button") {
+      wakeButton.disabled = true;
+      sendEvent(event("control.user.wake.detected", {wake_source: wakeSource}));
+    }
+
+    connectButton.onclick = () => {
+      connect().catch((err) => log(`connect failed: ${err.message}`));
+    };
+    wakeButton.onclick = () => {
+      sendWakeDetected("browser_device_button");
+    };
+    interruptButton.onclick = () => {
+      sendEvent(event("control.user.interrupt.detected", {reason: "browser_device_manual_interrupt"}, {session_id: currentDeviceId()}));
+      stopAllOutputPlayback("manual_interrupt");
+    };
+    startAudioButton.onclick = () => {
+      openAudioInput().catch((err) => log(`start audio failed: ${err.message}`));
+    };
+    stopAudioButton.onclick = () => {
+      stopMic().catch((err) => log(`stop audio failed: ${err.message}`));
+    };
+    chooseAudioSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "audio",
+        accept: {"audio/*": [".wav", ".pcm"], "application/octet-stream": [".pcm"]},
+        multiple: false,
+      }).catch((err) => log(`choose audio sample failed: ${err.message}`));
+    };
+    chooseImageSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "image",
+        accept: {"image/*": [".jpg", ".jpeg", ".png", ".webp", ".bmp"]},
+        multiple: true,
+      }).catch((err) => log(`choose image sample failed: ${err.message}`));
+    };
+    chooseVideoSampleButton.onclick = () => {
+      chooseFileFromSampleDirectory({
+        kind: "video",
+        accept: {"video/*": [".mp4", ".mov", ".m4v", ".webm"]},
+        multiple: false,
+      }).catch((err) => log(`choose video sample failed: ${err.message}`));
+    };
+    buildRecordCommandButton.onclick = buildPlaybackRecordCommand;
+    closeButton.onclick = async () => {
+      await stopMic();
+      await delay(300);
+      sendEvent(event("control.user.dialog.close.requested", {
+        reason: "browser_device_button",
+        close_mode: "close_after_reply",
+      }, {session_id: currentDeviceId()}));
+    };
+
+    bindBrowserConfigPersistence();
+    audioModeSelect.addEventListener("change", updateInputModePanels);
+    window.addEventListener("beforeunload", () => {
+      stopPeerVideoSender("page_unload", null, {notify: false});
+    });
+    updateInputModePanels();
+    renderStatus();
+    restoreSampleSelections().finally(() => {
+      if (document.getElementById("autoConnect").checked) {
+        connect().catch((err) => log(`auto connect failed: ${err.message}`));
+      }
+    });
+    window.__audioChatBrowserDeviceTest = {
+      encodeStreamChunk,
+      decodeStreamChunk,
+      resampleLinear,
+      floatToPcm16,
+      constants: {INPUT_RATE, DEFAULT_CHUNK_MS, MIC_CHUNK_BYTES},
+    };
+  </script>
+</body>
+</html>

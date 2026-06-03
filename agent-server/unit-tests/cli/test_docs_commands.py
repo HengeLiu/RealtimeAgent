@@ -111,7 +111,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
             "run",
             "realtime-agent.dev.preflight",
             "--config",
-            "examples/device_app_demo/agent-server/server.yaml",
+            "examples/simple-agent-server/server.yaml",
             "--report",
             str(report),
         ],
@@ -144,7 +144,7 @@ def test_device_app_demo_server_yaml_documents_supported_model_routes(tmp_path) 
     预期结果：配置可直接作为 app-root 配置使用，不再依赖老 SDK 示例文件。
     """
 
-    config = AUDIO_ROOT / "examples" / "device_app_demo" / "agent-server" / "server.yaml"
+    config = AUDIO_ROOT / "examples" / "simple-agent-server" / "server.yaml"
     text = config.read_text(encoding="utf-8")
     data = yaml.safe_load(text)
 

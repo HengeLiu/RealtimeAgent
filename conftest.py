@@ -130,9 +130,9 @@ def _inputs_for_layer(layer: str) -> dict[str, Any]:
             "image_samples": sorted(str(path) for path in (root / "testdata/image-sample").glob("*")),
             "video_samples": sorted(str(path) for path in (root / "testdata/video-sample").glob("*")),
             "device_references": [
-                "examples/dev-support/devices/browser-glass",
-                "examples/dev-support/devices/python-glass",
-                "examples/dev-support/devices/python-phone",
+                "dev-support/devices/browser-glass",
+                "dev-support/devices/python-glass",
+                "dev-support/devices/python-phone",
                 "examples/device_app_demo/ios",
             ],
             "manual_acceptance_gap": "iOS/ESP32 真机和浏览器摄像头权限需要人工联调确认",

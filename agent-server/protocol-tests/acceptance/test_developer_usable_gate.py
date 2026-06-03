@@ -17,7 +17,7 @@ def test_dev_support_example_exists_with_capability_package(monkeypatch) -> None
     预期结果：示例服务可以作为空能力包起点，且无需修改 SDK 内部 app.py。
     """
 
-    project_root = AUDIO_ROOT / "examples" / "dev-support"
+    project_root = AUDIO_ROOT / "dev-support"
     app_root = project_root / "agent-server"
     assert (app_root / "server.yaml").exists()
     assert (app_root / "capabilities" / "__init__.py").exists()
@@ -40,6 +40,6 @@ def test_device_playback_acceptance_and_artifact_schema_exist() -> None:
     预期结果：后续能力线路不能只提交内部单元测试，必须保留设备级验收入口。
     """
 
-    assert (AUDIO_ROOT / "examples" / "dev-support" / "unit-tests" / "playback" / "test_python_playback.py").exists()
+    assert (AUDIO_ROOT / "dev-support" / "unit-tests" / "playback" / "test_python_playback.py").exists()
     assert (AUDIO_ROOT / "agent-server" / "realtime_agent" / "cli" / "config.py").exists()
     assert (AUDIO_ROOT / "agent-server" / "docs" / "how-to" / "运行产物排查说明.md").exists()

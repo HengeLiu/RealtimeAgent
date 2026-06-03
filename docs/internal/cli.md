@@ -17,7 +17,7 @@ uv pip install -e .
 启动示例应用：
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 其他应用也推荐按配置启动：
@@ -31,13 +31,13 @@ uv run realtime-agent.server.run --config examples/<your-app>/agent-server/serve
 校验设备能力文件：
 
 ```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
+uv run realtime-agent.device.validate dev-support/devices/browser-glass/device.realtime-agent.yaml
 ```
 
 输出 JSON：
 
 ```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
+uv run realtime-agent.device.validate dev-support/devices/browser-glass/device.realtime-agent.yaml --json
 ```
 
 ## Web Chat Device Demo
@@ -68,7 +68,7 @@ uv run realtime-agent.web.open --serve
 `browser-glass` 是以 Device 形态运行的浏览器眼镜模拟组件，用于本地联调和手动测试，
 不是 SDK 定义的正式设备类型。它使用本地浏览器端 Device 适配代码接入协议。`--serve`
 会用标准库启动一个轻量本地静态服务，并打开
-`http://127.0.0.1:8766/examples/dev-support/devices/browser-glass/index.html`。
+`http://127.0.0.1:8766/dev-support/devices/browser-glass/index.html`。
 端口默认固定为 `8766`，这样浏览器的 `localStorage`、IndexedDB 和样例目录授权可以
 在下次启动后继续复用；如果端口被占用，可显式传 `--port`，但换端口会形成新的浏览器
 origin，需要重新授权一次。
@@ -83,13 +83,13 @@ uv run realtime-agent.web.open --serve --print-url
 Python phone preview，用于当前视频回显、peer video 和 YOLO/YOLOE 视觉任务联调：
 
 ```bash
-uv run --extra gui python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.preview.yaml
+uv run --extra gui python -m realtime_agent_python_phone_mock --config dev-support/devices/python-phone/phone.preview.yaml
 ```
 
 Python phone mock，用于简单协议、RGB 上传和振动 mock 验证：
 
 ```bash
-uv run python -m realtime_agent_python_phone_mock --config examples/dev-support/devices/python-phone/phone.mock.yaml
+uv run python -m realtime_agent_python_phone_mock --config dev-support/devices/python-phone/phone.mock.yaml
 ```
 
 Python playback glass 系统回放端：
@@ -139,7 +139,7 @@ uv run realtime-agent.esp32.monitor --project-dir /path/to/esp32-firmware --port
 预检：
 
 ```bash
-uv run realtime-agent.dev.preflight --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.dev.preflight --config examples/simple-agent-server/server.yaml
 ```
 
 发布包检查：

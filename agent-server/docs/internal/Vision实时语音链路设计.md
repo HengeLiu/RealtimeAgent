@@ -597,7 +597,7 @@ Gate -> Msg: assistant_text.done
 - `agent-server/realtime_agent/server.py`
   - 下行 speaker stream 记录 `stream.output.first_chunk.enqueued`、`stream.output.first_chunk.sent(queue_wait_ms)` 和 `stream.output.send.summary`。
   - stream WebSocket 接收循环按 `stream_id` 建立 dispatch worker，并在线程中调用 `write_input_chunk()`，避免同步处理饿住 aiohttp event loop。
-- `examples/dev-support/devices/browser-glass/index.html`
+- `dev-support/devices/browser-glass/index.html`
   - 浏览器日志使用毫秒级时间戳。
   - 只记录 speaker 首包、调度、drain 汇总，不再逐 chunk 打印音频接收日志。
 - `agent-server/protocol-tests/sdk/runtime/test_progress_audio.py`
@@ -614,7 +614,7 @@ Gate -> Msg: assistant_text.done
   - 结果：通过，15 passed。
 - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py agent-server/protocol-tests/sdk/agent_core/test_context_compiler.py agent-server/protocol-tests/sdk/runtime/test_voice_session_modes.py -q`
   - 结果：通过，29 passed。
-- `uv run python -m realtime_agent_python_playback_glass run --server-url http://127.0.0.1:18765 --suite examples/dev-support/devices/python-playback-glass/suites/smoke.yaml --runs-root /tmp/realtime-agent-text-e2e/runs --report /tmp/realtime-agent-text-e2e/reports/smoke/report.json`
+- `uv run python -m realtime_agent_python_playback_glass run --server-url http://127.0.0.1:18765 --suite dev-support/devices/python-playback-glass/suites/smoke.yaml --runs-root /tmp/realtime-agent-text-e2e/runs --report /tmp/realtime-agent-text-e2e/reports/smoke/report.json`
   - 配置：临时 `/tmp/realtime-agent-text-e2e/server.yaml`，`agent.mode=vision`，ASR/Vision/TTS 均为 mock provider，复用 external-business capabilities，清空临时 denylist 以允许 `capture_photo`。
   - 结果：通过，2 cases passed。
   - 普通问答 case：`messages.jsonl` 记录 `你是谁呀 -> 我是 realtime-agent Vision 链路助手。`，产生 speaker WAV。
@@ -629,7 +629,7 @@ Gate -> Msg: assistant_text.done
 待补充：
 
 - 真实 DashScope ASR/Vision/TTS provider 和真机麦克风/扬声器体验未在本轮验证；本轮是 mock provider + 真实 WebSocket 端侧协议验证。
-- `examples/dev-support/unit-tests/playback/test_python_playback.py` 仍有旧 in-process playback 失败：`run_playback()` 兼容占位没有输出 chunk，且测试引用了不存在的 `testdata/audio-sample/wav/看一下我前面有什么.wav`。这不影响本轮使用的网络无头端侧 `python-playback-glass` 结果，但需要后续单独清理旧测试。
+- `dev-support/unit-tests/playback/test_python_playback.py` 仍有旧 in-process playback 失败：`run_playback()` 兼容占位没有输出 chunk，且测试引用了不存在的 `testdata/audio-sample/wav/看一下我前面有什么.wav`。这不影响本轮使用的网络无头端侧 `python-playback-glass` 结果，但需要后续单独清理旧测试。
 
 ## 真实回放发现并修复的问题
 

@@ -70,7 +70,7 @@ uv pip install -e .
 Start the example Agent server:
 
 ```bash
-uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
 ```
 
 Default server address:
@@ -92,7 +92,7 @@ Start local multi-device debugging in this order:
 1. Start the server:
 
    ```bash
-   uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
+   uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml
    ```
 
 2. Open the browser glass simulator:
@@ -116,7 +116,7 @@ Start local multi-device debugging in this order:
    ```bash
    curl http://127.0.0.1:8765/api/debug/devices
    curl http://127.0.0.1:8765/api/debug/playback
-   find examples/device_app_demo/agent-server/runs -maxdepth 3 -type f | sort
+   find examples/simple-agent-server/runs -maxdepth 3 -type f | sort
    ```
 
 If you only want to open the browser simulator quickly, run:
@@ -175,7 +175,7 @@ Current SDK entry points:
 | SDK | Entry |
 | --- | --- |
 | Python | [devices/python](devices/python/README.md) |
-| TypeScript | [devices/typescript](devices/typescript/README.md) |
+| JavaScript | [devices/javascript](devices/javascript/README.md) |
 | Swift | [devices/swift](devices/swift/README.md) |
 | Kotlin / Java | [devices/kotlin](devices/kotlin/README.md) |
 | C | [devices/c](devices/c/README.md) |
@@ -246,8 +246,8 @@ Developer support devices include:
 
 - Browser glass simulator: `uv run realtime-agent.web.open --serve`
 - Swift hardware demo: `examples/device_app_demo/ios/`
-- Python phone visual simulator: `examples/dev-support/devices/python-phone/`
-- Python playback glass: `examples/dev-support/devices/python-playback-glass/`
+- Python phone visual simulator: `dev-support/devices/python-phone/`
+- Python playback glass: `dev-support/devices/python-playback-glass/`
 
 See [Examples](examples/README.md) for the current example inventory.
 
@@ -256,7 +256,7 @@ See [Examples](examples/README.md) for the current example inventory.
 Example app run artifacts are written to:
 
 ```text
-examples/device_app_demo/agent-server/runs
+examples/simple-agent-server/runs
 ```
 
 The most useful files are:

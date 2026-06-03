@@ -93,8 +93,8 @@ def live_check(argv: list[str] | None = None) -> None:
     """
 
     parser = argparse.ArgumentParser(prog="realtime-agent.dev.live-check", description="检查 realtime-agent 本地联调状态")
-    parser.add_argument("--config", default="examples/device_app_demo/agent-server/server.yaml")
-    parser.add_argument("--generated-dir", default="examples/device_app_demo/agent-server/config/generated")
+    parser.add_argument("--config", default="examples/simple-agent-server/server.yaml")
+    parser.add_argument("--generated-dir", default="examples/simple-agent-server/config/generated")
     parser.add_argument("--report", default="runs/default-app/live-check.json")
     args = parser.parse_args(argv)
 

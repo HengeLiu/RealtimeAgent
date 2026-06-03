@@ -521,7 +521,7 @@ agent-server/docs/internal/
 候选命令：
 
 ```bash
-uv run realtime-agent.context.inspect --config examples/device_app_demo/agent-server/server.yaml --mode omni
+uv run realtime-agent.context.inspect --config examples/simple-agent-server/server.yaml --mode omni
 ```
 
 验收：
@@ -670,8 +670,8 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 
 - 状态：已完成可自动验证部分。
 - 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 external-business-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
-- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tasks.py`、`examples/dev-support/agent-server/capabilities/tasks.py`、`pyproject.toml`。
-- 验证：`uv run realtime-agent.context.inspect --config examples/device_app_demo/agent-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
+- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tasks.py`、`dev-support/agent-server/capabilities/tasks.py`、`pyproject.toml`。
+- 验证：`uv run realtime-agent.context.inspect --config examples/simple-agent-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
 - 待验收：Task 进度通知是否默认播报仍需产品体验确认；当前只记录策略和通知事件，不改变默认通知语义。
 
 ### 阶段 6：预算、裁剪和 diff
@@ -679,7 +679,7 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 - 状态：已完成最小闭环。
 - 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`realtime-agent.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
 - 文件：`agent-server/realtime_agent/agent_core/context/models.py`、`agent-server/realtime_agent/agent_core/context/compiler.py`、`agent-server/realtime_agent/cli/context.py`。
-- 验证：`uv run realtime-agent.context.inspect --config examples/device_app_demo/agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
+- 验证：`uv run realtime-agent.context.inspect --config examples/simple-agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
 - 风险：第一版不做自动裁剪，后续需要基于真实长对话 runs 再确定裁剪优先级。
 
 ### 验证汇总
@@ -709,4 +709,4 @@ uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_co
 uv run python -m pytest agent-server/unit-tests/cli/test_release_package.py agent-server/unit-tests/cli/test_package_check_release_inputs.py -q
 ```
 
-其中 `test_example_app_can_be_copied_to_temp_project_and_generate_endpoint_configs` 查找复制后 `external-business-app/server.yaml`，当前示例应用实际配置位于 `examples/device_app_demo/agent-server/server.yaml`。
+其中 `test_example_app_can_be_copied_to_temp_project_and_generate_endpoint_configs` 查找复制后 `external-business-app/server.yaml`，当前示例应用实际配置位于 `examples/simple-agent-server/server.yaml`。

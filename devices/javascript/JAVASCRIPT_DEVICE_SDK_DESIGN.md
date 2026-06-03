@@ -1,6 +1,6 @@
 # JavaScript Device SDK 设计草案
 
-本文定义 `devices/javascript/` 的 JavaScript Device SDK 目标设计。该 SDK 面向浏览器、Node、Electron 和 WebView 端侧，负责把 JavaScript 运行环境接入 realtime-agent 的标准设备协议。Swift Device SDK 是当前主要参考实现，`examples/dev-support/devices/browser-glass/` 只作为浏览器音视频链路经验来源，不作为正式 SDK 边界。
+本文定义 `devices/javascript/` 的 JavaScript Device SDK 目标设计。该 SDK 面向浏览器、Node、Electron 和 WebView 端侧，负责把 JavaScript 运行环境接入 realtime-agent 的标准设备协议。Swift Device SDK 是当前主要参考实现，`dev-support/devices/browser-glass/` 只作为浏览器音视频链路经验来源，不作为正式 SDK 边界。
 
 ## 1. 设计目标
 
