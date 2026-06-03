@@ -37,7 +37,7 @@
 **Server SDK**
 
 - 设备会话运行时：提供设备注册、用户会话、控制 WebSocket、心跳、断联状态、音频 / 视觉 / speaker stream 生命周期管理和 debug API。
-- Omni/VL Agent Core：提供 Agent loop、上下文组装、工具调用、后台任务调度、输出播放仲裁、打断和输出恢复边界。
+- 智能体运行时：提供 Agent loop、上下文组装、工具调用、后台任务调度、输出播放仲裁、打断和输出恢复边界。
 - 自定义工具扩展：业务侧可以把一次性动作建模为 `Tool`，把持续流程建模为后台 `Task`。
 - 多模态执行链路：已具备 ASR、视觉模型、工具调用和 TTS 组合能力，并且可按应用需求切换 provider、模型和上下文策略。
 - 可观测性与排障：通过 `runs/` 记录模型请求、Agent 事件、工具事件、stream 事件、输出决策和播放决策，用于复盘真实会话和定位链路问题。
@@ -190,8 +190,8 @@ examples/<your-app>/agent-server/capabilities/
 
 当前 SDK 入口：
 
-| SDK        | 入口                                                |
-| ---------- | --------------------------------------------------- |
+| SDK        | 入口                                            |
+| ---------- | ----------------------------------------------- |
 | JavaScript | [devices/javascript](devices/javascript/README.md) |
 | Swift      | [devices/swift](devices/swift/README.md)           |
 | C          | [devices/c](devices/c/README.md)                   |
