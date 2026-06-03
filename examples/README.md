@@ -6,7 +6,7 @@
 
 | 目录 | 当前定位 |
 | --- | --- |
-| `device_app_demo` | 当前推荐的 Device SDK 真机验证示例。包含专用 `agent-server/server.yaml` 和 Swift Device Demo App。 |
+| `device_app_demo` | 当前推荐的 Device SDK 验证示例。包含专用 `agent-server/server.yaml`、Web Chat、Swift Device Demo App 和 ESP32-S3 固件参考实现。 |
 | `dev-support` | 浏览器眼镜模拟、Python 手机模拟、Python playback glass 等开发/测试支持组件与契约测试辅助实现。它们以 Device 形态接入协议，但不是 SDK 预设的正式设备类型。 |
 
 推荐启动方式：
@@ -16,10 +16,24 @@
 uv run realtime-agent.server.run --config examples/device_app_demo/agent-server/server.yaml
 ```
 
-`device_app_demo` 的配置只用于验证端侧 SDK 链路，不加载历史业务应用能力。真机联调时可以再打开 Swift demo：
+`device_app_demo` 的配置只用于验证端侧 SDK 链路，不加载历史业务应用能力。浏览器联调时可以打开 Web Chat：
+
+```bash
+uv run realtime-agent.web-chat.open
+```
+
+iOS 真机联调时可以打开 Swift demo：
 
 ```bash
 uv run realtime-agent.ios.open
+```
+
+ESP32-S3 真机联调前，需要先配置 Wi-Fi、server 地址和板级引脚，再在固件目录构建：
+
+```bash
+cd examples/device_app_demo/esp32-s3/firmware
+idf.py set-target esp32s3
+idf.py build
 ```
 
 推荐验收：

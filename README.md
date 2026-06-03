@@ -41,9 +41,9 @@
 
 **Device SDK**
 
-- Swift + JS + ESP32：当前重点覆盖 Swift Device SDK、浏览器 / JavaScript 端侧 SDK，以及 ESP32 / 嵌入式设备接入方向。
-- SDK + App：提供 Device SDK 和可运行的端侧 App / demo，开发者可以从示例验证注册、音视频链路和控制事件，再接入自己的硬件。
-- 音视频采集 + 端侧回声抑制：支持端侧麦克风、相机和 speaker 链路接入，并在端侧音频会话中处理语音采集、播放和回声抑制边界。
+- Swift + JavaScript + C：当前重点覆盖 Swift Device SDK、浏览器 / JavaScript 端侧 SDK，以及面向 ESP32-S3、嵌入式 Linux 和自定义 C 运行时的 C Device SDK。
+- SDK + App：提供 Device SDK 和可运行的端侧 App / demo，开发者可以从 Web Chat、iOS 真机 demo 或 ESP32-S3 固件参考实现验证注册、音视频链路和控制事件，再接入自己的硬件。
+- 音视频采集 + 端侧回声抑制边界：支持端侧麦克风、相机和 speaker 链路接入；C / ESP32-S3 侧已经定义 AEC 和 WakeNet adapter 边界，具体 AEC/WakeNet 算法仍由板级实现接入。
 
 **开发支持**
 
@@ -114,7 +114,16 @@ curl http://127.0.0.1:8765/api/debug/playback
    ```
 
    真机运行时，在 iOS App 调试面板里把 server 地址改成 Mac 在同一局域网下可访问的地址，例如 `http://192.168.x.x:8765`。
-4. 观察设备、播放和运行产物：
+4. 可选构建 ESP32-S3 固件参考实现：
+
+   ```bash
+   cd examples/device_app_demo/esp32-s3/firmware
+   idf.py set-target esp32s3
+   idf.py build
+   ```
+
+   ESP32-S3 真机联调前，先根据 [ESP32-S3 demo 说明](examples/device_app_demo/esp32-s3/README.md) 配置 Wi-Fi、server 地址和板级引脚。当前 WakeNet 和 AEC 仍是 adapter 边界，完整算法接入需要按实际板卡继续实现。
+5. 观察设备、播放和运行产物：
 
    ```bash
    curl http://127.0.0.1:8765/api/debug/devices
@@ -133,7 +142,7 @@ uv run realtime-agent.web-chat.open
 运行一个最小契约测试：
 
 ```bash
-uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests -q
 ```
 
 更多启动、扩展和排障说明见 [开发者总览](docs/tutorials/developer-overview.md)。
@@ -181,6 +190,7 @@ examples/<your-app>/agent-server/capabilities/
 | ---------- | --------------------------------------------------- |
 | JavaScript | [devices/javascript](devices/javascript/README.md) |
 | Swift      | [devices/swift](devices/swift/README.md)           |
+| C          | [devices/c](devices/c/README.md)                   |
 
 设备接入模型见 [端侧 App 接入指南](devices/docs/device-app-integration.md)。
 
@@ -222,7 +232,7 @@ examples/<your-app>/agent-server/capabilities/
 
 ```text
 agent-server/   Python server SDK 和服务端运行时，见 agent-server/README.md
-devices/        JavaScript、Swift 等多语言 Device SDK，见 devices/README.md
+devices/        JavaScript、Swift、C 等多语言 Device SDK，见 devices/README.md
 protocol/       共享协议文档、fixture 和协议测试
 examples/       示例应用、设备模拟器、回放测试和硬件参考工程
 docs/           入门文档、参考文档、how-to 文档和设计说明
@@ -242,12 +252,13 @@ tools/          开发和校验工具
 examples/device_app_demo/
 ```
 
-它是面向端侧 App 开发者的最小真机 / 浏览器 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
+它是面向端侧 App 开发者的最小真机、浏览器和嵌入式 demo，用于验证 Device SDK 的设备注册、音频上行、相机帧上传、speaker 下行播放和控制事件。
 
 开发支持设备包括：
 
 - Web Chat demo：`examples/device_app_demo/web-chat/`
 - Swift 真机 demo：`examples/device_app_demo/ios/`
+- ESP32-S3 固件参考实现：`examples/device_app_demo/esp32-s3/`
 - Python 手机视觉模拟组件：`examples/dev-support/devices/python-phone/`
 - Python playback glass：`examples/dev-support/devices/python-playback-glass/`
 
@@ -292,10 +303,10 @@ examples/device_app_demo/agent-server/runs
 
 也欢迎开发者尝试 AI Coding 范式来参与本项目。[AGENTS.md](AGENTS.md) 是给 AI 编程代理使用的仓库开发说明，记录了项目边界、协议规则、测试要求和文档约定。使用 AI 生成或修改代码后，请开发者重点审查代码质量、架构边界、协议兼容性、测试覆盖和文档一致性，不要把 AI 产出的代码直接视为已经完成审查。
 
-本项目将持续完善自动测试和审查能力，提交变更前，运行和改动范围最相关的测试。对于 Device Demo 和 Swift Device SDK 入口改动，下面的契约测试可以作为一个轻量 smoke test：
+本项目将持续完善自动测试和审查能力，提交变更前，运行和改动范围最相关的测试。对于 Device Demo 入口改动，下面的契约测试可以作为一个轻量 smoke test：
 
 ```bash
-uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests -q
 ```
 
 ## License

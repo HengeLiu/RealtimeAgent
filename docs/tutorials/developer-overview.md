@@ -167,7 +167,7 @@ examples/<your-app>/agent-server/capabilities/
 1. 在 `capabilities/tools.py` 或 `capabilities/tasks.py` 中实现能力。
 2. 在应用配置中暴露给 Agent。
 3. 启动示例 server。
-4. 用浏览器眼镜或 Python 设备联调。
+4. 用 Web Chat、iOS 真机 demo 或 ESP32-S3 参考端联调。
 5. 查看 `runs/` 中的 `model-request.json`、`tool-events.jsonl` 和 `agent-events.jsonl`。
 
 ### 4.2 扩展设备能力：Device SDK 代码声明
@@ -209,6 +209,8 @@ try await client.connectAndRegister()
 这种方式的好处是设备能力和真实硬件接入代码放在一起：App 启用了哪些能力，SDK 就注册哪些能力；App 没有启用的麦克风、相机或 speaker，不会被误报给 server。
 
 端侧开发者不需要理解 Agent Core 内部如何选择工具，也不应该依赖某个模型 provider 的内部事件。端侧只需要把真实硬件能力接到 Device SDK 暴露的注册、命令和 stream API 上。Swift 端更完整的接入方式见 [RealtimeAgentDeviceKit](../../devices/swift/README.md)。
+
+C Device SDK 面向 ESP32-S3、嵌入式 Linux 和其他 C 运行时。它只负责协议事件、注册、stream chunk、speaker buffer 和诊断等通用 SDK 边界，不直接绑定某块板子的麦克风、speaker、相机、WakeNet 或 AEC 实现。ESP32-S3 固件参考端把板级 Wi-Fi、引脚、PDM 麦克风、I2S speaker、摄像头和 FreeRTOS task 作为 app/adapter 层接入 SDK。更完整的边界说明见 [C Device SDK](../../devices/c/README.md) 和 [ESP32-S3 参考端](../../examples/device_app_demo/esp32-s3/README.md)。
 
 ### 4.3 优化模型链路：提示词 / 上下文 / ASR / TTS / Vision / Realtime
 
@@ -288,15 +290,15 @@ curl http://127.0.0.1:8765/api/debug/devices
 curl http://127.0.0.1:8765/api/debug/playback
 ```
 
-### 打开浏览器眼镜模拟组件
+### 打开 Web Chat Device Demo
 
 在另一个终端运行：
 
 ```bash
-uv run realtime-agent.web.open --serve
+uv run realtime-agent.web-chat.open
 ```
 
-这个组件会作为一个普通 Device 接入 server，可用于验证：
+Web Chat 会作为浏览器 Device 接入 server，可用于验证：
 
 - 设备注册。
 - 浏览器麦克风输入。
@@ -304,25 +306,33 @@ uv run realtime-agent.web.open --serve
 - server 下发 speaker stream。
 - 控制事件和 stream 生命周期。
 
-### 校验设备能力文件
+脚本检查或只想获取 URL 时，可以使用：
 
 ```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml
+uv run realtime-agent.web-chat.open --print-url
 ```
 
-如果想看 JSON 格式结果：
+`examples/dev-support/devices/browser-glass`、Python phone 和 playback glass 仍可用于本地联调、协议验证和回放测试，但它们是开发支持组件，不是当前 README 推荐的第一入口。
+
+### 可选构建 ESP32-S3 固件参考端
+
+如果你在 ESP32-S3 真机上验证 C Device SDK，可以在固件目录执行：
 
 ```bash
-uv run realtime-agent.device.validate examples/dev-support/devices/browser-glass/device.realtime-agent.yaml --json
+cd examples/device_app_demo/esp32-s3/firmware
+idf.py set-target esp32s3
+idf.py build
 ```
+
+真机运行前需要配置 Wi-Fi、server 地址和板级引脚。WakeNet 和 AEC 当前是 adapter 边界，具体算法接入由板级实现负责。
 
 ### 跑一个最小契约测试
 
 ```bash
-uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests -q
 ```
 
-这条测试静态检查 Device Demo、Swift Device SDK 本地依赖、端侧硬件 enable 配置和独立 server 配置，适合快速确认当前推荐示例入口没有退化。
+这组测试静态检查 Device Demo、Web Chat、Swift Device SDK 本地依赖、端侧硬件 enable 配置和独立 server 配置，适合快速确认当前推荐示例入口没有退化。
 
 ### 查看运行产物
 

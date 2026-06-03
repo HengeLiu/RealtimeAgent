@@ -66,7 +66,7 @@ uv run realtime-agent.web.open --serve
 ```
 
 `browser-glass` 是以 Device 形态运行的浏览器眼镜模拟组件，用于本地联调和手动测试，
-不是 SDK 定义的正式设备类型。它使用 ES module 导入本地 TypeScript Device SDK。`--serve`
+不是 SDK 定义的正式设备类型。它使用本地浏览器端 Device 适配代码接入协议。`--serve`
 会用标准库启动一个轻量本地静态服务，并打开
 `http://127.0.0.1:8766/examples/dev-support/devices/browser-glass/index.html`。
 端口默认固定为 `8766`，这样浏览器的 `localStorage`、IndexedDB 和样例目录授权可以
@@ -148,23 +148,21 @@ uv run realtime-agent.dev.preflight --config examples/device_app_demo/agent-serv
 uv run realtime-agent.sdk.package-check --report runs/default-app/package-check.json
 ```
 
-协议黄金样例和 Python 端侧 SDK 检查：
+协议黄金样例和多语言 Device SDK 检查：
 
 ```bash
 uv run python -m pytest protocol/protocol-tests/test_protocol_schema_examples.py protocol/protocol-tests/test_stream_chunk_codec_contract.py -q
-uv run python -m pytest devices/python/unit-tests devices/python/protocol-tests -q
-cd devices/typescript && npm test
+cd devices/javascript && npm test
 cd devices/swift && swift test
-cd devices/kotlin && gradle test
-cmake -S devices/c -B devices/c/build
-cmake --build devices/c/build
-ctest --test-dir devices/c/build --output-on-failure
+cmake -S devices/c -B /tmp/realtime-agent-device-c-build
+cmake --build /tmp/realtime-agent-device-c-build
+ctest --test-dir /tmp/realtime-agent-device-c-build --output-on-failure
 ```
 
 Device Demo 契约测试：
 
 ```bash
-uv run python -m pytest examples/device_app_demo/app-tests/test_ios_device_app_demo_contract.py -q
+uv run python -m pytest examples/device_app_demo/app-tests -q
 ```
 
 全部测试：

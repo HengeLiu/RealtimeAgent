@@ -29,6 +29,8 @@
 
 - [Server SDK 目录说明](../agent-server/README.md)
 - [Device SDK 目录说明](../devices/README.md)
+- [C Device SDK](../devices/c/README.md)
+- [ESP32-S3 Device Demo](../examples/device_app_demo/esp32-s3/README.md)
 - [CLI 参考](internal/cli.md)
 - [端侧 App 接入指南](../devices/docs/device-app-integration.md)
 - [设备事件行为标准](../devices/docs/device-event-behavior.md)

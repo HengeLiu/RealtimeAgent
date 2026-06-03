@@ -35,7 +35,9 @@ L3 应用能力通过，自动化产品功能具备运行前提
 | --- | --- | --- |
 | 协议资产 | `protocol/unit-tests/` | `protocol/protocol-tests/` |
 | Server SDK | `agent-server/unit-tests/` | `agent-server/protocol-tests/`、`agent-server/model-provider-tests/` |
-| Python Device SDK | `devices/python/unit-tests/` | `devices/python/protocol-tests/` |
+| JavaScript Device SDK | `devices/javascript/test/` | JavaScript SDK 原生契约测试 |
+| Swift Device SDK | `devices/swift/Tests/` | Swift SDK 原生契约测试 |
+| C Device SDK | `devices/c/tests/` | C SDK CTest 契约测试 |
 | device_app_demo | 无 | `examples/device_app_demo/app-tests/` |
 | 历史业务示例 | 对应示例目录下的 `unit-tests/` | 如仍保留，可按需运行对应 `app-tests`、`replay-tests`、`hardware-tests` |
 | dev-support | `examples/dev-support/unit-tests/` | `examples/dev-support/app-tests/`、`replay-tests/`、`hardware-tests/` |
@@ -58,14 +60,14 @@ protocol/
 | 数据结构协议 | `protocol.data.version` | 事件信封、事件名、payload schema、stream header、错误码、golden fixture、反例 fixture。 |
 | 事件处理规范 | `protocol.behavior.version` | server 和 device 收到某类事件后应该返回什么事件、触发什么流程、更新什么状态、写出什么产物。 |
 
-数据结构协议主要通过 JSON / YAML / schema / fixture 显式存储。事件处理规范是 L1 conformance 的输入，真正的行为验证发生在 `agent-server/protocol-tests/` 和 `devices/python/protocol-tests/`。
+数据结构协议主要通过 JSON / YAML / schema / fixture 显式存储。事件处理规范是 L1 conformance 的输入，真正的行为验证发生在 `agent-server/protocol-tests/`、各语言 Device SDK 原生测试和端侧参考工程契约测试中。
 
 ## 4. 各层范围
 
 | 层级 | 测试目标 | 主要位置 |
 | --- | --- | --- |
 | P0 协议资产检查 | 检查协议文档、schema、fixture、错误码、行为规范引用和版本号。 | `protocol/protocol-tests/` |
-| L1 事件行为一致性 | 检查 Server SDK / Device SDK 面对协议事件时是否按事件处理规范执行动作。 | `agent-server/protocol-tests/`、`devices/python/protocol-tests/` |
+| L1 事件行为一致性 | 检查 Server SDK / Device SDK 面对协议事件时是否按事件处理规范执行动作。 | `agent-server/protocol-tests/`、`devices/javascript/test/`、`devices/swift/Tests/`、`devices/c/tests/` |
 | L2 大模型能力 | 检查真实 ASR、TTS、Vision/Text、Realtime provider 的能力、稳定性、延迟和错误诊断。 | `agent-server/model-provider-tests/` |
 | L3 应用能力 | 检查 device_app_demo、dev-support、真实样例回放和端侧参考工程。 | `examples/device_app_demo/app-tests/`、`examples/dev-support/app-tests/` |
 
@@ -83,10 +85,19 @@ L1 事件行为一致性：
 
 ```bash
 uv run python -m pytest agent-server/protocol-tests -q
-uv run python -m pytest devices/python/protocol-tests -q
 uv run python -m pytest -m sdk -q
 uv run python -m pytest -m device_sdk -q
 uv run python -m pytest -m interop -q
+```
+
+多语言 Device SDK 原生测试：
+
+```bash
+cd devices/javascript && npm test
+cd devices/swift && swift test
+cmake -S devices/c -B /tmp/realtime-agent-device-c-build
+cmake --build /tmp/realtime-agent-device-c-build
+ctest --test-dir /tmp/realtime-agent-device-c-build --output-on-failure
 ```
 
 L2 大模型能力：
@@ -125,10 +136,10 @@ uv run python -m pytest
 | 协议数据结构、事件名、payload、stream header | `protocol/protocol-tests` 或 `-m protocol` | 如果改变处理动作，加跑 `-m sdk`、`-m device_sdk`。 |
 | 事件处理规范 | `-m sdk`、`-m device_sdk` | `-m interop`。 |
 | Server SDK control / stream / output / task / Context API | `agent-server/protocol-tests` 或 `-m sdk` | `-m interop`。 |
-| Device SDK | `devices/python/protocol-tests` 或 `-m device_sdk` | `-m interop`。 |
+| Device SDK | 对应语言 SDK 原生测试，或 `-m device_sdk` | `-m interop`。 |
 | Server/Device WebSocket 互操作 | `-m interop` | `-m sdk`、`-m device_sdk`。 |
 | ASR / TTS / Vision / Realtime provider adapter | `agent-server/model-provider-tests` 或 `-m model_provider` | 相关 L1 SDK 测试。 |
-| Device Demo / Swift Device SDK 入口 | `examples/device_app_demo/app-tests` | 相关 Swift SDK 测试。 |
+| Device Demo / Device SDK 参考端入口 | `examples/device_app_demo/app-tests` | 相关语言 SDK 测试；ESP32-S3 改动加跑固件构建。 |
 | 历史业务示例能力 | 对应示例目录下的 `app-tests` | 对应示例目录下的 `replay-tests`。 |
 | dev-support 端侧参考工程 | `examples/dev-support/unit-tests`、`examples/dev-support/app-tests` | 相关 L1 interop 或 L3 replay。 |
 
