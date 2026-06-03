@@ -8,6 +8,7 @@ import types
 import wave
 from pathlib import Path
 
+import realtime_agent.agent_core.vision as vision_module
 from realtime_agent.agent_core.omni import (
     OMNI_REALTIME_IMAGE_MAX_BYTES,
     REALTIME_TOOL_CALL_PROMPT_RULE,
@@ -19,12 +20,52 @@ from realtime_agent.agent_core.omni import (
     RealtimeToolBridge,
     _prepare_omni_realtime_image,
 )
+from realtime_agent.agent_core.providers import TranscriptEvent
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.asset.service import AssetRef
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.realtime_pipeline import create_omni_realtime_pipeline
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
+
+
+class SentenceBoundaryAsrProvider:
+    """测试用 ASR/VAD 合一 provider。
+
+    主要功能：按音频 seq 返回 sentence_begin、partial 和 sentence_end/final，
+    用于验证 conversation Omni manual 链路由 ASR provider 句边界驱动。
+    """
+
+    provider_name = "sentence-asr"
+    model = "sentence-asr"
+
+    def __init__(self, text: str = "做一下自我介绍。") -> None:
+        self.text = text
+        self._begun = False
+        self._ended = False
+
+    def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+        """根据 chunk seq 生成 ASR 句边界事件。"""
+
+        if not self._begun:
+            self._begun = True
+            return [TranscriptEvent(text="", sentence_id=1, sentence_begin=True, begin_time_ms=0)]
+        if chunk.seq >= 2 and not self._ended:
+            self._ended = True
+            return [TranscriptEvent(text=self.text, sentence_id=1, sentence_end=True, final=True, end_time_ms=300)]
+        return [TranscriptEvent(text=self.text[:4], sentence_id=1)]
+
+    def cancel(self) -> None:
+        """重置测试 provider 状态。"""
+
+        self._begun = False
+        self._ended = False
+
+
+def patch_sentence_asr(monkeypatch, *, text: str = "做一下自我介绍。") -> None:
+    """把当前测试的 ASR provider 替换为句边界 provider。"""
+
+    monkeypatch.setattr(vision_module, "build_asr_provider", lambda config: (SentenceBoundaryAsrProvider(text), None))
 
 
 class Connection:
@@ -1715,23 +1756,22 @@ def test_realtime_create_response_forwards_to_provider_and_records_event(tmp_pat
     )
 
 
-def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path) -> None:
+def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path, monkeypatch) -> None:
     """测试目标：验证 conversation runtime 下 Omni Manual 最小音频链路可运行。
 
-    测试方法：用 `conversation_runtime=conversation` 和 mock Omni provider 创建 App，
-    输入一片有效语音和足够长静音。
+    测试方法：用 `conversation_runtime=conversation`、mock Omni provider 和 ASR/VAD
+    合一 provider 创建 App，输入三片音频触发 sentence_begin 与 sentence_end。
     预期结果：App 使用 OmniManualConversationRuntime；speech 边界事件下发给端侧；
     provider 收到 commit 和显式 create_response。
     """
 
+    patch_sentence_asr(monkeypatch)
     app = RealtimeAgentApp(
         RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             agent_mode="omni",
             conversation_runtime="conversation",
             omni_provider="mock",
-            audio_pipeline_vad_rms_threshold=10,
-            audio_pipeline_vad_silence_timeout_ms=40,
         )
     )
     connection = Connection("dev-web")
@@ -1777,15 +1817,17 @@ def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path)
     assert "conversation.agent_output_delta" in conversation_events
 
 
-def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path) -> None:
+def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path, monkeypatch) -> None:
     """测试目标：验证 Omni Manual conversation runtime 能用 turn_started 驱动视觉采样。
 
     测试方法：启用 conversation runtime 和 mock Omni provider，注入 fake asset
-    service，写入一片有效语音后等待视觉采样线程追加图片，再写入静音结束 turn。
+    service，写入一片音频触发 ASR sentence_begin 后等待视觉采样线程追加图片，
+    再写入 sentence_end 结束 turn。
     预期结果：视觉帧被请求并追加到 provider；turn 结束后执行 commit 和 response
     create，runs 中能看到 conversation speech 与视觉采样事件。
     """
 
+    patch_sentence_asr(monkeypatch)
     image_path = tmp_path / "conversation-turn-frame.jpg"
     image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
     asset_service = FakeAssetService(image_path)
@@ -1795,8 +1837,6 @@ def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(
             agent_mode="omni",
             conversation_runtime="conversation",
             omni_provider="mock",
-            audio_pipeline_vad_rms_threshold=10,
-            audio_pipeline_vad_silence_timeout_ms=40,
             visual_realtime_video_enabled=True,
             visual_realtime_video_frame_interval_seconds=0.05,
             visual_realtime_video_frame_timeout_seconds=0.1,
@@ -1855,23 +1895,23 @@ def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(
     assert asset_service.clears
 
 
-def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path) -> None:
-    """测试目标：验证 Omni Manual conversation runtime 不把打断逻辑放进 VAD。
+def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 Omni Manual conversation runtime 不把打断逻辑放进输入边界。
 
-    测试方法：使用 mock Omni provider 写入一片有效语音；`audio_chunk` 先触发
-    provider 音频输出，随后 `turn_started` 由 runtime 判断当前输出状态并发出取消请求。
+    测试方法：使用 mock Omni provider 和 ASR/VAD 合一 provider 写入一片音频；
+    `audio_chunk` 先触发 provider 音频输出，随后 ASR sentence_begin 驱动
+    `turn_started`，由 runtime 判断当前输出状态并发出取消请求。
     预期结果：App 统一处理 `output_cancel_requested`，最终调用 provider cancel；
-    `VoiceActivityBoundary` 仍只负责 speech 边界。
+    ASR-backed boundary 只负责 speech 边界与 ASR 文本增量。
     """
 
+    patch_sentence_asr(monkeypatch)
     app = RealtimeAgentApp(
         RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
             agent_mode="omni",
             conversation_runtime="conversation",
             omni_provider="mock",
-            audio_pipeline_vad_rms_threshold=10,
-            audio_pipeline_vad_silence_timeout_ms=40,
         )
     )
     connection = Connection("dev-web")

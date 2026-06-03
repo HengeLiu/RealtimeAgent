@@ -12,7 +12,7 @@ from realtime_agent.control import ControlService
 from realtime_agent.conversation.config import ConversationRuntimeConfig
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
-from realtime_agent.conversation.input import AsrSpeechInputBoundary, ServerVadSpeechInputBoundary, VoiceActivityBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary
 from realtime_agent.memory import MemoryService
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import OutputService
@@ -35,7 +35,7 @@ class ConversationRuntimeBuildConfig:
     主要功能：把 `RealtimeAgentConfig` 中与音视频 conversation runtime 相关的字段
     收敛成独立结构，避免 `conversation.runtime` 反向 import `app.py`。
     主要属性：`agent_mode` 决定 Omni 或 VL runtime；其余字段分别对应 provider、
-    VAD、上下文、视觉采样和多模态策略。
+    上下文、视觉采样和多模态策略。
     """
 
     agent_mode: str
@@ -56,8 +56,6 @@ class ConversationRuntimeBuildConfig:
     vision_multimodal_video_max_frames: int = 16
     vision_multimodal_video_frame_jpeg_quality: int = 85
     max_context_messages: int = 30
-    audio_vad_rms_threshold: float = 500.0
-    audio_vad_silence_timeout_ms: int = 650
     visual_realtime_video_enabled: bool = True
     visual_frame_interval_seconds: float = 1.0
     visual_frame_timeout_seconds: float = 1.5
@@ -103,8 +101,8 @@ def build_conversation_runtime(
     """按 `agent.mode` 构建 conversation runtime。
 
     主要逻辑：Omni 模式构建 `OmniManualConversationRuntime` 并强制 provider
-    `turn_detection=manual`；Vision 模式构建 `VisionConversationRuntime`，由
-    ASR-backed boundary 统一产生 `SpeechInputDelta`。
+    `turn_detection=manual`；Omni 和 Vision 都由 ASR-backed boundary 统一产生
+    `SpeechInputDelta`。
     参数：`config` 为配置快照；`dependencies` 为 app 已创建的服务依赖。
     返回值：可被 `RealtimeAgentApp` 当作旧 AgentCore 接口使用的 runtime。
     异常情况：未知 `agent_mode` 抛出 NotImplementedError。
@@ -138,12 +136,7 @@ def _build_omni_runtime(
         ),
         output_service=dependencies.output_service,
         recorder=dependencies.recorder,
-        speech_boundary=ServerVadSpeechInputBoundary(
-            VoiceActivityBoundary(
-                threshold=config.audio_vad_rms_threshold,
-                silence_timeout_ms=config.audio_vad_silence_timeout_ms,
-            )
-        ),
+        speech_boundary=AsrSpeechInputBoundary(config=config.asr_config, recorder=dependencies.recorder),
     )
 
 

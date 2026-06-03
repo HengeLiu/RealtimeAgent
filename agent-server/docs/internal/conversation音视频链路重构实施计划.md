@@ -293,15 +293,17 @@ class SpeechInputBoundary(Protocol):
 3. 不调用 VL 模型。
 4. 不启动或停止视觉采样。
 
-### 7.3 `VoiceActivityBoundary`
+### 7.3 ASR-backed speech boundary
 
-`VoiceActivityBoundary` 是 `SpeechInputBoundary` 内的一个可替换组件。
+当前 conversation runtime 使用 ASR-backed speech boundary。它是
+`SpeechInputBoundary` 内部的句边界适配组件，输入来自 ASR/VAD 合一 provider 的
+结构化事件。
 
 建议接口：
 
 ```python
-class VoiceActivityBoundary(Protocol):
-    async def append_audio(self, chunk: StreamChunk) -> list[SpeechBoundaryDelta]: ...
+class AsrSpeechBoundary(Protocol):
+    async def append_asr_event(self, *, chunk: StreamChunk, event: ASREvent) -> list[SpeechBoundaryDelta]: ...
     async def flush(self) -> list[SpeechBoundaryDelta]: ...
 ```
 
@@ -316,7 +318,8 @@ class VoiceActivityBoundary(Protocol):
 
 1. 打断不在 VAD 组件中处理。
 2. 视觉采样不在 VAD 组件中处理。
-3. ASR 文本不从 `VoiceActivityBoundary` 输出。
+3. ASR 文本不从 speech boundary 输出，而是由 `SpeechInputBoundary` 输出
+   `asr_text_delta/final_text`。
 4. ASR/VAD 合一 provider 的句子边界可以适配成 `speech_started` / `speech_stopped`。
 
 ### 7.4 `ConversationOutputAdapter`
@@ -338,7 +341,7 @@ class ConversationOutputAdapter(Protocol):
 | --- | --- | --- |
 | `ConversationRuntime` | `RealtimeAgentApp`、`LegacyAgentCoreRouter` | 作为 app 内新分支接入；旧 router 只作为 legacy fallback。 |
 | `AudioInput` | `AudioPipeline` | conversation runtime 通过外层 `AudioPipeline` 接收规范化音频；`RealtimeAudioNormalizer` 只供 legacy pipeline 使用。 |
-| `VoiceActivityBoundary` | `ServerVadProcessor` | Omni Manual 第一版可复用 RMS + silence timeout 逻辑。 |
+| ASR-backed `SpeechInputBoundary` | `AsrPipeline`、`AsrProviderAdapter` | Omni Manual 和 VL 共同使用 ASR/VAD 合一 provider 的 sentence begin / end。 |
 | `ASRProvider` | `AsrProviderAdapter`、`DashScopeAsrProviderAdapter` | 当前类名可保留，conversation providers 做包装。 |
 | `VLMProvider` | `VisionModelAdapter` | 先包装，不重写请求构造。 |
 | `OmniRealtimeProvider` | `RealtimeProviderAdapter`、`QwenOmniRealtimeAdapter` | 增加 manual 配置和显式 response create。 |
@@ -430,7 +433,8 @@ uv run python -m pytest agent-server/unit-tests -q
 ```text
 sensor.mic
   -> AudioInput
-  -> VoiceActivityBoundary
+  -> ASRProvider(sentence_begin / sentence_end)
+  -> AsrSpeechInputBoundary
   -> OmniConversationCore
   -> OmniRealtimeProvider manual commit/create_response
   -> ConversationOutputAdapter
@@ -450,7 +454,8 @@ sensor.mic
 关键任务：
 
 1. `AudioInput` 先复用现有 `AudioPipeline` 的格式校验和重采样逻辑，避免重复实现。
-2. `VoiceActivityBoundary` 第一版复用 `ServerVadProcessor` 逻辑。
+2. `AsrSpeechInputBoundary` 使用 ASR/VAD 合一 provider 产生 turn boundary，不再为
+   Omni conversation runtime 保留 RMS VAD 版本。
 3. `OmniConversationCore` 对每个 `audio_chunk` append 到 provider。
 4. `turn_started` 触发统一 speech started 通知和输出打断。
 5. `turn_ended` 触发 provider `commit_input()` 和 `create_response()`。
@@ -685,13 +690,12 @@ agent:
 重点覆盖：
 
 1. `SpeechInputDelta` 字段和序列化。
-2. `VoiceActivityBoundary` start / stop 去重。
-3. 静音确认窗口。
-4. 短噪声不产生有效 turn。
-5. ASR `sentence_begin` / `sentence_end` 到 turn delta 的映射。
-6. Omni Manual `turn_ended` 后 commit 和 create_response 顺序。
-7. VL final text 只提交一次。
-8. 输出 adapter 调用现有 `OutputService` 的路径。
+2. `AsrVoiceActivityBoundary` sentence id 去重。
+3. ASR `sentence_begin` / `sentence_end` 到 turn delta 的映射。
+4. ASR partial / final_text 到 `SpeechInputDelta` 的映射。
+5. Omni Manual `turn_ended` 后 commit 和 create_response 顺序。
+6. VL final text 只提交一次。
+7. 输出 adapter 调用现有 `OutputService` 的路径。
 
 测试 docstring 必须写明测试目标、测试方法和预期结果。
 
@@ -741,10 +745,10 @@ VL conversation 联调顺序：
 | 风险 | 表现 | 缓解 |
 | --- | --- | --- |
 | 新旧链路双重消费音频 | provider 收到重复 chunk，ASR 或 Omni 响应异常。 | 通过 runtime 配置单选，只允许一个输入消费者绑定。 |
-| VAD stop 过早 | 用户一句话被切成多轮。 | 增加 silence timeout、min speech、pre-roll 配置，并写 runs 证据。 |
-| VAD stop 过晚 | Omni Manual commit 延迟，交互变慢。 | 本地开发暴露 DEBUG 参数，记录 stop 判定原因。 |
+| ASR sentence end 过早 | 用户一句话被切成多轮。 | 记录 sentence id、begin/end 时间和 final_text，优先调 ASR provider 参数。 |
+| ASR sentence end 过晚 | Omni Manual commit 延迟，交互变慢。 | 记录 ASR 句边界延迟和 provider 事件时间线。 |
 | VL final text 重复提交 | VLM 被调用两次。 | `turn_id` 去重，final text 提交后标记 consumed。 |
-| 打断逻辑又混入 VAD | VAD 组件承担输出取消职责。 | `VoiceActivityBoundary` 只输出 speech 边界，打断放在 Agent Core 或输出 adapter。 |
+| 打断逻辑又混入输入边界 | 输入边界承担输出取消职责。 | speech boundary 只输出 speech 边界，打断放在 turn / output controller。 |
 | OutputService 被重复实现 | 新旧输出仲裁不一致。 | 第一阶段只包装现有 `OutputService`。 |
 | app.py 继续膨胀 | 装配逻辑难以维护。 | 只在 app.py 增加 runtime 工厂，具体组装放进 `conversation/runtime.py`。 |
 
@@ -842,7 +846,7 @@ uv run python -m pytest agent-server/model-provider-tests -q
 3. Omni provider 能收到 turn 内视觉输入。
 4. 视觉采样失败不阻塞音频 turn commit 和 response create。
 5. 用户在助手输出期间说话时，新链路能触发输出取消。
-6. `VoiceActivityBoundary` 仍只输出 speech 边界，不包含打断逻辑。
+6. ASR-backed speech boundary 仍只输出 speech 边界，不包含打断逻辑。
 7. runs 产物能串起 speech boundary、视觉采样、provider append、输出取消和播放恢复。
 
 验收命令：
@@ -878,6 +882,20 @@ uv run python -m realtime_agent_python_playback_glass conversation-regression --
 6. turn 内视觉资产能进入 VLM 请求。
 7. VLM 响应文本能通过现有 `OutputService` 进入 TTS 和播放。
 8. final text 不重复提交。
+
+### 16.3a Omni Manual ASR-backed 输入收敛
+
+本轮根据最新决策调整：Omni Manual conversation runtime 不再保留 RMS VAD 版本，
+也不通过配置选择 VAD / ASR boundary。
+
+完成标准：
+
+1. Omni Manual 固定使用 `AsrSpeechInputBoundary`。
+2. Omni provider 固定以 `turn_detection=manual` 打开。
+3. ASR provider 的 `sentence_begin` 驱动 `turn_started`。
+4. ASR provider 的 `sentence_end/final` 驱动 `turn_ended`。
+5. `turn_ended` 后执行 Omni provider `commit_input()` 和 `create_response()`。
+6. `conversation/` 不再导出 RMS `VoiceActivityBoundary` 或 `ServerVadSpeechInputBoundary`。
 9. 至少完成一次真实 ASR + VLM + TTS 联调。
 
 验收命令：
@@ -974,9 +992,9 @@ git diff --check
 
 1. Phase 0：已新增 `conversation/` 基础类型、运行时配置和旧 `ConversationMemoryService` 导入兼容。
 2. Phase 1：Omni provider 已支持 manual turn detection、显式 `commit_input()` 和 `create_response()`。
-3. Phase 2：Omni conversation runtime 已支持 audio-only Manual 链路，`turn_ended` 后执行 commit 和 response create。
+3. Phase 2：Omni conversation runtime 已支持 ASR-backed Manual 链路，`turn_ended` 后执行 commit 和 response create；conversation runtime 不再保留 RMS VAD 版 Omni 链路。
 4. Phase 3：Omni conversation runtime 已把 `turn_started/turn_ended` 接入现有视觉采样状态，用户说话期间可触发输出取消。
-5. Phase 4：VL conversation runtime 已完成第一版包装式迁移：`AsrSpeechInputBoundary` 把 ASR partial 映射为 `asr_text_delta`，并通过 `AsrVoiceActivityBoundary` 把 sentence begin / sentence end / final 统一成 speech boundary 后再转成 `SpeechInputDelta`。
+5. Phase 4：VL conversation runtime 已完成第一版包装式迁移；Omni Manual 和 VL 当前共用 `AsrSpeechInputBoundary`，把 ASR partial 映射为 `asr_text_delta`，并通过 `AsrVoiceActivityBoundary` 把 sentence begin / sentence end / final 统一成 speech boundary 后再转成 `SpeechInputDelta`。
 6. Phase 5：conversation runtime 装配已从 `RealtimeAgentApp` 抽到 `conversation/runtime.py`，app conversation 分支只负责传入配置快照和服务依赖。
 7. Phase 5：`AgentCoreRouter` 已收敛为 `LegacyAgentCoreRouter` 的兼容别名，`RealtimeAgentApp` 只在 `agent.conversation.runtime=legacy` 时调用该旧 router。
 8. Phase 6：`realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` 和 `RealtimeAudioNormalizer` 已标记为 legacy realtime pipeline 兼容层；conversation runtime 已改用 `ConversationRuntimeEventEmitter` 和 `ConversationOutputController`，不再导入 legacy `realtime_pipeline` helper；`AudioPipeline` 明确为新旧链路共享的上行音频预处理入口。
@@ -1052,7 +1070,7 @@ uv run python -m pytest agent-server/protocol-tests -q
 
 ### 17.3 交付标准满足情况
 
-1. 已满足：`VoiceActivityBoundary` / `AsrVoiceActivityBoundary` 都只输出 `speech_started/speech_stopped`，ASR 文本不从 voice boundary 输出。
+1. 已满足：conversation runtime 只保留 ASR-backed speech boundary；`AsrVoiceActivityBoundary` 只输出 `speech_started/speech_stopped`，ASR 文本不从 voice boundary 输出。
 2. 已满足：Omni Manual 和 VL conversation runtime 都通过 `RealtimeTurnController` 统一发出 speech runtime 事件。
 3. 已满足：Omni Manual 和 VL conversation runtime 都通过 `OutputInterruptionController` 使用同一套打断判断规则。
 4. 已满足：`realtime_pipeline/*` 保留为 `agent.conversation.runtime=legacy` 的回退实现，新 conversation runtime 不再导入 legacy `realtime_pipeline` helper。

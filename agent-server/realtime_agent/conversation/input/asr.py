@@ -5,8 +5,7 @@ from typing import Any
 
 from realtime_agent.agent_core.providers import AsrProviderConfig
 from realtime_agent.agent_core.vision import AsrPipeline
-from realtime_agent.conversation.input.speech import _boundary_to_speech_input_delta
-from realtime_agent.conversation.input.vad import AsrVoiceActivityBoundary
+from realtime_agent.conversation.input.vad import AsrVoiceActivityBoundary, SpeechBoundaryDelta
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.observability import RunRecorder
 from realtime_agent.protocol import StreamChunk
@@ -136,3 +135,23 @@ class AsrSpeechInputBoundary:
             if value not in (None, False, []):
                 metadata[key] = value
         return metadata
+
+
+def _boundary_to_speech_input_delta(boundary: SpeechBoundaryDelta) -> SpeechInputDelta:
+    """把 ASR-backed speech 边界转换为 conversation 输入增量。
+
+    主要逻辑：`speech_started` 转成 `turn_started`，`speech_stopped` 转成
+    `turn_ended`，并保留 ASR 句边界诊断字段。
+    参数：`boundary` 为 ASR 句边界适配后的语音边界。
+    返回值：Agent Core 可消费的标准语音输入增量。
+    异常情况：无。
+    """
+
+    kind = "turn_started" if boundary.kind == "speech_started" else "turn_ended"
+    return SpeechInputDelta(
+        kind=kind,
+        session_id=boundary.session_id,
+        user_id=boundary.user_id,
+        stream_id=boundary.stream_id,
+        metadata={"speech_boundary": boundary.kind, **dict(boundary.metadata)},
+    )

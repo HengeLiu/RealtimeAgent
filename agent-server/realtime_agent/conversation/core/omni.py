@@ -6,7 +6,7 @@ from realtime_agent.agent_core.base import AgentCoreEvent
 from realtime_agent.agent_core.omni import OmniRealtimeAgentCore
 from realtime_agent.conversation.core.base import AgentSnapshot, ConversationContext, TaskSignal
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop
-from realtime_agent.conversation.input import CallbackVisualInputBoundary, ServerVadSpeechInputBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.output import ConversationOutputController
 from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
@@ -23,7 +23,7 @@ class OmniManualConversationRuntime:
     主要功能：以旧 `AgentCore` 兼容接口接入 `RealtimeAgentApp`，内部使用
     `SpeechInputDelta` 驱动 Omni Manual 的输入提交和响应创建。
     主要属性：`core` 复用现有 `OmniRealtimeAgentCore`；`speech_boundary` 负责把
-    连续音频转换为 `audio_chunk/turn_started/turn_ended`。
+    ASR/VAD provider 事件转换为 `audio_chunk/turn_started/turn_ended`。
     """
 
     def __init__(
@@ -32,12 +32,12 @@ class OmniManualConversationRuntime:
         core: OmniRealtimeAgentCore,
         output_service: OutputService,
         recorder: RunRecorder,
-        speech_boundary: ServerVadSpeechInputBoundary | None = None,
+        speech_boundary: AsrSpeechInputBoundary,
     ) -> None:
         self.core = core
         self.loop = OmniRealtimeLoop(core=core)
         setattr(self.core, "_conversation_provider_callbacks", self.loop.provider_callbacks)
-        self.speech_boundary = speech_boundary or ServerVadSpeechInputBoundary()
+        self.speech_boundary = speech_boundary
         self.output_controller = ConversationOutputController(output_service=output_service, recorder=recorder)
         self.emitter = ConversationRuntimeEventEmitter(recorder=recorder)
         self.turn_controller = RealtimeTurnController(
@@ -194,6 +194,7 @@ class OmniManualConversationRuntime:
         """记录上行麦克风 stream。"""
 
         self._upstream_by_session[session_id] = stream_id
+        self.speech_boundary.prepare_provider(stream_id=stream_id, session_id=session_id)
         self.core.on_audio_input_opened(user_id=user_id, session_id=session_id, stream_id=stream_id)
         self.emitter.emit("upstream_ready", user_id=user_id, session_id=session_id, stream_id=stream_id)
 
@@ -201,6 +202,7 @@ class OmniManualConversationRuntime:
         """记录上行麦克风 stream 关闭。"""
 
         self._upstream_by_session.pop(session_id, None)
+        self.speech_boundary.close_provider(stream_id=stream_id)
         self.core.on_audio_input_closed(user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
         self.emitter.emit("upstream_detached", user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
 
@@ -243,11 +245,11 @@ class OmniManualConversationRuntime:
     def _handle_turn_started(self, delta: SpeechInputDelta) -> None:
         self.turn_controller.handle_turn_started(
             delta,
-            reason="conversation_vad_speech_started",
+            reason="conversation_asr_speech_started",
         )
 
     def _handle_turn_ended(self, delta: SpeechInputDelta) -> None:
-        reason = "conversation_vad_speech_stopped"
+        reason = "conversation_asr_speech_stopped"
         context = self.turn_controller.handle_turn_ended(
             delta,
             reason=reason,

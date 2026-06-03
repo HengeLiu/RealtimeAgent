@@ -557,8 +557,6 @@ class RealtimeAgentApp:
                     vision_multimodal_video_max_frames=self.config.vision_multimodal_video_max_frames,
                     vision_multimodal_video_frame_jpeg_quality=self.config.vision_multimodal_video_frame_jpeg_quality,
                     max_context_messages=self.config.vision_max_context_messages,
-                    audio_vad_rms_threshold=self.config.audio_pipeline_vad_rms_threshold,
-                    audio_vad_silence_timeout_ms=self.config.audio_pipeline_vad_silence_timeout_ms,
                     visual_realtime_video_enabled=self.config.visual_realtime_video_enabled,
                     visual_frame_interval_seconds=self.config.visual_realtime_video_frame_interval_seconds,
                     visual_frame_timeout_seconds=self.config.visual_realtime_video_frame_timeout_seconds,

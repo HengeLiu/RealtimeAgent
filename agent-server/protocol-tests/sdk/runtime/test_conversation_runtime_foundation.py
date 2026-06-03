@@ -25,9 +25,7 @@ from realtime_agent.conversation.input import (
     AsrVoiceActivityBoundary,
     AudioInputBoundary,
     CallbackVisualInputBoundary,
-    ServerVadSpeechInputBoundary,
     TurnVisualInputBoundary,
-    VoiceActivityBoundary,
 )
 from realtime_agent.conversation.recorder import output_delta_record, speech_delta_record
 from realtime_agent.conversation.output import ConversationOutputController, ConversationOutputDeltaBridge
@@ -300,74 +298,6 @@ def test_agent_output_delta_record_does_not_embed_audio_bytes() -> None:
     assert b"\x01\x02\x03" not in record.values()
 
 
-def test_voice_activity_boundary_outputs_only_speech_boundaries() -> None:
-    """测试目标：验证 VoiceActivityBoundary 只输出 speech 边界。
-
-    测试方法：输入一片高 RMS 音频和两片静音音频。
-    预期结果：第一片触发 `speech_started`，静音窗口满足后触发 `speech_stopped`，
-    输出中不包含打断、视觉采样或模型提交语义。
-    """
-
-    vad = VoiceActivityBoundary(threshold=10, silence_timeout_ms=40)
-    speech = _mic_chunk(seq=1, payload=(1000).to_bytes(2, "little", signed=True) * 320)
-    silence_1 = _mic_chunk(seq=2, payload=b"\x00\x00" * 320)
-    silence_2 = _mic_chunk(seq=3, payload=b"\x00\x00" * 320)
-
-    start = vad.append_audio(speech)
-    mid = vad.append_audio(silence_1)
-    stop = vad.append_audio(silence_2)
-
-    assert [item.kind for item in start] == ["speech_started"]
-    assert mid == []
-    assert [item.kind for item in stop] == ["speech_stopped"]
-    assert all("interrupt" not in item.metadata for item in start + stop)
-    assert all("commit" not in item.metadata for item in start + stop)
-
-
-def test_voice_activity_boundary_keeps_state_per_stream() -> None:
-    """测试目标：验证 VAD 状态不会跨音频 stream 泄漏。
-
-    测试方法：让第一个 stream 只触发 started 但不触发 stopped，然后直接输入第二个
-    stream 的高 RMS 音频。
-    预期结果：第二个 stream 仍能触发自己的 `speech_started`，不会继承第一个
-    stream 的 speech_active 状态。
-    """
-
-    vad = VoiceActivityBoundary(threshold=10, silence_timeout_ms=40)
-    speech = (1000).to_bytes(2, "little", signed=True) * 320
-
-    first = vad.append_audio(_mic_chunk(seq=1, payload=speech, stream_id="stream-a"))
-    second = vad.append_audio(_mic_chunk(seq=1, payload=speech, stream_id="stream-b"))
-
-    assert [item.kind for item in first] == ["speech_started"]
-    assert [item.kind for item in second] == ["speech_started"]
-    assert first[0].stream_id == "stream-a"
-    assert second[0].stream_id == "stream-b"
-
-
-def test_server_vad_speech_input_boundary_emits_audio_and_turn_deltas() -> None:
-    """测试目标：验证服务端 VAD 输入边界输出统一 SpeechInputDelta。
-
-    测试方法：输入高 RMS 音频和足够长静音音频。
-    预期结果：每片音频都有 `audio_chunk`，并额外输出 `turn_started` 和
-    `turn_ended`。
-    """
-
-    boundary = ServerVadSpeechInputBoundary(VoiceActivityBoundary(threshold=10, silence_timeout_ms=40))
-    chunks = [
-        _mic_chunk(seq=1, payload=(1000).to_bytes(2, "little", signed=True) * 320),
-        _mic_chunk(seq=2, payload=b"\x00\x00" * 320),
-        _mic_chunk(seq=3, payload=b"\x00\x00" * 320),
-    ]
-
-    deltas = [delta for chunk in chunks for delta in boundary.append_audio(chunk)]
-
-    assert [delta.kind for delta in deltas] == ["audio_chunk", "turn_started", "audio_chunk", "audio_chunk", "turn_ended"]
-    assert deltas[0].audio is chunks[0]
-    assert deltas[1].metadata["speech_boundary"] == "speech_started"
-    assert deltas[-1].metadata["speech_boundary"] == "speech_stopped"
-
-
 def test_asr_speech_input_boundary_maps_sentence_events_to_turn_deltas(tmp_path, monkeypatch) -> None:
     """测试目标：验证 ASR-backed 输入边界把句子事件映射为统一 SpeechInputDelta。
 
@@ -501,7 +431,7 @@ def test_realtime_turn_controller_ignores_server_vad_echo_at_output_start(tmp_pa
     """测试目标：验证助手输出刚开始后的 server VAD 回采不会打断当前播放。
 
     测试方法：构造活跃 output stream，并把 `turn_started` 标记为
-    `conversation_vad_speech_started`；随后输入同一 stream 的 `turn_ended`。
+    `server_vad_speech_started`；随后输入同一 stream 的 `turn_ended`。
     预期结果：controller 只记录 ignored 事件，不触发 started/stopped 回调，也不输出
     `output_cancel_requested`，避免回采尾随触发空 turn 提交。
     """
@@ -541,12 +471,12 @@ def test_realtime_turn_controller_ignores_server_vad_echo_at_output_start(tmp_pa
     controller.observe_active_output(user_id="user-a", session_id="session-a")
     started_context = controller.handle_turn_started(
         started,
-        reason="conversation_vad_speech_started",
+        reason="server_vad_speech_started",
         on_started=lambda context: callbacks.append(context),
     )
     stopped_context = controller.handle_turn_ended(
         stopped,
-        reason="conversation_vad_speech_stopped",
+        reason="server_vad_speech_stopped",
         on_ended=lambda context: callbacks.append(context),
     )
 
