@@ -8,6 +8,10 @@ from realtime_agent.protocol import StreamChunk
 
 SpeechInputDeltaKind = Literal["audio_chunk", "asr_text_delta", "turn_started", "turn_ended"]
 AgentOutputDeltaKind = Literal[
+    "text",
+    "audio",
+    "control",
+    "task_signal",
     "text_delta",
     "text_final",
     "audio_chunk",
@@ -51,6 +55,8 @@ class AgentOutputDelta:
 
     kind: AgentOutputDeltaKind
     session_id: str
+    payload: bytes | str | dict[str, Any] | None = None
+    priority: str = "normal"
     output_id: str | None = None
     text_delta: str | None = None
     audio: bytes | None = None

@@ -632,7 +632,7 @@ class RealtimeAgentApp:
         if hasattr(self.agent_core, "bind_user_activity_callback"):
             self.agent_core.bind_user_activity_callback(self._mark_user_audio_activity)
         if hasattr(self.agent_core, "bind_pipeline_event_handler"):
-            self.agent_core.bind_pipeline_event_handler(self._handle_pipeline_event)
+            self.agent_core.bind_pipeline_event_handler(self._handle_runtime_control_event)
         self.vision_agent_core = self.agent_core
         self.audio_pipeline = AudioPipeline(
             agent_core=self.agent_core,
@@ -897,12 +897,17 @@ class RealtimeAgentApp:
         self.control_service.publish(event)
 
     def _handle_pipeline_event(self, event) -> None:
-        """消费 Realtime Pipeline 输出的统一控制事件。
+        """兼容旧 realtime pipeline 的事件处理入口。"""
 
-        主要逻辑：Text/Omni core 只负责解释 provider 边界并发出 PipelineEvent；
-        App 在这里统一发布端侧控制事件或触发取消动作，避免两条链路各自直接操作
-        ControlService。
-        参数：`event` 为 pipeline 发出的稳定事件对象。
+        self._handle_runtime_control_event(event)
+
+    def _handle_runtime_control_event(self, event) -> None:
+        """消费 runtime 输出的统一控制事件。
+
+        主要逻辑：legacy pipeline 和 conversation runtime 只负责解释输入边界并发出
+        runtime control event；App 在这里统一发布端侧控制事件或触发取消动作，避免
+        两条链路各自直接操作 ControlService。
+        参数：`event` 为 runtime 发出的稳定事件对象。
         返回值：无。
         异常情况：事件缺少必要字段时只记录 system event。
         """

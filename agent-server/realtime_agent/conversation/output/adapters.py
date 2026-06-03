@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from realtime_agent.observability import RunRecorder
+from realtime_agent.conversation.output.bridge import ConversationOutputDeltaBridge
+from realtime_agent.conversation.output.router import AgentOutputRouter
+from realtime_agent.conversation.recorder import output_delta_record
+from realtime_agent.conversation.types import AgentOutputDelta
 from realtime_agent.output import OutputService
 
 
@@ -15,9 +19,33 @@ class ConversationOutputController:
     def __init__(self, *, output_service: OutputService, recorder: RunRecorder) -> None:
         self.output_service = output_service
         self.recorder = recorder
+        self.router = AgentOutputRouter(output_service=output_service)
+        self.delta_bridge = ConversationOutputDeltaBridge(output_service=output_service, recorder=recorder)
+        self.delta_bridge.bind()
         self._paused_sessions: set[str] = set()
         self._closed_sessions: set[str] = set()
         self._downstream_by_session: dict[str, str] = {}
+
+    def emit(self, delta: AgentOutputDelta) -> None:
+        """发送 Agent 标准输出增量。
+
+        主要逻辑：先把轻量记录写入 runs，再委托 `AgentOutputRouter` 决定文本、
+        原生音频或取消请求的下游路径。
+        参数：`delta` 为 Agent Core 产出的标准输出增量。
+        返回值：无。
+        异常情况：底层 OutputService 异常向上传播。
+        """
+
+        self.recorder.record_conversation_event(
+            delta.session_id,
+            {"event": "conversation.output_delta", **output_delta_record(delta)},
+        )
+        self.router.route(delta)
+
+    def cancel_current(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """按标准输出适配接口取消当前输出。"""
+
+        self.cancel_active_output(user_id=user_id, session_id=session_id, reason=reason)
 
     def bind_downstream(
         self,

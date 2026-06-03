@@ -4,9 +4,12 @@ from typing import Callable
 
 from realtime_agent.agent_core.base import AgentCoreEvent
 from realtime_agent.agent_core.omni import OmniRealtimeAgentCore
-from realtime_agent.conversation.input import ServerVadSpeechInputBoundary
+from realtime_agent.conversation.core.base import AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.loop import OmniRealtimeLoop
+from realtime_agent.conversation.input import CallbackVisualInputBoundary, ServerVadSpeechInputBoundary
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.output import ConversationOutputController
+from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import OutputService
@@ -32,9 +35,23 @@ class OmniManualConversationRuntime:
         speech_boundary: ServerVadSpeechInputBoundary | None = None,
     ) -> None:
         self.core = core
+        self.loop = OmniRealtimeLoop(core=core)
+        setattr(self.core, "_conversation_provider_callbacks", self.loop.provider_callbacks)
         self.speech_boundary = speech_boundary or ServerVadSpeechInputBoundary()
         self.output_controller = ConversationOutputController(output_service=output_service, recorder=recorder)
         self.emitter = ConversationRuntimeEventEmitter(recorder=recorder)
+        self.turn_controller = RealtimeTurnController(
+            emitter=self.emitter,
+            interruption_controller=OutputInterruptionController(
+                active_output_stream_id=self._active_output_stream_id,
+                state=self._state,
+            ),
+            stream_id_for_session=lambda session_id: self._upstream_by_session.get(session_id, ""),
+            visual_boundary=CallbackVisualInputBoundary(
+                on_started=self._sync_conversation_speech_started,
+                on_ended=self._sync_conversation_speech_stopped,
+            ),
+        )
         self._session_by_user: dict[str, str] = {}
         self._upstream_by_session: dict[str, str] = {}
 
@@ -53,12 +70,33 @@ class OmniManualConversationRuntime:
 
         self.core.bind_user_activity_callback(callback)
 
-    def open(self, user_id: str, session_id: str) -> None:
-        """打开 Omni Manual 会话。"""
+    def open(self, user_id: str | ConversationContext, session_id: str | None = None) -> None:
+        """打开 Omni Manual 会话。
+
+        主要逻辑：兼容旧 `open(user_id, session_id)` 调用，同时支持设计文档中的
+        `open(context)` AgentCore 入口。
+        """
+
+        if isinstance(user_id, ConversationContext):
+            context = user_id
+            user_id = context.user_id
+            session_id = context.session_id
+        if session_id is None:
+            raise ValueError("session_id is required when opening Omni Manual conversation without context")
 
         self._session_by_user[user_id] = session_id
         self.core.open(user_id, session_id)
         self.emitter.emit("session_ready", user_id=user_id, session_id=session_id)
+
+    def open_context(self, context: ConversationContext) -> None:
+        """按 AgentCoreABC 上下文打开 Omni Manual 会话。"""
+
+        self.open(context.user_id, context.session_id)
+
+    def open_agent(self, context: ConversationContext) -> None:
+        """按设计文档中的 AgentContext 打开 Omni Manual 会话。"""
+
+        self.open_context(context)
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """消费归一化后的麦克风音频。
@@ -69,6 +107,36 @@ class OmniManualConversationRuntime:
 
         for delta in self.speech_boundary.append_audio(chunk):
             self._consume_speech_delta(delta)
+
+    def consume_input(self, delta: SpeechInputDelta) -> None:
+        """消费标准语音输入增量。
+
+        主要逻辑：作为 `AgentCoreABC.consume_input` 的 conversation 实现入口，
+        保留旧 `append_audio_event()` 适配的同时让测试和后续 runtime 可以直接送入
+        标准输入事件。
+        参数：`delta` 为语音输入边界输出的标准增量。
+        返回值：无。
+        异常情况：链路专属 core 异常会向上传播。
+        """
+
+        self._consume_speech_delta(delta)
+
+    def consume_task_signal(self, signal: TaskSignal) -> None:
+        """消费长生命周期 Task 回流信号。
+
+        当前 Omni Manual provider 尚未支持把 TaskSignal 直接注入模型会话；先写入
+        conversation 事件，保证信号不会静默丢失，后续可在 AgentLoop 内按策略转成
+        provider item 或输出 delta。
+        """
+
+        self.emitter.emit(
+            "task_signal_received",
+            user_id=signal.user_id or "",
+            session_id=signal.session_id,
+            kind=signal.kind,
+            payload=dict(signal.payload),
+            metadata=dict(signal.metadata),
+        )
 
     def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
         """兼容旧 AgentCore 输入提交入口。"""
@@ -105,6 +173,22 @@ class OmniManualConversationRuntime:
         """返回内部 Omni core 事件快照。"""
 
         return self.core.events()
+
+    def snapshot(self) -> AgentSnapshot:
+        """返回 Omni Manual runtime 只读状态快照。"""
+
+        user_id = next(iter(self._session_by_user.keys()), None)
+        session_id = self._session_by_user.get(user_id or "") if user_id else None
+        active_streams = {}
+        if session_id and self._upstream_by_session.get(session_id):
+            active_streams["mic"] = self._upstream_by_session[session_id]
+        return AgentSnapshot(
+            user_id=user_id,
+            session_id=session_id,
+            mode="omni",
+            state=self._state(user_id or "", session_id or "") if user_id and session_id else None,
+            active_streams=active_streams,
+        )
 
     def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
         """记录上行麦克风 stream。"""
@@ -147,7 +231,8 @@ class OmniManualConversationRuntime:
 
     def _consume_speech_delta(self, delta: SpeechInputDelta) -> None:
         if delta.kind == "audio_chunk" and delta.audio is not None:
-            self.core.append_audio_event(delta.audio)
+            self.turn_controller.observe_active_output(user_id=delta.user_id or "", session_id=delta.session_id)
+            self.loop.consume_input(delta)
             return
         if delta.kind == "turn_started":
             self._handle_turn_started(delta)
@@ -156,49 +241,69 @@ class OmniManualConversationRuntime:
             self._handle_turn_ended(delta)
 
     def _handle_turn_started(self, delta: SpeechInputDelta) -> None:
-        session_id = delta.session_id
-        user_id = delta.user_id or ""
-        stream_id = delta.stream_id or self._upstream_by_session.get(session_id, "")
-        self.emitter.emit(
-            "speech_started",
-            user_id=user_id,
-            session_id=session_id,
-            stream_id=stream_id,
+        self.turn_controller.handle_turn_started(
+            delta,
             reason="conversation_vad_speech_started",
-            diagnostics=dict(delta.metadata),
         )
+
+    def _handle_turn_ended(self, delta: SpeechInputDelta) -> None:
+        reason = "conversation_vad_speech_stopped"
+        context = self.turn_controller.handle_turn_ended(
+            delta,
+            reason=reason,
+        )
+        if context.ignored:
+            return
+        self.loop.consume_input(
+            SpeechInputDelta(
+                kind="turn_ended",
+                session_id=context.session_id,
+                user_id=context.user_id,
+                stream_id=context.stream_id,
+                metadata=dict(delta.metadata),
+            )
+        )
+
+    def _sync_conversation_speech_started(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """同步 Omni Manual 语音开始到旧 core。"""
+
         self.core.on_conversation_speech_started(
             user_id=user_id,
             session_id=session_id,
-            reason="conversation_vad_speech_started",
+            reason=reason,
         )
-        active_output_stream_id = self.output_controller.active_output_stream_id(user_id=user_id, session_id=session_id)
-        state = getattr(self.core, "_state_by_session", {}).get(session_id, "")
-        if active_output_stream_id is not None or state in {"thinking", "speaking", "tool_running"}:
-            self.emitter.emit(
-                "output_cancel_requested",
-                user_id=user_id,
-                session_id=session_id,
-                stream_id=active_output_stream_id or "",
-                reason="conversation_vad_speech_started",
-                output_stream_id=active_output_stream_id,
-                state=state,
-            )
 
-    def _handle_turn_ended(self, delta: SpeechInputDelta) -> None:
-        session_id = delta.session_id
-        user_id = delta.user_id or ""
-        stream_id = delta.stream_id or self._upstream_by_session.get(session_id, "")
-        self.emitter.emit(
-            "speech_stopped",
+    def _sync_conversation_speech_stopped(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """同步 Omni Manual 语音结束到旧 core。"""
+
+        self.core.on_conversation_speech_stopped(
             user_id=user_id,
             session_id=session_id,
-            stream_id=stream_id,
-            reason="conversation_vad_speech_stopped",
-            diagnostics=dict(delta.metadata),
+            reason=reason,
         )
-        reason = "conversation_vad_speech_stopped"
-        self.core.on_conversation_speech_stopped(user_id=user_id, session_id=session_id, reason=reason)
-        self.core.commit_input(user_id, session_id, reason=reason)
-        self.core.on_conversation_input_committed(session_id=session_id, reason=reason)
-        self.core.create_response(user_id, session_id, reason=reason)
+
+    def _active_output_stream_id(self, user_id: str, session_id: str) -> str | None:
+        """查询当前 Omni 会话活跃 output stream。"""
+
+        return self.output_controller.active_output_stream_id(user_id=user_id, session_id=session_id)
+
+    def _state(self, user_id: str, session_id: str) -> str:
+        """查询当前 Omni 会话生成状态。"""
+
+        return str(getattr(self.core, "_state_by_session", {}).get(session_id, "") or "")

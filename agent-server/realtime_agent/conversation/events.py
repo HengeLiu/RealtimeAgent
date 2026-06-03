@@ -78,7 +78,7 @@ class ConversationRuntimeEventEmitter:
         item = ConversationRuntimeEvent(event=event, user_id=user_id, session_id=session_id, stream_id=stream_id, payload=dict(payload))
         self._events.append(item)
         if record and session_id:
-            self.recorder.record_agent_event(
+            self.recorder.record_conversation_event(
                 session_id,
                 {
                     "event": f"conversation.{event}",

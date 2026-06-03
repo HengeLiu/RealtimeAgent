@@ -1762,6 +1762,9 @@ def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path)
 
     event_names = [event.event for event in app.agent_core.events()]
     control_names = [event.event_name for event in connection.events]
+    conversation_events = (tmp_path / "runs" / "user-001" / handle.session_id / "conversation-events.jsonl").read_text(
+        encoding="utf-8"
+    )
 
     assert isinstance(app.agent_core, OmniManualConversationRuntime)
     assert app.agent_core.core.omni_config.turn_detection == "manual"
@@ -1771,6 +1774,7 @@ def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path)
     assert "mock_omni.response.create.requested" in event_names
     assert "audio.speech.started" in control_names
     assert "audio.speech.stopped" in control_names
+    assert "conversation.agent_output_delta" in conversation_events
 
 
 def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path) -> None:

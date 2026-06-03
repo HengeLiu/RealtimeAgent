@@ -354,6 +354,21 @@ class AudioPipeline:
         返回值：无。
         异常情况：格式不符合预期或 Agent Core 缺少接口时抛出异常。
         """
+        current = self.normalize(chunk)
+        self._emit_vad_boundaries(current, self.last_diagnostics)
+        self.agent_core.append_audio_event(current)
+
+    def normalize(self, chunk: StreamChunk) -> StreamChunk:
+        """规范化一片上行麦克风音频。
+
+        主要逻辑：依次执行格式校验、重采样、音量探针和诊断 VAD，只返回规范化后的
+        `StreamChunk`。该方法不通知 Agent、不触发 turn boundary、不播放输出，满足
+        conversation `AudioInputBoundary` 的职责边界。
+        参数：`chunk` 为端侧上传的原始麦克风音频片。
+        返回值：规范化后的音频片。
+        异常情况：格式不符合预期或重采样失败时抛出异常。
+        """
+
         current = chunk
         diagnostics: list[dict] = []
         for processor in self.processors:
@@ -361,8 +376,7 @@ class AudioPipeline:
             current = result.chunk
             diagnostics.append({"processor": processor.name, **dict(result.diagnostics)})
         self.last_diagnostics = diagnostics
-        self._emit_vad_boundaries(current, diagnostics)
-        self.agent_core.append_audio_event(current)
+        return current
 
     def dispatch(self, chunk: StreamChunk) -> None:
         """按 stream_type 分发输入音频。

@@ -661,12 +661,15 @@ def test_vision_conversation_runtime_uses_asr_sentence_end_for_response(tmp_path
     event_records = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     event_names = [event["event_name"] for event in event_records]
     agent_events = agent_events_path.read_text(encoding="utf-8")
+    conversation_events_path = tmp_path / "runs" / "user-vl-conversation" / handle.session_id / "conversation-events.jsonl"
+    conversation_events = conversation_events_path.read_text(encoding="utf-8")
 
     assert isinstance(app.agent_core, VisionConversationRuntime)
     assert "audio.speech.started" in event_names
     assert "audio.speech.stopped" in event_names
     assert user_messages == ["你是谁"]
     assert "assistant_audio.delta" in agent_events
+    assert "conversation.agent_output_delta" in conversation_events
 
 
 def test_vision_agent_core_replies_to_multiple_input_streams_in_same_session(tmp_path) -> None:

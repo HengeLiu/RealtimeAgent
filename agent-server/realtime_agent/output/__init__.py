@@ -1,3 +1,4 @@
+from realtime_agent.output.base import SpeakerSinkABC
 from realtime_agent.output.service import (
     AssistantTextDelta,
     CachedAudioOutputSource,
@@ -23,5 +24,6 @@ __all__ = [
     "OutputService",
     "PlaybackArbiter",
     "PlaybackDecision",
+    "SpeakerSinkABC",
     "TtsProviderConfig",
 ]

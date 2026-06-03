@@ -1493,7 +1493,12 @@ class OmniRealtimeAgentCore:
             ),
         )
         provider = self.provider_factory(session_config)
-        callbacks = self._callbacks(user_id=user_id, session_id=session_id)
+        callback_factory = getattr(self, "_conversation_provider_callbacks", None)
+        callbacks = (
+            callback_factory(user_id=user_id, session_id=session_id)
+            if callable(callback_factory)
+            else self._callbacks(user_id=user_id, session_id=session_id)
+        )
         try:
             provider.open(user_id=user_id, session_id=session_id, callbacks=callbacks)
         except Exception as exc:

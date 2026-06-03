@@ -575,6 +575,21 @@ class RunRecorder:
             return
         log_info(self.logger, f"Agent事件 {event}", context)
 
+    def record_conversation_event(self, session_id: str, record: dict[str, Any]) -> None:
+        """记录 conversation runtime 事件。
+
+        主要逻辑：conversation 事件写入独立 `conversation-events.jsonl`，便于复盘
+        VAD、turn 和打断控制；同时保留一份到 `agent-events.jsonl`，兼容现有排障
+        入口和测试。
+        参数：`session_id` 定位会话；`record` 是可 JSON 序列化事件记录。
+        返回值：无。
+        异常情况：文件写入异常按底层 `_append_jsonl` 行为抛出。
+        """
+
+        self._bind_from_record(session_id, record)
+        self._append_jsonl(self.session_dir(session_id) / "conversation-events.jsonl", record)
+        self._append_jsonl(self.session_dir(session_id) / "agent-events.jsonl", record)
+
     def record_timeline_checkpoint(
         self,
         session_id: str,

@@ -4,8 +4,12 @@ from typing import Callable
 
 from realtime_agent.agent_core.base import AgentCoreEvent
 from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
+from realtime_agent.conversation.core.base import AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.loop import VlAgentLoop
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
-from realtime_agent.conversation.input import AsrSpeechInputBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
+from realtime_agent.conversation.output.bridge import ConversationOutputDeltaBridge
+from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.observability import RunRecorder
 from realtime_agent.protocol import StreamChunk
@@ -31,11 +35,25 @@ class VisionConversationRuntime:
         speech_boundary: AsrSpeechInputBoundary,
     ) -> None:
         self.core = core
+        self.loop = VlAgentLoop(core=core, stream_id_for_session=lambda session_id: self._upstream_by_session.get(session_id, ""))
         self.speech_boundary = speech_boundary
         self.emitter = ConversationRuntimeEventEmitter(recorder=recorder)
+        self.output_delta_bridge = ConversationOutputDeltaBridge(output_service=core.output_service, recorder=recorder)
+        self.output_delta_bridge.bind()
+        self.turn_controller = RealtimeTurnController(
+            emitter=self.emitter,
+            interruption_controller=OutputInterruptionController(
+                active_output_stream_id=self._active_output_stream_id,
+                state=self._state,
+            ),
+            stream_id_for_session=lambda session_id: self._upstream_by_session.get(session_id, ""),
+            visual_boundary=CallbackVisualInputBoundary(
+                on_started=self._sync_conversation_speech_started,
+                on_ended=self._sync_conversation_speech_stopped,
+            ),
+        )
         self._session_by_user: dict[str, str] = {}
         self._upstream_by_session: dict[str, str] = {}
-        self._latest_audio_by_session: dict[str, StreamChunk] = {}
         setattr(self.core, "_pipeline_event_control_enabled", True)
 
     def bind_pipeline_event_handler(self, handler) -> None:
@@ -53,18 +71,67 @@ class VisionConversationRuntime:
 
         self.core.bind_user_activity_callback(callback)
 
-    def open(self, user_id: str, session_id: str) -> None:
-        """打开 VL conversation 会话。"""
+    def open(self, user_id: str | ConversationContext, session_id: str | None = None) -> None:
+        """打开 VL conversation 会话。
+
+        主要逻辑：兼容旧 `open(user_id, session_id)` 调用，同时支持设计文档中的
+        `open(context)` AgentCore 入口。
+        """
+
+        if isinstance(user_id, ConversationContext):
+            context = user_id
+            user_id = context.user_id
+            session_id = context.session_id
+        if session_id is None:
+            raise ValueError("session_id is required when opening VL conversation without context")
 
         self._session_by_user[user_id] = session_id
         self.core.open(user_id, session_id)
         self.emitter.emit("session_ready", user_id=user_id, session_id=session_id)
+
+    def open_context(self, context: ConversationContext) -> None:
+        """按 AgentCoreABC 上下文打开 VL conversation 会话。"""
+
+        self.open(context.user_id, context.session_id)
+
+    def open_agent(self, context: ConversationContext) -> None:
+        """按设计文档中的 AgentContext 打开 VL conversation 会话。"""
+
+        self.open_context(context)
 
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """消费归一化后的麦克风音频。"""
 
         for delta in self.speech_boundary.append_audio(chunk):
             self._consume_speech_delta(delta)
+
+    def consume_input(self, delta: SpeechInputDelta) -> None:
+        """消费标准语音输入增量。
+
+        主要逻辑：作为 `AgentCoreABC.consume_input` 的 conversation 实现入口，
+        允许后续 runtime 绕过旧 `append_audio_event()` 直接送入标准输入事件。
+        参数：`delta` 为语音输入边界输出的标准增量。
+        返回值：无。
+        异常情况：链路专属 core 异常会向上传播。
+        """
+
+        self._consume_speech_delta(delta)
+
+    def consume_task_signal(self, signal: TaskSignal) -> None:
+        """消费长生命周期 Task 回流信号。
+
+        当前 VL conversation runtime 尚未把 TaskSignal 直接注入下一轮 VLM 上下文；
+        先写入 conversation 事件，保证信号进入 runs 并可被后续 loop 策略接管。
+        """
+
+        self.emitter.emit(
+            "task_signal_received",
+            user_id=signal.user_id or "",
+            session_id=signal.session_id,
+            kind=signal.kind,
+            payload=dict(signal.payload),
+            metadata=dict(signal.metadata),
+        )
 
     def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
         """兼容旧 AgentCore 输入提交入口。"""
@@ -82,12 +149,28 @@ class VisionConversationRuntime:
         self.core.close(user_id, reason=reason)
         session_id = self._session_by_user.pop(user_id, "")
         if session_id:
-            self._latest_audio_by_session.pop(session_id, None)
+            self.loop.close_session(session_id)
 
     def events(self) -> list[AgentCoreEvent]:
         """返回内部 Vision core 事件快照。"""
 
         return self.core.events()
+
+    def snapshot(self) -> AgentSnapshot:
+        """返回 VL conversation runtime 只读状态快照。"""
+
+        user_id = next(iter(self._session_by_user.keys()), None)
+        session_id = self._session_by_user.get(user_id or "") if user_id else None
+        active_streams = {}
+        if session_id and self._upstream_by_session.get(session_id):
+            active_streams["mic"] = self._upstream_by_session[session_id]
+        return AgentSnapshot(
+            user_id=user_id,
+            session_id=session_id,
+            mode="vision",
+            state=self._state(user_id or "", session_id or "") if user_id and session_id else None,
+            active_streams=active_streams,
+        )
 
     def on_audio_input_opened(self, *, user_id: str, session_id: str, stream_id: str) -> None:
         """记录上行麦克风 stream 并提前连接 ASR provider。"""
@@ -108,11 +191,11 @@ class VisionConversationRuntime:
 
     def _consume_speech_delta(self, delta: SpeechInputDelta) -> None:
         if delta.kind == "audio_chunk" and delta.audio is not None:
-            self._latest_audio_by_session[delta.session_id] = delta.audio
-            self.core._latest_audio_chunk_by_session[delta.session_id] = delta.audio
+            self.turn_controller.observe_active_output(user_id=delta.user_id or "", session_id=delta.session_id)
+            self.loop.consume_input(delta)
             return
         if delta.kind == "asr_text_delta":
-            self._handle_asr_text_delta(delta)
+            self.loop.consume_input(delta)
             return
         if delta.kind == "turn_started":
             self._handle_turn_started(delta)
@@ -120,77 +203,78 @@ class VisionConversationRuntime:
         if delta.kind == "turn_ended":
             self._handle_turn_ended(delta)
 
-    def _handle_asr_text_delta(self, delta: SpeechInputDelta) -> None:
-        """处理 ASR 文本增量。"""
-
-        self.core.on_conversation_asr_text_delta(
-            delta.user_id or "",
-            delta.session_id,
-            stream_id=delta.stream_id or self._upstream_by_session.get(delta.session_id, ""),
-            text=delta.text_delta or "",
-            diagnostics=dict(delta.metadata),
-        )
-
     def _handle_turn_started(self, delta: SpeechInputDelta) -> None:
         """处理 ASR 句子开始边界。"""
 
-        session_id = delta.session_id
-        user_id = delta.user_id or ""
-        stream_id = delta.stream_id or self._upstream_by_session.get(session_id, "")
-        self.emitter.emit(
-            "speech_started",
-            user_id=user_id,
-            session_id=session_id,
-            stream_id=stream_id,
+        self.turn_controller.handle_turn_started(
+            delta,
             reason="conversation_asr_speech_started",
-            diagnostics=dict(delta.metadata),
         )
+
+    def _sync_conversation_speech_started(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """同步 VL 语音开始到旧 core。"""
+
         self.core.on_speech_started(
             user_id,
             session_id,
             stream_id=stream_id,
-            reason="conversation_asr_speech_started",
-            diagnostics=dict(delta.metadata),
+            reason=reason,
+            diagnostics=dict(diagnostics),
         )
-        active_output_stream_id = self.core.output_service.active_output_stream_id(user_id, session_id)
-        state = getattr(self.core, "_state_by_user", {}).get(user_id, "")
-        if active_output_stream_id is not None or state in {"thinking", "speaking", "tool_running"}:
-            self.emitter.emit(
-                "output_cancel_requested",
-                user_id=user_id,
-                session_id=session_id,
-                stream_id=active_output_stream_id or "",
-                reason="conversation_asr_speech_started",
-                output_stream_id=active_output_stream_id,
-                state=state,
-            )
 
     def _handle_turn_ended(self, delta: SpeechInputDelta) -> None:
         """处理 ASR 句子结束边界。"""
 
-        session_id = delta.session_id
-        user_id = delta.user_id or ""
-        stream_id = delta.stream_id or self._upstream_by_session.get(session_id, "")
-        self.emitter.emit(
-            "speech_stopped",
-            user_id=user_id,
-            session_id=session_id,
-            stream_id=stream_id,
+        context = self.turn_controller.handle_turn_ended(
+            delta,
             reason="conversation_asr_speech_stopped",
-            diagnostics=dict(delta.metadata),
         )
+        if context.ignored:
+            return
+        self.loop.consume_input(
+            SpeechInputDelta(
+                kind="turn_ended",
+                session_id=context.session_id,
+                user_id=context.user_id,
+                stream_id=context.stream_id,
+                final_text=delta.final_text,
+                metadata=dict(delta.metadata),
+            )
+        )
+
+    def _sync_conversation_speech_stopped(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """同步 VL 语音结束到旧 core。"""
+
         self.core.on_conversation_speech_stopped(
             user_id,
             session_id,
             stream_id=stream_id,
-            reason="conversation_asr_speech_stopped",
-            diagnostics=dict(delta.metadata),
+            reason=reason,
+            diagnostics=dict(diagnostics),
         )
-        chunk = self._latest_audio_by_session.get(session_id)
-        if chunk is None:
-            return
-        self.core.handle_conversation_final_text(
-            chunk=chunk,
-            final_text=delta.final_text or "",
-            reason="conversation_asr_speech_stopped",
-        )
+
+    def _active_output_stream_id(self, user_id: str, session_id: str) -> str | None:
+        """查询当前 VL 会话活跃 output stream。"""
+
+        return self.core.output_service.active_output_stream_id(user_id, session_id)
+
+    def _state(self, user_id: str, session_id: str) -> str:
+        """查询当前 VL 用户生成状态。"""
+
+        return str(getattr(self.core, "_state_by_user", {}).get(user_id, "") or "")

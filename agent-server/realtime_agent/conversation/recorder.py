@@ -38,8 +38,11 @@ def output_delta_record(delta: AgentOutputDelta) -> dict:
     return {
         "kind": delta.kind,
         "session_id": delta.session_id,
+        "priority": delta.priority,
         "output_id": delta.output_id,
         "text_delta": delta.text_delta,
+        "payload": None if isinstance(delta.payload, bytes) else delta.payload,
+        "payload_bytes": len(delta.payload) if isinstance(delta.payload, bytes) else 0,
         "audio_bytes": len(delta.audio) if delta.audio is not None else 0,
         "sample_rate_hz": delta.sample_rate_hz,
         "metadata": dict(delta.metadata),

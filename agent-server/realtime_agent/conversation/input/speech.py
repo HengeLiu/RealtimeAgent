@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from realtime_agent.conversation.input.vad import SpeechBoundaryDelta, VoiceActivityBoundary
+from realtime_agent.conversation.input.vad import SpeechBoundaryDelta, VoiceActivityBoundary, VoiceActivityBoundarySource
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.protocol import StreamChunk
 
@@ -15,7 +15,7 @@ class ServerVadSpeechInputBoundary:
     主要属性：`vad` 是只负责 speech 边界的检测器。
     """
 
-    def __init__(self, vad: VoiceActivityBoundary | None = None) -> None:
+    def __init__(self, vad: VoiceActivityBoundarySource | None = None) -> None:
         self.vad = vad or VoiceActivityBoundary()
 
     def append_audio(self, chunk: StreamChunk) -> Iterator[SpeechInputDelta]:

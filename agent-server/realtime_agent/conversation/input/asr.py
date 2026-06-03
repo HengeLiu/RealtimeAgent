@@ -5,6 +5,8 @@ from typing import Any
 
 from realtime_agent.agent_core.providers import AsrProviderConfig
 from realtime_agent.agent_core.vision import AsrPipeline
+from realtime_agent.conversation.input.speech import _boundary_to_speech_input_delta
+from realtime_agent.conversation.input.vad import AsrVoiceActivityBoundary
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.observability import RunRecorder
 from realtime_agent.protocol import StreamChunk
@@ -19,15 +21,20 @@ class AsrSpeechInputBoundary:
     主要属性：`asr_pipeline` 复用旧 Vision 链路的 ASR provider 管理和事件落盘逻辑。
     """
 
-    def __init__(self, *, config: AsrProviderConfig | None = None, recorder: RunRecorder) -> None:
+    def __init__(
+        self,
+        *,
+        config: AsrProviderConfig | None = None,
+        recorder: RunRecorder,
+        voice_boundary: AsrVoiceActivityBoundary | None = None,
+    ) -> None:
         self._pending_events_by_stream: dict[str, list[Any]] = {}
         self.asr_pipeline = AsrPipeline(
             config=config or AsrProviderConfig(),
             recorder=recorder,
             on_transcript_event=self._collect_asr_event,
         )
-        self._started_sentence_keys: set[str] = set()
-        self._stopped_sentence_keys: set[str] = set()
+        self.voice_boundary = voice_boundary or AsrVoiceActivityBoundary()
 
     def prepare_provider(self, *, stream_id: str, session_id: str | None = None) -> None:
         """提前建立当前麦克风 stream 的 ASR provider。"""
@@ -74,23 +81,16 @@ class AsrSpeechInputBoundary:
         """取消当前 ASR 输入边界。"""
 
         self.asr_pipeline.cancel()
-        self._started_sentence_keys.clear()
-        self._stopped_sentence_keys.clear()
+        self.voice_boundary.reset()
 
     def _event_to_deltas(self, chunk: StreamChunk, event: Any) -> Iterator[SpeechInputDelta]:
         """把单个 ASR 事件转换为 conversation 输入增量。"""
 
         metadata = self._asr_metadata(event)
-        sentence_key = self._sentence_key(chunk=chunk, event=event)
-        if bool(getattr(event, "sentence_begin", False)) and sentence_key not in self._started_sentence_keys:
-            self._started_sentence_keys.add(sentence_key)
-            yield SpeechInputDelta(
-                kind="turn_started",
-                session_id=chunk.session_id,
-                user_id=chunk.user_id,
-                stream_id=chunk.stream_id,
-                metadata={"asr_boundary": "sentence_begin", **metadata},
-            )
+        boundaries = self.voice_boundary.append_asr_event(chunk=chunk, event=event)
+        for boundary in boundaries:
+            if boundary.kind == "speech_started":
+                yield _boundary_to_speech_input_delta(boundary)
         text = str(getattr(event, "text", "") or "")
         final = bool(getattr(event, "final", False))
         sentence_end = bool(getattr(event, "sentence_end", False))
@@ -103,24 +103,20 @@ class AsrSpeechInputBoundary:
                 text_delta=text,
                 metadata=metadata,
             )
-        if (sentence_end or final) and sentence_key not in self._stopped_sentence_keys:
-            self._stopped_sentence_keys.add(sentence_key)
+        for boundary in boundaries:
+            if boundary.kind != "speech_stopped":
+                continue
+            delta = _boundary_to_speech_input_delta(boundary)
             yield SpeechInputDelta(
-                kind="turn_ended",
-                session_id=chunk.session_id,
-                user_id=chunk.user_id,
-                stream_id=chunk.stream_id,
+                kind=delta.kind,
+                session_id=delta.session_id,
+                user_id=delta.user_id,
+                stream_id=delta.stream_id,
                 final_text=text,
-                metadata={"asr_boundary": "sentence_end" if sentence_end else "final", **metadata},
+                turn_id=delta.turn_id,
+                monotonic_ms=delta.monotonic_ms,
+                metadata=delta.metadata,
             )
-
-    def _sentence_key(self, *, chunk: StreamChunk, event: Any) -> str:
-        """生成 ASR 句子边界去重 key。"""
-
-        sentence_id = getattr(event, "sentence_id", None)
-        if sentence_id is None:
-            sentence_id = f"seq:{chunk.seq}"
-        return f"{chunk.session_id}:{chunk.stream_id}:{sentence_id}"
 
     @staticmethod
     def _asr_metadata(event: Any) -> dict[str, Any]:
