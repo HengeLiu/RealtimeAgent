@@ -80,11 +80,12 @@ agent:
   mode: "omni"
   omni:
     provider: "qwen"
-    # semantic_vad 仅 qwen3.5-omni realtime 系列支持；当前真机误触发调参优先使用该模型。
     model: "qwen3.5-omni-plus-realtime"
     voice: "Tina"
-    turn_detection: "semantic_vad"
-    # provider VAD 阈值越接近 1 越不容易把噪声判成语音；先提高到 0.75 做真机误触发实验。
+    # Omni conversation runtime 固定使用 manual turn detection，由共享 ASR-backed
+    # SpeechInputBoundary 决定 turn_started / turn_ended。
+    turn_detection: "manual"
+    # 以下 provider VAD 参数仅在显式切回非 manual provider 实验时生效。
     turn_detection_threshold: 0.75
     turn_detection_silence_duration_ms: 800
     turn_detection_prefix_padding_ms: 500
@@ -121,7 +122,7 @@ agent:
         frame_jpeg_quality: 85
     asr_provider: "dashscope"
     asr_model: "paraformer-realtime-v2"
-    asr_max_sentence_silence_ms: 800
+    asr_max_sentence_silence_ms: 300
     asr_disfluency_removal_enabled: true
     tts_provider: "dashscope"
     tts_model: "cosyvoice-v3-flash"
