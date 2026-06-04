@@ -202,7 +202,7 @@ Manual 模式这次测试方法是正确的：客户端显式提交输入边界�
 tools/realtime_agent_omni_chain_probe.py
 ```
 
-这个脚本直接使用当前 `realtime_agent.agent_core.omni.QwenOmniRealtimeAdapter`，不绕过 adapter 内部逻辑。
+这个脚本直接使用当前 `realtime_agent.conversation.core.omni_host.QwenOmniRealtimeAdapter`，不绕过 adapter 内部逻辑。
 
 ### VAD 输入，不发送 final
 

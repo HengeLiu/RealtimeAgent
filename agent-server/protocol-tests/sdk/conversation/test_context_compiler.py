@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from realtime_agent.agent_core.context import ContextCompileRequest, ContextCompiler
+from realtime_agent.conversation.context import ContextCompileRequest, ContextCompiler
 
 
 class FakeMemory:

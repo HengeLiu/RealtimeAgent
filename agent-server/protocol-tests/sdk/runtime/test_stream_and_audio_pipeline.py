@@ -4,11 +4,11 @@ import time
 from threading import Event as ThreadEvent
 from pathlib import Path
 
-import realtime_agent.agent_core.vision as text_module
-from realtime_agent.agent_core import VisionRealtimeAgentCore
-from realtime_agent.agent_core.providers import TranscriptEvent
+import realtime_agent.conversation.input.asr_session as asr_session_module
+from realtime_agent.conversation.providers import TranscriptEvent
 from realtime_agent.audio_pipeline import AudioPipeline, FormatNormalizer
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
 from realtime_agent.protocol import Event, StreamChunk, StreamChunkCodec, StreamFormat
 from realtime_agent.server import NetworkDeviceConnection
@@ -92,7 +92,7 @@ def test_rebound_audio_output_uses_fresh_stream_queue() -> None:
 
 def test_audio_pipeline_rejects_non_mic_stream() -> None:
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root="runs/test-audio-pipeline"))
-    pipeline = AudioPipeline(vision_agent_core=app.vision_agent_core)
+    pipeline = AudioPipeline(audio_consumer=app.vision_agent_core)
     chunk = StreamChunk(
         user_id="user-001",
         session_id="sess-001",
@@ -579,7 +579,7 @@ def test_vision_conversation_runtime_uses_asr_sentence_end_for_response(tmp_path
         def cancel(self) -> None:
             self.emitted = True
 
-    monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (SentenceAsrProvider(), None))
+    monkeypatch.setattr(asr_session_module, "build_asr_provider", lambda config: (SentenceAsrProvider(), None))
     app = RealtimeAgentApp(
         RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
@@ -779,7 +779,7 @@ def test_vision_agent_core_recreates_asr_provider_for_each_input_stream(tmp_path
         def cancel(self) -> None:
             self.closed = True
 
-    monkeypatch.setattr(text_module, "build_asr_provider", lambda config: (ClosingAsrProvider(), None))
+    monkeypatch.setattr(asr_session_module, "build_asr_provider", lambda config: (ClosingAsrProvider(), None))
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 

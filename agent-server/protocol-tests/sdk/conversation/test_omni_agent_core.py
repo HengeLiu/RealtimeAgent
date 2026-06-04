@@ -8,8 +8,8 @@ import types
 import wave
 from pathlib import Path
 
-import realtime_agent.agent_core.vision as vision_module
-from realtime_agent.agent_core.omni import (
+import realtime_agent.conversation.input.asr_session as asr_session_module
+from realtime_agent.conversation.core.omni_host import (
     OMNI_REALTIME_IMAGE_MAX_BYTES,
     REALTIME_TOOL_CALL_PROMPT_RULE,
     MockRealtimeProviderAdapter,
@@ -20,12 +20,11 @@ from realtime_agent.agent_core.omni import (
     RealtimeToolBridge,
     _prepare_omni_realtime_image,
 )
-from realtime_agent.agent_core.providers import TranscriptEvent
+from realtime_agent.conversation.providers import TranscriptEvent
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.asset.service import AssetRef
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
-from realtime_agent.realtime_pipeline import create_omni_realtime_pipeline
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
@@ -65,7 +64,7 @@ class SentenceBoundaryAsrProvider:
 def patch_sentence_asr(monkeypatch, *, text: str = "做一下自我介绍。") -> None:
     """把当前测试的 ASR provider 替换为句边界 provider。"""
 
-    monkeypatch.setattr(vision_module, "build_asr_provider", lambda config: (SentenceBoundaryAsrProvider(text), None))
+    monkeypatch.setattr(asr_session_module, "build_asr_provider", lambda config: (SentenceBoundaryAsrProvider(text), None))
 
 
 class Connection:
@@ -866,48 +865,6 @@ def test_realtime_provider_speech_started_high_energy_cancels_active_output(tmp_
     agent_events_text = (tmp_path / "runs" / "user-001" / "dev-web" / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "rms_diagnostic" in agent_events_text
     assert '"max_rms": 2000' in agent_events_text
-
-
-def test_omni_pipeline_speech_started_uses_provider_boundary_and_interruptible_state(tmp_path) -> None:
-    """测试目标：验证正式 Omni pipeline 以 provider speech_started 作为唯一边界。
-
-    测试方法：直接创建 Omni pipeline，绑定事件监听器；输入低 RMS 音频并模拟
-    provider `speech_started`。
-    预期结果：只要 provider 上报 speech_started 且存在 active output，就发出
-    `speech_started/output_cancel_requested` pipeline 事件。
-    """
-
-    instances: list[FakeRealtimeProvider] = []
-    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
-    connection = Connection("dev-web")
-    register_speaker(app, connection)
-    pipeline = create_omni_realtime_pipeline(
-        output_service=app.output_service,
-        recorder=app.recorder,
-        control_service=app.control_service,
-        omni_config=RealtimeProviderConfig(provider="fake", model="fake-omni", provider_speech_min_rms=819),
-        provider_factory=lambda config: _new_fake(config, instances),
-    )
-    emitted = []
-    pipeline.bind_pipeline_event_handler(lambda event: emitted.append(event))
-
-    pipeline.append_audio_event(
-        StreamChunk(
-            user_id="user-001",
-            session_id="dev-web",
-            stream_id="stream-mic-dev-web",
-            stream_type="sensor.mic",
-            seq=0,
-            payload=b"\x01\x00" * 320,
-            duration_ms=20,
-        )
-    )
-    assert instances[0].callbacks is not None
-    emitted.clear()
-    instances[0].callbacks.provider_event({"event": "omni.input_audio_buffer.speech_started", "provider": "fake"})
-    event_names = [event.event for event in emitted]
-    assert "speech_started" in event_names
-    assert "output_cancel_requested" in event_names
 
 
 def test_realtime_provider_speech_started_does_not_cancel_without_active_response(tmp_path) -> None:
@@ -1898,9 +1855,9 @@ def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(
 def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path, monkeypatch) -> None:
     """测试目标：验证 Omni Manual conversation runtime 不把打断逻辑放进输入边界。
 
-    测试方法：使用 mock Omni provider 和 ASR/VAD 合一 provider 写入一片音频；
-    `audio_chunk` 先触发 provider 音频输出，随后 ASR sentence_begin 驱动
-    `turn_started`，由 runtime 判断当前输出状态并发出取消请求。
+    测试方法：使用 mock Omni provider 和 ASR/VAD 合一 provider，先通过 OutputService
+    制造一段活跃原生音频输出，再写入一片触发 sentence_begin 的音频。
+    `turn_started` 由 runtime 判断当前输出状态并发出取消请求。
     预期结果：App 统一处理 `output_cancel_requested`，最终调用 provider cancel；
     ASR-backed boundary 只负责 speech 边界与 ASR 文本增量。
     """
@@ -1917,6 +1874,14 @@ def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(
     connection = Connection("dev-web")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    app.agent_core.open("user-001", handle.session_id)
+    app.output_service.on_assistant_audio_delta(
+        user_id="user-001",
+        session_id=handle.session_id,
+        audio=b"\x01\x00" * 320,
+        format=StreamFormat(codec="pcm16le", sample_rate=16000, channels=1, chunk_ms=20),
+        metadata={"provider": "mock", "model": "mock-omni"},
+    )
 
     app.write_input_chunk(
         StreamChunk(
@@ -2096,7 +2061,7 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     预期结果：conversation 收到 `function_call_output`，并在原 response.done 后继续创建音频响应。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeConversation:
         """记录 provider adapter 写回的会话操作。"""
@@ -2152,7 +2117,7 @@ def test_qwen_omni_manual_turn_detection_disables_provider_vad(monkeypatch) -> N
     VAD 的类型、阈值、静音窗口和前缀 padding 参数。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeAudioFormat:
         """测试用音频格式常量。"""
@@ -2242,7 +2207,7 @@ def test_qwen_omni_create_response_records_manual_request() -> None:
     记录创建请求。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeConversation:
         """记录 create_response 调用。"""
@@ -2289,7 +2254,7 @@ def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> 
     后续新会话可以正常打开。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeAudioFormat:
         """测试用音频格式常量。"""
@@ -2404,7 +2369,7 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
     预期结果：创建 follow-up response 的 instructions 包含失败原因，并禁止声称成功。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeConversation:
         """记录 provider adapter 写回的会话操作。"""
@@ -2463,7 +2428,7 @@ def test_qwen_omni_final_audio_chunk_commits_input_boundary() -> None:
     回答创建由 provider 的 VAD/回合事件驱动，避免重复创建响应。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeConversation:
         """记录 Omni 输入追加和提交调用。"""
@@ -2519,7 +2484,7 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     图片和 commit，由 provider 在提交后自动基于“用户问题音频 + 图片”响应。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     image_path = tmp_path / "photo.jpg"
     image_path.write_bytes(b"\xff\xd8browser-photo\xff\xd9")
@@ -2609,7 +2574,7 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
     预期结果：provider 能找到本地图片文件，不再报 `missing_image`，并正常追加图片。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     image_path = tmp_path / "photo-uri.jpg"
     image_path.write_bytes(b"\xff\xd8browser-photo-uri\xff\xd9")
@@ -2681,7 +2646,7 @@ def test_qwen_omni_duplicate_tool_done_is_ignored() -> None:
     预期结果：工具回调和 conversation item 只发生一次，follow-up response 只创建一次，并记录重复忽略事件。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     class FakeConversation:
         """记录 provider adapter 写回的会话操作。"""
@@ -2768,7 +2733,7 @@ def test_qwen_omni_does_not_suppress_audio_while_generating_tool_arguments() -> 
     由 Realtime 提示词约束控制，不在 adapter 层做整段音频吞弃。
     """
 
-    from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
 
     records = []
     audio_chunks = []

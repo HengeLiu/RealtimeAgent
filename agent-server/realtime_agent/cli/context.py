@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from realtime_agent.agent_core.context import ContextCompileRequest, ContextCompiler
+from realtime_agent.conversation.context import ContextCompileRequest, ContextCompiler
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 
 

@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from realtime_agent.agent_core.base import AgentCoreEvent
-from realtime_agent.agent_core.omni import OmniRealtimeAgentCore
-from realtime_agent.conversation.core.base import AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.omni_host import OmniRealtimeAgentCore
+from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext, TaskSignal
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop
 from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
@@ -54,6 +53,47 @@ class OmniManualConversationRuntime:
         )
         self._session_by_user: dict[str, str] = {}
         self._upstream_by_session: dict[str, str] = {}
+
+    @property
+    def asr_pipeline(self):
+        """返回正式语音输入边界使用的 ASR pipeline。"""
+
+        return self.speech_boundary.asr_pipeline
+
+    @asr_pipeline.setter
+    def asr_pipeline(self, value) -> None:
+        """替换正式语音输入边界使用的 ASR pipeline。"""
+
+        self.speech_boundary.asr_pipeline = value
+
+    def __getattr__(self, name: str):
+        """兼容旧调用点读取内部 Omni core 属性。"""
+
+        return getattr(self.core, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        """兼容旧调用点写入内部 Omni core 属性。"""
+
+        runtime_fields = {
+            "core",
+            "loop",
+            "speech_boundary",
+            "output_controller",
+            "emitter",
+            "turn_controller",
+            "_session_by_user",
+            "_upstream_by_session",
+        }
+        if name in runtime_fields or "core" not in self.__dict__:
+            object.__setattr__(self, name, value)
+            return
+        if name == "asr_pipeline":
+            self.speech_boundary.asr_pipeline = value
+            return
+        if hasattr(self.core, name):
+            setattr(self.core, name, value)
+            return
+        object.__setattr__(self, name, value)
 
     def bind_pipeline_event_handler(self, handler) -> None:
         """绑定 app 层 pipeline event 处理器。"""

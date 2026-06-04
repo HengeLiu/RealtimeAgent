@@ -4,26 +4,19 @@ import time
 
 import pytest
 
-from realtime_agent.agent_core.base import AgentCoreEvent
-from realtime_agent.agent_core.providers import OpenAICompatibleVisionModelAdapter, TranscriptEvent
-from realtime_agent.agent_core.router import AgentCoreRouter, LegacyAgentCoreRouter
-from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
+from realtime_agent.conversation.providers import OpenAICompatibleVisionModelAdapter, TranscriptEvent
+from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
+from realtime_agent.conversation.core.vision import VisionConversationRuntime
+from realtime_agent.conversation.core.loop import OmniRealtimeLoop, VlAgentLoop
+from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
+from realtime_agent.conversation.input import AsrSpeechInputBoundary
+from realtime_agent.conversation.output import ConversationOutputController
+from realtime_agent.conversation.turn import RealtimeTurnController
 from realtime_agent.output import AssistantTextDelta
 from realtime_agent.output.service import OutputItem
 from realtime_agent.protocol import Event, StreamChunk
-from realtime_agent.realtime_pipeline import (
-    OmniAgentCore,
-    OmniInputBoundary,
-    OmniRealtimePipeline,
-    OmniResponseEngine,
-    PipelineEventEmitter,
-    RealtimeAudioNormalizer,
-    RealtimeOutputController,
-    VisionInputBoundary,
-    VisionRealtimePipeline,
-    VisionResponseEngine,
-)
 from realtime_agent.tasks import BaseTask, TaskSignal
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
@@ -70,157 +63,108 @@ def _mark_output_cancelled(app: RealtimeAgentApp, connection, *, user_id: str) -
 
 
 def test_agent_mode_text_builds_text_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=vision` 构建 VisionRealtimePipeline。
+    """测试目标：验证 `agent.mode=vision` 构建正式 VL conversation runtime。
 
     测试方法：用 text 模式创建 RealtimeAgentApp。
-    预期结果：app 正常初始化，外层是 VisionRealtimePipeline，内部保留 VisionRealtimeAgentCore。
+    预期结果：app 正常初始化，外层是 VisionConversationRuntime，内部暂时复用
+    VisionRealtimeAgentCore 的 provider 和工具循环能力。
     """
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
 
-    assert isinstance(app.agent_core, VisionRealtimePipeline)
+    assert isinstance(app.agent_core, VisionConversationRuntime)
     assert isinstance(app.agent_core.core, VisionRealtimeAgentCore)
     assert hasattr(app.agent_core, "append_audio_event")
 
 
-def test_agent_core_router_is_legacy_compat_alias() -> None:
-    """测试目标：验证旧 `AgentCoreRouter` 名称只是 legacy router 兼容别名。
-
-    测试方法：从 router 模块同时导入 `AgentCoreRouter` 和 `LegacyAgentCoreRouter`。
-    预期结果：两个名称指向同一个类，后续新链路应通过 conversation runtime builder
-    进入，不再扩展该 legacy router。
-    """
-
-    assert AgentCoreRouter is LegacyAgentCoreRouter
-
-
 def test_agent_mode_omni_audio_builds_realtime_core(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=omni` 能创建 OmniRealtimePipeline。
+    """测试目标：验证 `agent.mode=omni` 能创建正式 Omni Manual conversation runtime。
 
     测试方法：用 `agent_mode=omni` 创建 RealtimeAgentApp。
     预期结果：app 正常初始化，不在构造阶段连接真实 provider。
     """
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni"))
 
-    assert isinstance(app.agent_core, OmniRealtimePipeline)
-    assert isinstance(app.agent_core.core, OmniAgentCore)
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
 
 
 def test_agent_mode_auto_defaults_to_text_for_now(tmp_path) -> None:
-    """测试目标：验证 `agent.mode=auto` 当前保守落到Vision 链路。
+    """测试目标：验证 `agent.mode=auto` 当前保守落到 VL conversation 链路。
 
     测试方法：用 auto 模式创建 RealtimeAgentApp。
-    预期结果：返回 VisionRealtimePipeline；文档中声明后续再接端侧能力判断。
+    预期结果：返回 VisionConversationRuntime；文档中声明后续再接端侧能力判断。
     """
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="auto"))
 
-    assert isinstance(app.agent_core, VisionRealtimePipeline)
+    assert isinstance(app.agent_core, VisionConversationRuntime)
     assert isinstance(app.agent_core.core, VisionRealtimeAgentCore)
 
 
-def test_vision_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
-    """测试目标：验证 Text realtime 时序图中的核心组件都有真实代码对象。
+def test_vision_conversation_runtime_exposes_real_sequence_components(tmp_path) -> None:
+    """测试目标：验证 VL conversation 链路中的核心组件都有真实代码对象。
 
-    测试方法：创建 text 模式应用，检查 pipeline 内部组件类型，并手动驱动
+    测试方法：创建 vision 模式应用，检查 runtime 内部组件类型，并手动驱动
     session/upstream/downstream 生命周期入口。
-    预期结果：组件不是概念占位，且生命周期入口会输出稳定的 pipeline 事件。
+    预期结果：组件不是概念占位，且生命周期入口会输出稳定的 conversation 事件。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
-    pipeline = app.agent_core
+    runtime = app.agent_core
 
-    assert isinstance(pipeline, VisionRealtimePipeline)
-    assert isinstance(pipeline.core, VisionRealtimeAgentCore)
-    assert isinstance(pipeline.normalizer, RealtimeAudioNormalizer)
-    assert isinstance(pipeline.input_boundary, VisionInputBoundary)
-    assert isinstance(pipeline.response_engine, VisionResponseEngine)
-    assert isinstance(pipeline.output_controller, RealtimeOutputController)
-    assert isinstance(pipeline.emitter, PipelineEventEmitter)
+    assert isinstance(runtime, VisionConversationRuntime)
+    assert isinstance(runtime.core, VisionRealtimeAgentCore)
+    assert isinstance(runtime.speech_boundary, AsrSpeechInputBoundary)
+    assert isinstance(runtime.loop, VlAgentLoop)
+    assert isinstance(runtime.turn_controller, RealtimeTurnController)
+    assert isinstance(runtime.emitter, ConversationRuntimeEventEmitter)
 
-    pipeline.open("user-pipeline", "session-pipeline")
-    pipeline.on_audio_input_opened(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        stream_id="stream-in-pipeline",
-    )
-    pipeline.on_downstream_opened(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        stream_id="stream-out-pipeline",
-    )
-    pipeline.core.on_speech_started(
-        "user-pipeline",
-        "session-pipeline",
-        stream_id="stream-in-pipeline",
-        reason="paraformer_sentence_begin",
-        diagnostics={"sentence_id": 1},
-    )
-    pipeline.core.on_speech_stopped(
-        "user-pipeline",
-        "session-pipeline",
-        stream_id="stream-in-pipeline",
-        reason="paraformer_sentence_end",
-        diagnostics={"sentence_id": 1},
+    runtime.open("user-conversation", "session-conversation")
+    runtime.on_audio_input_opened(
+        user_id="user-conversation",
+        session_id="session-conversation",
+        stream_id="stream-in-conversation",
     )
 
-    emitted_names = [event.event for event in pipeline.emitter.events()]
-    assert "response_engine_ready" in emitted_names
+    emitted_names = [event.event for event in runtime.emitter.events()]
     assert "session_ready" in emitted_names
     assert "upstream_ready" in emitted_names
-    assert "downstream_ready" in emitted_names
-    assert "speech_started" in emitted_names
-    assert "speech_stopped" in emitted_names
 
 
-def test_omni_realtime_pipeline_exposes_real_sequence_components(tmp_path) -> None:
-    """测试目标：验证 Omni realtime 时序图中的核心组件都有真实代码对象。
+def test_omni_conversation_runtime_exposes_real_sequence_components(tmp_path) -> None:
+    """测试目标：验证 Omni Manual conversation 链路中的核心组件都有真实代码对象。
 
-    测试方法：创建 mock omni 应用，检查 pipeline 内部组件类型，并手动驱动
-    session/upstream/downstream 生命周期和 provider speech 事件。
-    预期结果：组件不是概念占位，且 provider 原始事件会转换成稳定 pipeline 事件。
+    测试方法：创建 mock omni 应用，检查 runtime 内部组件类型，并手动驱动
+    session/upstream/downstream 生命周期。
+    预期结果：组件不是概念占位，且生命周期入口会输出稳定 conversation 事件。
     """
 
     app = RealtimeAgentApp(
         RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni", omni_provider="mock")
     )
-    pipeline = app.agent_core
+    runtime = app.agent_core
 
-    assert isinstance(pipeline, OmniRealtimePipeline)
-    assert isinstance(pipeline.core, OmniAgentCore)
-    assert isinstance(pipeline.normalizer, RealtimeAudioNormalizer)
-    assert isinstance(pipeline.input_boundary, OmniInputBoundary)
-    assert isinstance(pipeline.response_engine, OmniResponseEngine)
-    assert isinstance(pipeline.output_controller, RealtimeOutputController)
-    assert isinstance(pipeline.emitter, PipelineEventEmitter)
+    assert isinstance(runtime, OmniManualConversationRuntime)
+    assert isinstance(runtime.speech_boundary, AsrSpeechInputBoundary)
+    assert isinstance(runtime.loop, OmniRealtimeLoop)
+    assert isinstance(runtime.output_controller, ConversationOutputController)
+    assert isinstance(runtime.turn_controller, RealtimeTurnController)
+    assert isinstance(runtime.emitter, ConversationRuntimeEventEmitter)
 
-    pipeline.open("user-pipeline", "session-pipeline")
-    pipeline.on_audio_input_opened(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        stream_id="stream-in-pipeline",
+    runtime.open("user-conversation", "session-conversation")
+    runtime.on_audio_input_opened(
+        user_id="user-conversation",
+        session_id="session-conversation",
+        stream_id="stream-in-conversation",
     )
-    pipeline.on_downstream_opened(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        stream_id="stream-out-pipeline",
-    )
-    pipeline.core._record_provider_event(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        record={"event": "omni.input_audio_buffer.speech_started", "provider": "mock"},
-    )
-    pipeline.core._record_provider_event(
-        user_id="user-pipeline",
-        session_id="session-pipeline",
-        record={"event": "omni.input_audio_buffer.speech_stopped", "provider": "mock"},
+    runtime.on_downstream_opened(
+        user_id="user-conversation",
+        session_id="session-conversation",
+        stream_id="stream-out-conversation",
     )
 
-    emitted_names = [event.event for event in pipeline.emitter.events()]
-    assert "response_engine_ready" in emitted_names
+    emitted_names = [event.event for event in runtime.emitter.events()]
     assert "session_ready" in emitted_names
     assert "upstream_ready" in emitted_names
     assert "downstream_ready" in emitted_names
-    assert "speech_started" in emitted_names
-    assert "speech_stopped" in emitted_names
 
 
 def test_agent_mode_custom_fails_fast(tmp_path) -> None:
@@ -231,60 +175,6 @@ def test_agent_mode_custom_fails_fast(tmp_path) -> None:
     """
     with pytest.raises(NotImplementedError, match="custom"):
         RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="custom"))
-
-
-class CustomCore:
-    """测试用自定义 Agent Core。
-
-    主要功能：实现最小公共接口，证明 router 可以注入业务自定义 core。
-    主要属性：`opened` 记录打开过的会话。
-    """
-
-    def __init__(self, **kwargs) -> None:
-        self.kwargs = kwargs
-        self.opened: list[tuple[str, str]] = []
-        self._events: list[AgentCoreEvent] = []
-
-    def open(self, user_id: str, session_id: str) -> None:
-        """记录打开会话。"""
-        self.opened.append((user_id, session_id))
-
-    def append_audio_event(self, chunk: StreamChunk) -> None:
-        """记录音频输入事件。"""
-        self._events.append(AgentCoreEvent("custom.audio", user_id=chunk.user_id, session_id=chunk.session_id))
-
-    def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
-        """记录输入提交。"""
-        self._events.append(AgentCoreEvent("custom.commit", user_id=user_id, session_id=session_id, payload={"reason": reason}))
-
-    def interrupt(self, user_id: str, *, reason: str) -> None:
-        """记录取消。"""
-        self._events.append(AgentCoreEvent("custom.interrupt", user_id=user_id, payload={"reason": reason}))
-
-    def close(self, user_id: str, *, reason: str) -> None:
-        """记录关闭。"""
-        self._events.append(AgentCoreEvent("custom.close", user_id=user_id, payload={"reason": reason}))
-
-    def events(self) -> list[AgentCoreEvent]:
-        """返回事件快照。"""
-        return list(self._events)
-
-
-def test_agent_core_router_supports_custom_factory() -> None:
-    """测试目标：验证 AgentCoreRouter 支持 custom factory 扩展点。
-
-    测试方法：直接调用 `build()` 并传入 `custom_factories`。
-    预期结果：返回自定义 core，且依赖参数能透传给 factory。
-    """
-
-    built = AgentCoreRouter.build(
-        mode="custom",
-        custom_factories={"custom": lambda **kwargs: CustomCore(**kwargs)},
-        sentinel="ok",
-    )
-
-    assert isinstance(built, CustomCore)
-    assert built.kwargs["sentinel"] == "ok"
 
 
 def test_vision_agent_core_exposes_unified_lifecycle_events(tmp_path) -> None:
@@ -1283,31 +1173,40 @@ def test_vision_agent_audio_chunk_does_not_start_visual_sampler_before_speech_st
     assert starts[0]["reason"] == "server_vad_speech_started"
 
 
-def test_vision_agent_server_vad_commits_continuous_mock_asr(tmp_path) -> None:
-    """测试目标：验证连续麦克风流在 server VAD speech_stopped 后能提交 ASR 并回复。
+def test_vision_agent_asr_final_commits_continuous_audio_turn(tmp_path) -> None:
+    """测试目标：验证连续麦克风流在 ASR final 后能提交并回复。
 
-    测试方法：启用 server_only VAD，输入一片高 RMS 语音和一片足够长的静音；
-    mock ASR 只在 final chunk 返回最终文本，因此 speech_stopped 必须显式 commit。
-    预期结果：messages 写入用户转写，输出适配器收到基于 mock transcript 的回复。
+    测试方法：注入立即返回 final 的 ASR provider，输入一片非 final 音频和一片 final
+    音频。
+    预期结果：messages 写入用户转写，输出适配器收到基于 ASR final text 的回复。
     """
 
-    app = RealtimeAgentApp(
-        RealtimeAgentConfig(
-            runs_root=str(tmp_path / "runs"),
-            agent_mode="vision",
-            audio_pipeline_vad="server_only",
-            audio_pipeline_vad_rms_threshold=96,
-            audio_pipeline_vad_silence_timeout_ms=40,
-        )
-    )
+    class FinalOnlyAsrProvider:
+        """测试用 ASR provider，只在 final chunk 返回最终文本。"""
+
+        provider_name = "final-only-asr"
+        model = "final-only-asr"
+
+        def append_audio(self, chunk: StreamChunk) -> list[TranscriptEvent]:
+            """非 final 音频不返回文本，final 音频返回最终文本。"""
+
+            if not chunk.final:
+                return []
+            return [TranscriptEvent(text="mock transcript", final=True)]
+
+        def cancel(self) -> None:
+            """测试 provider 无需释放资源。"""
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
     output_adapter = RecordingOutputAdapter()
     app.agent_core.core.output_adapter = output_adapter
     user_id = "user-vision-vad-commit"
     session_id = "dev-vision-vad-commit"
     stream_id = "stream-vision-vad-commit"
     app.agent_core.open(user_id, session_id)
+    app.agent_core.asr_pipeline._providers[stream_id] = FinalOnlyAsrProvider()
 
-    app.audio_pipeline.process(
+    app.agent_core.append_audio_event(
         StreamChunk(
             user_id=user_id,
             session_id=session_id,
@@ -1319,9 +1218,8 @@ def test_vision_agent_server_vad_commits_continuous_mock_asr(tmp_path) -> None:
             duration_ms=20,
         )
     )
-    assert output_adapter.calls == []
 
-    app.audio_pipeline.process(
+    app.agent_core.append_audio_event(
         StreamChunk(
             user_id=user_id,
             session_id=session_id,
@@ -1329,7 +1227,7 @@ def test_vision_agent_server_vad_commits_continuous_mock_asr(tmp_path) -> None:
             stream_type="sensor.mic",
             seq=1,
             payload=b"\x00\x00" * 320,
-            final=False,
+            final=True,
             duration_ms=40,
         )
     )
@@ -1347,8 +1245,7 @@ def test_vision_agent_server_vad_commits_continuous_mock_asr(tmp_path) -> None:
     messages_text = (session_dir / "messages.jsonl").read_text(encoding="utf-8")
     agent_events_text = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
     assert "mock transcript" in messages_text
-    assert "vision.vad.speech_started" in agent_events_text
-    assert "vision.vad.speech_stopped" in agent_events_text
+    assert "conversation.speech_stopped" in agent_events_text
     assert "input_transcript.done" in agent_events_text
 
 
@@ -1454,11 +1351,12 @@ def test_vision_agent_paraformer_sentence_begin_cancels_active_output(tmp_path) 
     assert "paraformer_sentence_begin" in agent_events_text
 
 
-def test_vision_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_path) -> None:
-    """测试目标：验证 Text 输出音频通过 PipelineEvent 桥接，并受下行水位控制。
+def test_vision_conversation_output_honors_pause_resume(tmp_path) -> None:
+    """测试目标：验证 VL conversation 输出音频受下行暂停/恢复控制。
 
     测试方法：注册浏览器眼镜连接，暂停下行后提交一段 Text delta，再恢复下行。
-    预期结果：暂停期间不写端侧音频；恢复后写出音频，并记录 `pipeline.output_audio_delta`。
+    预期结果：暂停期间不写端侧音频；恢复后写出音频，并记录 OutputService 和
+    conversation output delta 事件。
     """
 
     class Connection:
@@ -1515,8 +1413,11 @@ def test_vision_pipeline_emits_output_audio_events_and_honors_pause_resume(tmp_p
     app.agent_core.resume_downstream(user_id, session_id)
     assert connection.chunks
     agent_events_text = (tmp_path / "runs" / user_id / session_id / "agent-events.jsonl").read_text(encoding="utf-8")
-    assert "pipeline.output_audio_delta" in agent_events_text
+    conversation_events_text = (tmp_path / "runs" / user_id / session_id / "conversation-events.jsonl").read_text(encoding="utf-8")
+    assert "output.downstream.paused" in agent_events_text
+    assert "output.downstream.resumed" in agent_events_text
     assert "assistant_audio.delta_buffered_while_paused" in agent_events_text
+    assert "conversation.agent_output_delta" in conversation_events_text
 
 
 def test_vision_agent_ignores_asr_final_inside_assistant_output_guard(tmp_path) -> None:

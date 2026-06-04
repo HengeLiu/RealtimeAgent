@@ -1,6 +1,6 @@
 # conversation 音视频链路重构实施计划
 
-更新时间：2026-06-02
+更新时间：2026-06-04
 
 对应设计文档：
 
@@ -15,7 +15,7 @@
 
 1. 哪些音视频链路强相关模块需要在 `conversation/` 中重做。
 2. 哪些现有服务必须复用，不能因为新链路而重写。
-3. 新旧链路如何并存、切换和逐步迁移。
+3. 新链路成为正式入口后，旧链路兼容代码如何收口和逐步迁移。
 4. Omni Manual 模式和 VL 链路如何在同一套输入、Agent Core、输出框架下落地。
 5. 每个阶段的代码范围、验收命令和运行观察点。
 
@@ -43,18 +43,18 @@
 
 | 当前位置 | 当前问题 | conversation 目标 |
 | --- | --- | --- |
-| `audio_pipeline/service.py` | 音频处理、VAD、AgentCore 转发混在一个外层 pipeline 中。 | 收敛为音频规范化和语音输入边界。 |
-| `agent_core/vision.py` | ASR、VAD 边界、视觉采样、VL 请求、TTS 触发集中在 Vision Core 内。 | 拆成输入边界、VL Agent Core、响应生成。 |
-| `agent_core/omni.py` | Provider VAD 与 Omni Core 深耦合，尚不支持 Manual turn 控制。 | 新 Omni Agent Core 优先支持 Manual 模式。 |
-| `realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` | 已经有 pipeline 包装，但与外层 `AudioPipeline` 职责重叠。 | 作为旧链路兼容层，不继续扩展新能力。 |
-| `app.py` 中 legacy AgentCoreRouter 装配 | 应用装配入口过重，但仍是统一 composition root。 | 增加 conversation runtime 分支，并把旧 router 明确为 legacy fallback。 |
+| `audio_pipeline/service.py` | 早期音频处理、VAD、AgentCore 转发混在一个外层 pipeline 中。 | 已通过 `conversation.input.RuntimeAudioInputBoundary` 收敛为音频规范化入口；底层 `AudioPipeline` 仅保留格式、重采样和质量诊断实现。 |
+| `conversation/core/vision_host.py` | 仍承载 VL provider、工具循环、视觉资产和 TTS 输出等多项能力。 | 继续拆成 VL Agent Core、AgentLoop、视觉输入和输出适配。 |
+| `conversation/core/omni_host.py` | 仍承载 Omni provider session、工具桥、视觉帧追加和原生音频输出等多项能力。 | 继续拆成 Omni Agent Core、AgentLoop、provider adapter 和输出适配。 |
+| `realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` | 曾经有 pipeline 包装，但与外层 `AudioPipeline` 职责重叠。 | 已删除；正式链路只保留 conversation runtime。 |
+| `app.py` 中 legacy AgentCoreRouter 装配 | 应用装配入口过重，曾经同时承担新旧链路选择。 | app 正式入口只装配 conversation runtime；旧 router 不再作为配置回退路径。 |
 
 ## 3. 重构原则
 
 1. 新链路放在 `agent-server/realtime_agent/conversation/` 下。
 2. 不新增 `v2`、`new_runtime`、`experimental_runtime` 这类临时目录名。
 3. 先实现 Omni Manual，后迁移 VL。
-4. 新旧链路并存，通过配置切换。
+4. conversation runtime 是正式音视频入口；历史 runtime 配置只做兼容解析，不再控制 app 回退旧链路。
 5. 不修改控制协议事件名，不修改 stream 二进制帧格式。
 6. 不把大字节媒体放入控制信令 JSON。
 7. 第一阶段不重写 `OutputService`，只通过 adapter 使用。
@@ -114,7 +114,7 @@ agent-server/realtime_agent/conversation/
 | `config.py` | conversation 层配置解析和兼容旧配置映射。 |
 | `input/` | 音频规范化、VAD/ASR 边界、视觉输入绑定。 |
 | `core/` | Omni / VL Agent Core 和核心循环。 |
-| `providers/` | 对现有 provider adapter 的轻量包装。 |
+| `providers/` | conversation 正式 provider adapter 契约与实现宿主；历史 `agent_core.providers` 只保留导入 shim。 |
 | `output/` | 对现有 `OutputService` 的适配，不重写播放仲裁。 |
 | `events.py` | conversation 内部事件定义，避免与系统级 event 混淆。 |
 | `recorder.py` | 将 conversation 内部事件写入 runs 产物。 |
@@ -339,9 +339,9 @@ class ConversationOutputAdapter(Protocol):
 
 | 目标概念 | 当前可复用实现 | 迁移说明 |
 | --- | --- | --- |
-| `ConversationRuntime` | `RealtimeAgentApp`、`LegacyAgentCoreRouter` | 作为 app 内新分支接入；旧 router 只作为 legacy fallback。 |
-| `AudioInput` | `AudioPipeline` | conversation runtime 通过外层 `AudioPipeline` 接收规范化音频；`RealtimeAudioNormalizer` 只供 legacy pipeline 使用。 |
-| ASR-backed `SpeechInputBoundary` | `AsrPipeline`、`AsrProviderAdapter` | Omni Manual 和 VL 共同使用 ASR/VAD 合一 provider 的 sentence begin / end。 |
+| `ConversationRuntime` | `RealtimeAgentApp`、`conversation/runtime.py` | 已作为 app 正式音视频入口；旧 router 已删除。 |
+| `AudioInput` | `RuntimeAudioInputBoundary`、底层 `AudioPipeline` | App 正式从 `conversation.input` 导入 `RuntimeAudioInputBoundary` 接收规范化音频；底层复用 `AudioPipeline` 的格式校验、重采样和质量诊断，旧 `RealtimeAudioNormalizer` 已随旧 pipeline 删除。 |
+| ASR-backed `SpeechInputBoundary` | `AsrProviderSessionPool`、`AsrProviderAdapter` | Omni Manual 和 VL 共同使用 ASR/VAD 合一 provider 的 sentence begin / end。 |
 | `ASRProvider` | `AsrProviderAdapter`、`DashScopeAsrProviderAdapter` | 当前类名可保留，conversation providers 做包装。 |
 | `VLMProvider` | `VisionModelAdapter` | 先包装，不重写请求构造。 |
 | `OmniRealtimeProvider` | `RealtimeProviderAdapter`、`QwenOmniRealtimeAdapter` | 增加 manual 配置和显式 response create。 |
@@ -395,7 +395,7 @@ uv run python -m pytest agent-server/unit-tests -q
 
 改动范围：
 
-1. `agent_core/omni.py` 或 `conversation/providers/omni_realtime.py`。
+1. `conversation/core/omni_host.py` 或 `conversation/providers/omni_realtime.py`。
 2. `RealtimeProviderConfig` 增加 `turn_detection=manual` 的兼容解析。
 3. `QwenOmniRealtimeAdapter` 支持：
    - `enable_turn_detection=False`
@@ -486,7 +486,7 @@ uv run python -m pytest agent-server/protocol-tests -q
 
 1. `conversation/input/visual.py`
 2. `conversation/core/omni.py`
-3. 现有 `agent_core/visual/` appender 或对应视觉资产模块。
+3. 现有 `conversation/input/visual_appender.py` 或对应视觉资产模块。
 
 关键任务：
 
@@ -564,24 +564,25 @@ uv run python -m pytest agent-server/model-provider-tests -q
 4. final text 只提交一次给 VLM。
 5. VLM 响应文本进入 TTS 并播放。
 
-### Phase 5：旧链路兼容和路由收敛
+### Phase 5：正式入口切换和路由收敛
 
-目标：让 `RealtimeAgentApp` 能稳定选择旧链路或 conversation 链路，旧 `AgentCoreRouter` 只作为 legacy fallback 保留。
+目标：让 `RealtimeAgentApp` 只装配 conversation runtime，旧 `AgentCoreRouter`
+退出 app 正式路径，并删除旧 router / realtime pipeline 代码。
 
 改动范围：
 
 1. `app.py`
-2. `agent_core/router.py` 或当前 legacy 装配逻辑所在文件。
+2. `agent_core/router.py` 删除项。
 3. `conversation/runtime.py`
 4. 配置文档和示例配置。
 
 关键任务：
 
-1. `agent.conversation.runtime=legacy` 时保持旧链路。
-2. `agent.conversation.runtime=conversation` 时进入新链路。
-3. `agent.mode=omni` 和 `agent.mode=vision` 都支持 conversation runtime。
-4. app 层 dispatch 不理解 Omni / VL 内部差异。
-5. 新旧链路 runs 产物字段尽量保持可对照。
+1. `agent.conversation.runtime` 历史配置值只做兼容读取，不再决定 app 路由。
+2. `agent.mode=omni` 和 `agent.mode=vision` 都进入 conversation runtime。
+3. app 层 dispatch 不理解 Omni / VL 内部差异。
+4. `agent_core/__init__.py` 不再公开旧 router 和旧 realtime pipeline。
+5. 删除旧 router、旧 realtime pipeline 和对应旧测试覆盖。
 
 验收命令：
 
@@ -593,19 +594,23 @@ uv run python -m pytest -m sdk -q
 
 ### Phase 6：清理旧职责重叠
 
-目标：在新链路稳定后，清理旧 `AudioPipeline`、`RealtimeAudioNormalizer` 和 `realtime_pipeline/*` 的重复职责。
+目标：在新链路稳定后，清理旧 `AudioPipeline`、`RealtimeAudioNormalizer`
+和 `realtime_pipeline/*` 的重复职责，最终让旧 pipeline 从主仓正式音视频
+设计中退出。
 
 前置条件：
 
 1. Omni Manual conversation runtime 已完成真机或 browser-glass 联调。
 2. VL conversation runtime 已完成至少一次真实 ASR + VLM + TTS 联调。
 3. runs 产物能覆盖 turn 边界、ASR、模型请求、输出播放。
-4. 旧链路仍可通过配置回退。
+4. app 正式路径已经不再通过配置回退旧链路。
 
 清理范围：
 
-1. 明确 `AudioPipeline` 是旧链路兼容组件还是被 conversation `AudioInput` 替代。
-2. 明确 `realtime_pipeline/vision.py` 和 `realtime_pipeline/omni.py` 是否只保留兼容。
+1. 将 `AudioPipeline` 收敛为正式 `AudioInputBoundary` 适配实现，或迁入
+   `conversation/input/audio.py`。
+2. 删除或迁移 `realtime_pipeline/vision.py` 和 `realtime_pipeline/omni.py`
+   中仍有价值的测试覆盖。
 3. 删除不再使用的重复 normalizer。
 4. 文档更新旧链路状态。
 
@@ -650,8 +655,8 @@ agent:
 
 配置原则：
 
-1. `agent.conversation.runtime` 缺省为 `legacy`。
-2. `agent.conversation.omni.turn_detection=manual` 只影响新 conversation Omni 链路。
+1. `agent.conversation.runtime` 缺省为 `conversation`，历史 `legacy` 值只做配置兼容读取，不再决定 app 路由。
+2. `agent.conversation.omni.turn_detection=manual` 是正式 Omni conversation 链路的固定策略。
 3. 旧 `agent.omni.turn_detection` 保持兼容。
 4. ASR/VAD 合一 provider 使用 `speech_boundary=asr_sentence`。
 5. 独立 VAD 使用 `vad.provider=server_vad`、`webrtc_vad` 或未来 `silero_vad`。
@@ -789,7 +794,7 @@ VL conversation 联调顺序：
 分轮原则：
 
 1. 每一轮必须有独立交付目标、完成标准和验收命令。
-2. 每一轮结束时旧链路必须仍可通过配置回退。
+2. 正式入口切换前，每一轮结束时旧链路必须仍可通过配置回退；正式入口切换后，历史 runtime 配置只保留兼容解析，不再作为回退标准。
 3. 每一轮只能声明自己覆盖的能力，不能把后续轮次能力提前写成已完成。
 4. 第五轮通过前，本文不能写“重构已完成”，只能写“已完成到某轮可测试状态”。
 
@@ -917,20 +922,21 @@ uv run python -m realtime_agent_python_playback_glass conversation-regression --
 
 对应 phase：
 
-1. Phase 5：旧链路兼容和路由收敛。
+1. Phase 5：正式入口切换和路由收敛。
 2. Phase 6：清理旧职责重叠。
 
-交付目标：让 `RealtimeAgentApp` 只负责选择 runtime，让旧链路变成明确的 legacy fallback，不再继续承载新能力。
+交付目标：让 `RealtimeAgentApp` 只负责装配正式 conversation runtime；
+旧链路不再是 app fallback，也不再继续承载新能力。
 
 完成标准：
 
-1. `agent.mode=omni` 和 `agent.mode=vision` 都可以通过 `agent.conversation.runtime=conversation` 进入新链路。
+1. `agent.mode=omni` 和 `agent.mode=vision` 都进入 conversation runtime。
 2. `SpeechInputDelta` 成为 conversation runtime 内唯一的语音输入抽象。
-3. `agent.conversation.runtime=legacy` 仍可作为回退路径运行。
-4. `AudioPipeline`、`RealtimeAudioNormalizer`、`realtime_pipeline/*` 的职责重叠已经清理或明确标记为 legacy-only。
+3. `agent.conversation.runtime=legacy` 这类历史配置值不会让 app 回退旧链路。
+4. `AudioPipeline`、`RealtimeAudioNormalizer`、`realtime_pipeline/*` 的职责重叠已经清理；旧 pipeline 测试要么迁移到 conversation，要么明确删除。
 5. `app.py` 只负责选择和装配 runtime，不直接理解 Omni / VL 的输入细节。
 6. 打断、视觉采样、turn 提交分别位于清晰的 Agent Core 或 runtime 控制逻辑中。
-7. `ConversationOutputAdapter` 复用现有 `OutputService`，新链路和旧链路不产生两套播放仲裁。
+7. `ConversationOutputAdapter` 复用现有 `OutputService`，不产生两套播放仲裁。
 
 验收命令：
 
@@ -944,7 +950,7 @@ uv run python -m realtime_agent_python_playback_glass conversation-regression
 本轮不包含：
 
 1. 大规模重写 Tool / Task / Asset / Stream / Control。
-2. 强制删除所有 legacy 文件。
+2. 重写所有 provider adapter。
 3. 引入新的业务功能。
 
 ### 16.5 第五轮：最终验收和文档收敛
@@ -995,77 +1001,47 @@ git diff --check
 3. Phase 2：Omni conversation runtime 已支持 ASR-backed Manual 链路，`turn_ended` 后执行 commit 和 response create；conversation runtime 不再保留 RMS VAD 版 Omni 链路。
 4. Phase 3：Omni conversation runtime 已把 `turn_started/turn_ended` 接入现有视觉采样状态，用户说话期间可触发输出取消。
 5. Phase 4：VL conversation runtime 已完成第一版包装式迁移；Omni Manual 和 VL 当前共用 `AsrSpeechInputBoundary`，把 ASR partial 映射为 `asr_text_delta`，并通过 `AsrVoiceActivityBoundary` 把 sentence begin / sentence end / final 统一成 speech boundary 后再转成 `SpeechInputDelta`。
-6. Phase 5：conversation runtime 装配已从 `RealtimeAgentApp` 抽到 `conversation/runtime.py`，app conversation 分支只负责传入配置快照和服务依赖。
-7. Phase 5：`AgentCoreRouter` 已收敛为 `LegacyAgentCoreRouter` 的兼容别名，`RealtimeAgentApp` 只在 `agent.conversation.runtime=legacy` 时调用该旧 router。
-8. Phase 6：`realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` 和 `RealtimeAudioNormalizer` 已标记为 legacy realtime pipeline 兼容层；conversation runtime 已改用 `ConversationRuntimeEventEmitter` 和 `ConversationOutputController`，不再导入 legacy `realtime_pipeline` helper；`AudioPipeline` 明确为新旧链路共享的上行音频预处理入口。
-9. 验收基础设施：已补齐 Python Device SDK 最小公共包 `realtime_agent_device`，server SDK、Python 参考端和 interop 测试可共享同一套控制事件与 stream codec。
-10. 系统联调：已用 `python-playback-glass` 通过真实 WebSocket 分别完成 Omni Manual conversation runtime 和 VL conversation runtime 回放；回放包含 `sensor.mic`、`sensor.rgb`、`actuator.speaker`，VL 链路覆盖真实 ASR、VLM 和 TTS，Omni 链路覆盖 manual commit、manual response create 和原生音频输出。
-11. 共享 turn 控制：已新增 `RealtimeTurnController`，Omni Manual 和 VL conversation runtime 均通过该组件处理 `speech_started/speech_stopped` runtime 事件。
-12. 共享打断判断：已新增 `OutputInterruptionController`，Omni Manual 和 VL conversation runtime 均通过该组件判断活跃输出和 `thinking/speaking/tool_running` 状态，不再在各自 `_handle_turn_started` 中复制打断判断。
-13. 抽象接口：已新增 `ControlTransportABC`、`StreamTransportABC`、`DeviceSession`、`AssetStoreABC`、`AgentCoreABC`、`AgentLoopABC`、`AgentMemoryABC`、`AudioInputBoundary`、`SpeechInputBoundary`、`VisualInputBoundary`、`AgentOutputRouter`、`SpeakerSinkABC` 的代码契约；`ToolGatewayABC`、`TaskEngineABC`、`SkillGatewayABC`、`McpGatewayABC` 已作为能力层代码契约落地，方法覆盖 provider schema、任务查询、端侧 command 回执和 TaskSignal 回流；`ConversationContext` 已扩展为可表达 active streams、当前 turn、工具 schema、记忆摘要和 recorder 的 AgentContext；`AgentCoreABC` 已覆盖 `open/consume_input/consume_task_signal/interrupt/close/snapshot`；`VLMProviderABC`、`OmniRealtimeProviderABC`、`ASRProviderABC`、`TTSProviderABC` 已作为 provider adapter 代码契约落地，方法覆盖 streaming、图片 append、close 和流式 TTS；`AssetStoreABC` 已覆盖 read、claim 和 source map；`AudioPipeline.normalize()` 已满足 `AudioInputBoundary`；`AgentOutputDelta` 已覆盖 `text/audio/control/task_signal`，并保留旧 kind 兼容。其中 `AgentCoreABC.consume_input()` 已进入 Omni/VL conversation runtime，`OmniRealtimeLoop` 和 `VlAgentLoop` 已承接音频 append、ASR delta、turn final、commit/create_response 等 provider loop 入口；conversation 模式下 Omni provider callbacks 已由 `OmniRealtimeLoop` 组装，接管 provider audio/tool/error 事件到输出、工具和观测链路的回调入口；VL final_text 校验、记录、VLM provider streaming、tool_call 处理、tool_result 回填和文本输出释放已迁入 `VlAgentLoop`，旧 `VisionRealtimeAgentCore.handle_conversation_final_text()` 适配入口已删除；`ConversationMemoryService` 结构化满足 `AgentMemoryABC`，`TurnVisualInputBoundary` 已持有视觉 turn 生命周期状态并通过 `CallbackVisualInputBoundary` 兼容接入 turn controller，`AgentOutputRouter` 已进入 `ConversationOutputController.emit()` 并支持设计文档中的四类输出；`ConversationOutputDeltaBridge` 已把旧 core 通过 OutputService 产生的真实 Omni 原生音频和 VL TTS 音频输出桥接记录为 `AgentOutputDelta`。
-14. 运行产物：`ConversationRuntimeEventEmitter` 已通过 `RunRecorder.record_conversation_event()` 写入独立 `conversation-events.jsonl`，同时保留 `agent-events.jsonl` 兼容入口。
+6. Phase 5：conversation runtime 装配已从 `RealtimeAgentApp` 抽到 `conversation/runtime.py`，app 只负责传入配置快照和服务依赖；`agent.conversation.runtime` 历史配置值不再决定 app 路由。
+7. Phase 5：`RealtimeAgentApp` 已停止导入和调用 `LegacyAgentCoreRouter`；旧 `agent_core/router.py` 已删除。
+8. Phase 6：`realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` 和 `RealtimeAudioNormalizer` 已删除；conversation runtime 已改用 `ConversationRuntimeEventEmitter` 和 `ConversationOutputController`；现有音频规范化实现已通过 `conversation/input/audio.py` 暴露为 `RuntimeAudioInputBoundary`，App 正式装配从 conversation 输入层导入该入口。
+9. Phase 6：`VisionRealtimeAgentCore` / `OmniRealtimeAgentCore` 的实现宿主已迁到 `conversation/core/vision_host.py` 和 `conversation/core/omni_host.py`；正式 conversation runtime、AgentLoop 和 provider wrapper 均从 conversation 路径导入，`agent_core/vision.py` 与 `agent_core/omni.py` 只保留历史导入 shim。
+10. Phase 6：ASR / VLM provider adapter 实现已迁到 `conversation/providers/model_adapters.py`；正式 conversation 输入边界和 VL host 均从 conversation provider 路径导入，`agent_core/providers.py` 只保留历史导入 shim。
+11. Phase 6：ContextCompiler / PromptRegistry 已迁到 `conversation/context/`；正式 app、memory、CLI 和 conversation host 均从 conversation context 路径导入，`agent_core/context/` 只保留历史导入 shim。
+12. Phase 6：多模态 message 管理已迁到 `conversation/multimodal/`，视觉 append 适配已迁到 `conversation/input/visual_appender.py`，恢复工具已迁到 `conversation/core/recovery.py`，`AgentCoreEvent` / `AgentEventBuffer` 已迁到 `conversation/core/base.py`；正式 conversation host 不再从 `agent_core.multimodal`、`agent_core.visual`、`agent_core.recovery` 或 `agent_core.base` 导入。
+13. 验收基础设施：已补齐 Python Device SDK 最小公共包 `realtime_agent_device`，server SDK、Python 参考端和 interop 测试可共享同一套控制事件与 stream codec。
+14. 系统联调：已用 `python-playback-glass` 通过真实 WebSocket 分别完成 Omni Manual conversation runtime 和 VL conversation runtime 回放；回放包含 `sensor.mic`、`sensor.rgb`、`actuator.speaker`，VL 链路覆盖真实 ASR、VLM 和 TTS，Omni 链路覆盖 manual commit、manual response create 和原生音频输出。
+15. 共享 turn 控制：已新增 `RealtimeTurnController`，Omni Manual 和 VL conversation runtime 均通过该组件处理 `speech_started/speech_stopped` runtime 事件。
+16. 共享打断判断：已新增 `OutputInterruptionController`，Omni Manual 和 VL conversation runtime 均通过该组件判断活跃输出和 `thinking/speaking/tool_running` 状态，不再在各自 `_handle_turn_started` 中复制打断判断。
+17. 抽象接口：已新增 `ControlTransportABC`、`StreamTransportABC`、`DeviceSession`、`AssetStoreABC`、`AgentCoreABC`、`AgentLoopABC`、`AgentMemoryABC`、`AudioInputBoundary`、`SpeechInputBoundary`、`VisualInputBoundary`、`AgentOutputRouter`、`SpeakerSinkABC` 的代码契约；`ToolGatewayABC`、`TaskEngineABC`、`SkillGatewayABC`、`McpGatewayABC` 已作为能力层代码契约落地，方法覆盖 provider schema、任务查询、端侧 command 回执和 TaskSignal 回流；`ConversationContext` 已扩展为可表达 active streams、当前 turn、工具 schema、记忆摘要和 recorder 的 AgentContext；`AgentCoreABC` 已覆盖 `open/consume_input/consume_task_signal/interrupt/close/snapshot`；`VLMProviderABC`、`OmniRealtimeProviderABC`、`ASRProviderABC`、`TTSProviderABC` 已作为 provider adapter 代码契约落地，方法覆盖 streaming、图片 append、close 和流式 TTS；`AssetStoreABC` 已覆盖 read、claim 和 source map；`RuntimeAudioInputBoundary.normalize()` 已满足 `AudioInputBoundary`，`AudioPipeline` 内部正式下游字段已收敛为 `audio_consumer`；`AgentOutputDelta` 已覆盖 `text/audio/control/task_signal`，并保留旧 kind 兼容。其中 `AgentCoreABC.consume_input()` 已进入 Omni/VL conversation runtime，`OmniRealtimeLoop` 和 `VlAgentLoop` 已承接音频 append、ASR delta、turn final、commit/create_response 等 provider loop 入口；conversation 模式下 Omni provider callbacks 已由 `OmniRealtimeLoop` 组装，接管 provider audio/tool/error 事件到输出、工具和观测链路的回调入口；VL final_text 校验、记录、VLM provider streaming、tool_call、tool_result、文本输出释放和响应收尾控制已迁入 `VlAgentLoop`，旧 `VisionRealtimeAgentCore.handle_conversation_final_text()` 适配入口已删除；`ConversationMemoryService` 结构化满足 `AgentMemoryABC`，`TurnVisualInputBoundary` 已持有视觉 turn 生命周期状态并通过 `CallbackVisualInputBoundary` 兼容接入 turn controller，`AgentOutputRouter` 已进入 `ConversationOutputController.emit()` 并支持设计文档中的四类输出；`ConversationOutputDeltaBridge` 已把旧 core host 通过 OutputService 产生的真实 Omni 原生音频和 VL TTS 音频输出桥接记录为 `AgentOutputDelta`。
+18. 运行产物：`ConversationRuntimeEventEmitter` 已通过 `RunRecorder.record_conversation_event()` 写入独立 `conversation-events.jsonl`，同时保留 `agent-events.jsonl` 兼容入口。
 
 ### 17.2 已执行验证
 
-当前已执行并通过的验证命令：
+2026-06-04 当前验证结果：
 
 ```bash
-uv run python -m py_compile agent-server/realtime_agent/conversation/input/asr.py agent-server/realtime_agent/conversation/core/vision.py agent-server/realtime_agent/agent_core/vision.py agent-server/realtime_agent/app.py
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py agent-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py agent-server/protocol-tests/sdk/config/test_config_sync.py agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py::test_vision_conversation_runtime_uses_asr_sentence_end_for_response agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_conversation_runtime_omni_manual_commits_and_creates_response agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_realtime_create_response_forwards_to_provider_and_records_event agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_qwen_omni_manual_turn_detection_disables_provider_vad agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_qwen_omni_create_response_records_manual_request agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_vision_agent_server_vad_cancels_active_output agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_vision_agent_paraformer_sentence_begin_cancels_active_output agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_vision_pipeline_emits_output_audio_events_and_honors_pause_resume agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_realtime_append_audio_does_not_require_final_and_opens_speaker_stream agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_omni_audio_done_closes_current_output_stream agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_realtime_provider_speech_started_publishes_control_event_after_output_finish agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_realtime_mode_uses_builtin_mock_provider_for_local_chain agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_realtime_commit_input_forwards_to_provider_and_records_event agent-server/protocol-tests/sdk/agent_core/test_omni_pipeline_interrupt.py::test_omni_provider_speech_started_requests_cancel_even_while_only_listening agent-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py::test_realtime_core_records_tool_result_injection_and_audio_output -q
-uv run python -m pytest agent-server/protocol-tests --ignore=agent-server/protocol-tests/sdk/interop -q
-uv pip install -e .
-uv run python -m pytest agent-server/unit-tests -q
-uv run python -m pytest agent-server/protocol-tests/sdk/interop/test_server_device_loopback.py -q
 uv run python -m pytest agent-server/protocol-tests -q
-uv run python -m pytest agent-server/model-provider-tests -q
-uv run python -m pytest examples/dev-support/unit-tests/python_playback_glass -q
-uv run python -m realtime_agent_python_playback_glass conversation-regression --target omni-manual --work-root runs/python-playback-glass/conversation-regression --report runs/python-playback-glass/conversation-regression/report.json
-uv run python -m realtime_agent_python_playback_glass conversation-regression --target vl-conversation --work-root runs/python-playback-glass/conversation-regression --report runs/python-playback-glass/conversation-regression/report.json
-uv run python -m py_compile agent-server/realtime_agent/conversation/events.py agent-server/realtime_agent/conversation/output/adapters.py agent-server/realtime_agent/conversation/core/omni.py agent-server/realtime_agent/conversation/core/vision.py agent-server/realtime_agent/agent_core/router.py agent-server/realtime_agent/agent_core/__init__.py agent-server/realtime_agent/app.py
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_core_router_is_legacy_compat_alias agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
-uv run python -m pytest agent-server/unit-tests -q
-uv run python -m pytest agent-server/protocol-tests -q
-uv run python -m pytest agent-server/model-provider-tests -q
-uv run python -m pytest examples/dev-support/unit-tests/python_playback_glass -q
-uv run python -m pytest agent-server/protocol-tests/acceptance/test_next_docs_contract.py -q
-uv run python -m realtime_agent_python_playback_glass conversation-regression --work-root runs/python-playback-glass/conversation-regression --report runs/python-playback-glass/conversation-regression/report.json
+uv run python -m pytest agent-server/unit-tests -q -k 'not web_open_serve_print_url_uses_local_http_origin and not web_chat_open_print_url_uses_local_http_origin'
 ```
 
-当前未保留未通过的 unit/protocol 验证命令；此前 `realtime_agent_device` 缺失导致的 unit-tests 和 interop 收集失败已通过补齐 Python Device SDK 解决。
+上述命令已通过。完整 unit 命令本轮也已执行，但
+`test_web_open_serve_print_url_uses_local_http_origin` 和
+`test_web_chat_open_print_url_uses_local_http_origin` 因当前开发机固定端口
+`127.0.0.1:8766` 已被占用而失败，错误为
+`OSError: [Errno 48] Address already in use`，与 conversation runtime
+迁移无直接关系。
 
-本轮补齐共享 turn / interruption / visual boundary / output router 后，新增执行并通过：
+本轮删除旧 router / realtime pipeline、迁移 ASR 输入会话池后，新增执行并通过：
 
 ```bash
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py::test_conversation_runtime_omni_manual_commits_and_creates_response agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py::test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py::test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
 uv run python -m pytest agent-server/protocol-tests -q
-uv run python -m pytest agent-server/unit-tests -q
-uv run python -m pytest agent-server/model-provider-tests -q
-uv run python -m pytest examples/dev-support/unit-tests/python_playback_glass -q
-uv run python -m realtime_agent_python_playback_glass conversation-regression --work-root runs/python-playback-glass/conversation-regression --report runs/python-playback-glass/conversation-regression/report.json
+uv run python -m pytest agent-server/unit-tests -q -k 'not web_open_serve_print_url_uses_local_http_origin and not web_chat_open_print_url_uses_local_http_origin'
+uv run python -m pytest agent-server/model-provider-tests/test_dashscope_providers.py -q
 git diff --check
-```
-
-本轮继续补齐 VL AgentLoop 后，新增执行并通过：
-
-```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py::test_vl_agent_loop_handles_asr_text_and_final_text -q
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py::test_vision_conversation_runtime_uses_asr_sentence_end_for_response -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_agent_core.py::test_conversation_runtime_omni_manual_commits_and_creates_response -q
-```
-
-本轮继续补齐 Omni provider callback ownership 后，新增执行并通过：
-
-```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
-```
-
-本轮继续补齐抽象方法、AudioInputBoundary、AgentOutputDelta 四类输出和视觉 turn 状态后，新增执行并通过：
-
-```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_runtime_foundation.py -q
-uv run python -m pytest agent-server/protocol-tests -q
 ```
 
 ### 17.3 交付标准满足情况
@@ -1073,8 +1049,10 @@ uv run python -m pytest agent-server/protocol-tests -q
 1. 已满足：conversation runtime 只保留 ASR-backed speech boundary；`AsrVoiceActivityBoundary` 只输出 `speech_started/speech_stopped`，ASR 文本不从 voice boundary 输出。
 2. 已满足：Omni Manual 和 VL conversation runtime 都通过 `RealtimeTurnController` 统一发出 speech runtime 事件。
 3. 已满足：Omni Manual 和 VL conversation runtime 都通过 `OutputInterruptionController` 使用同一套打断判断规则。
-4. 已满足：`realtime_pipeline/*` 保留为 `agent.conversation.runtime=legacy` 的回退实现，新 conversation runtime 不再导入 legacy `realtime_pipeline` helper。
+4. 已满足：旧 `realtime_pipeline/*` 和 `agent_core/router.py` 已删除，新 conversation runtime 不再导入 legacy pipeline helper，也不存在 `agent.conversation.runtime=legacy` 的 app 回退实现。
 5. 已满足：conversation 回归入口已经固化在 `python-playback-glass conversation-regression`，并写入最终验收命令。
 6. 已满足：`OmniRealtimeLoop` / `VlAgentLoop` 已作为 `AgentLoopABC` 适配器进入 runtime，承接标准输入到 provider 提交的入口；conversation 模式下 `OmniRealtimeLoop` 已负责组装 provider callbacks，并把 provider audio/tool/error 事件接入输出、工具和观测链路；`VlAgentLoop` 已承接 VL 的上下文编译、VLM streaming、tool_call、tool_result、文本输出释放和响应收尾控制；`ConversationOutputDeltaBridge` 已把旧 core 的真实 speaker 输出记录为 `AgentOutputDelta`。Qwen/DashScope realtime provider adapter 内部协议事件解析保留在 provider adapter 中，属于 provider adapter 职责，不作为 AgentLoop 缺口。
 7. 已满足：视觉 turn 生命周期已通过 `TurnVisualInputBoundary` 持有状态，并通过 `CallbackVisualInputBoundary` 兼容接入 `RealtimeTurnController`；视觉采样线程和资产读取仍复用链路 core helper，属于后续目录重组范围，不影响抽象职责边界。
-8. 已满足：runs 通过 `conversation-events.jsonl` 独立记录 conversation runtime 事件，并保留 `agent-events.jsonl` 可见性。
+8. 已满足：正式 conversation 热路径不再导入 `agent_core.*` 实现模块；`agent_core/` 当前只保留历史导入 shim 和外部兼容入口；协议测试目录已从 `sdk/agent_core/` 迁到 `sdk/conversation/`。
+9. 已满足：App 正式音频输入装配从 `conversation.input.RuntimeAudioInputBoundary` 导入，底层 `AudioPipeline` 的正式下游字段已从 `agent_core` 收敛为 `audio_consumer`。
+10. 已满足：runs 通过 `conversation-events.jsonl` 独立记录 conversation runtime 事件，并保留 `agent-events.jsonl` 可见性。

@@ -3,9 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
-import realtime_agent.agent_core.vision as vision_module
-from realtime_agent.agent_core.providers import AsrProviderConfig, TranscriptEvent
-from realtime_agent.audio_pipeline.service import AudioPipeline
+import realtime_agent.conversation.input.asr_session as asr_session_module
 from realtime_agent.asset import AssetStoreABC
 from realtime_agent.capability import McpGatewayABC, SkillGatewayABC, TaskEngineABC, ToolGatewayABC
 from realtime_agent.conversation import (
@@ -22,15 +20,17 @@ from realtime_agent.conversation.core import ConversationContext
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.input import (
     AsrSpeechInputBoundary,
+    AsrProviderSessionPool,
     AsrVoiceActivityBoundary,
     AudioInputBoundary,
     CallbackVisualInputBoundary,
+    RuntimeAudioInputBoundary,
     TurnVisualInputBoundary,
 )
 from realtime_agent.conversation.recorder import output_delta_record, speech_delta_record
 from realtime_agent.conversation.output import ConversationOutputController, ConversationOutputDeltaBridge
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop, VlAgentLoop
-from realtime_agent.conversation.providers import ASRProviderABC, OmniRealtimeProviderABC, TTSProviderABC, VLMProviderABC
+from realtime_agent.conversation.providers import ASRProviderABC, AsrProviderConfig, OmniRealtimeProviderABC, TTSProviderABC, TranscriptEvent, VLMProviderABC
 from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import SpeakerSinkABC
@@ -70,14 +70,14 @@ def test_conversation_memory_service_satisfies_agent_memory_contract(tmp_path) -
     assert messages[-1]["content"] == "你好"
 
 
-def test_conversation_runtime_config_defaults_to_legacy() -> None:
-    """测试目标：确认 Phase 0 新 runtime 配置默认保护旧链路。
+def test_conversation_runtime_config_defaults_to_conversation() -> None:
+    """测试目标：确认 conversation runtime 已是正式默认链路。
 
     测试方法：直接构造 `ConversationRuntimeConfig`。
-    预期结果：默认 runtime 是 `legacy`。
+    预期结果：默认 runtime 是 `conversation`。
     """
 
-    assert ConversationRuntimeConfig().runtime == "legacy"
+    assert ConversationRuntimeConfig().runtime == "conversation"
 
 
 def test_conversation_context_carries_agent_context_fields() -> None:
@@ -185,11 +185,11 @@ def test_audio_input_boundary_abc_is_importable_design_contract() -> None:
 def test_audio_pipeline_satisfies_audio_input_boundary_contract() -> None:
     """测试目标：验证真实 AudioPipeline 可以作为 AudioInputBoundary 使用。
 
-    测试方法：构造无 agent_core 的 `AudioPipeline`，直接调用 `normalize()`。
+    测试方法：构造无下游消费者的 `AudioPipeline`，直接调用 `normalize()`。
     预期结果：返回规范化后的 `StreamChunk`，不会调用 Agent 或触发输出。
     """
 
-    boundary: AudioInputBoundary = AudioPipeline(agent_core=object())
+    boundary: AudioInputBoundary = RuntimeAudioInputBoundary(audio_consumer=object())
     chunk = _mic_chunk(seq=4, payload=b"\x01\x00" * 320)
 
     normalized = boundary.normalize(chunk)
@@ -250,6 +250,21 @@ def test_conversation_runtime_does_not_import_legacy_realtime_pipeline() -> None
     source = "\n".join(path.read_text(encoding="utf-8") for path in CONVERSATION_ROOT.rglob("*.py"))
 
     assert "realtime_agent.realtime_pipeline" not in source
+
+
+def test_conversation_asr_boundary_uses_conversation_session_pool() -> None:
+    """测试目标：验证 conversation ASR 输入边界不再依赖旧 Vision AsrPipeline。
+
+    测试方法：检查公开导入和源码依赖。
+    预期结果：`AsrSpeechInputBoundary` 使用 `AsrProviderSessionPool`，conversation
+    输入层源码不导入 `realtime_agent.agent_core.vision.AsrPipeline`。
+    """
+
+    assert AsrProviderSessionPool is not None
+    source = (CONVERSATION_ROOT / "input/asr.py").read_text(encoding="utf-8")
+
+    assert "AsrProviderSessionPool" in source
+    assert "agent_core.vision" not in source
 
 
 def test_speech_input_delta_record_does_not_embed_audio_bytes() -> None:
@@ -321,7 +336,7 @@ def test_asr_speech_input_boundary_maps_sentence_events_to_turn_deltas(tmp_path,
         def cancel(self) -> None:
             pass
 
-    monkeypatch.setattr(vision_module, "build_asr_provider", lambda config: (SentenceAsrProvider(), None))
+    monkeypatch.setattr(asr_session_module, "build_asr_provider", lambda config: (SentenceAsrProvider(), None))
     boundary = AsrSpeechInputBoundary(
         config=AsrProviderConfig(provider="sentence-asr", model="sentence-asr"),
         recorder=RunRecorder(tmp_path / "runs"),

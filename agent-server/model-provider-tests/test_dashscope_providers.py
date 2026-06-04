@@ -6,14 +6,14 @@ from typing import Any
 
 import pytest
 
-from realtime_agent.agent_core.providers import (
+from realtime_agent.conversation.providers import (
     AsrProviderConfig,
     VisionModelProviderConfig,
     build_asr_provider,
     build_vision_model,
     run_provider_call_with_policy,
 )
-from realtime_agent.agent_core.omni import QwenOmniRealtimeAdapter, RealtimeProviderCallbacks, RealtimeProviderConfig
+from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter, RealtimeProviderCallbacks, RealtimeProviderConfig
 from realtime_agent.output import TtsProviderConfig
 from realtime_agent.output.service import build_tts_provider
 from realtime_agent.protocol import StreamChunk

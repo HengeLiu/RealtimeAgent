@@ -7,7 +7,7 @@
 | 目录 | 测试目标 |
 | --- | --- |
 | `acceptance/` | Server SDK 开发者契约、架构边界、文档约束和系统级验收。 |
-| `sdk/agent_core/` | Agent Core、上下文编排、tool bridge、provider fake 和恢复逻辑。 |
+| `sdk/conversation/` | conversation runtime、Agent Core、上下文编排、tool bridge、provider fake 和恢复逻辑。 |
 | `sdk/runtime/` | control、stream、audio pipeline、output、task、runs、Context API。 |
 | `sdk/config/` | Server SDK 配置解析和配置同步。 |
 | `sdk/extensions/` | MCP、Skill 等扩展能力。 |

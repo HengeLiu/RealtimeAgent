@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Iterable
 
 from realtime_agent import RealtimeAgentApp
-from realtime_agent.agent_core.providers import TranscriptEvent
+from realtime_agent.conversation.providers import TranscriptEvent
 from realtime_agent.protocol import Event, StreamChunk
 
 
@@ -162,9 +162,8 @@ def install_text_turn_providers(
     异常情况：当前 app 不是 Vision 链路或缺少 provider 容器时抛出 AttributeError。
     """
 
-    core = getattr(app.agent_core, "core", app.agent_core)
     asr_provider = ScriptedAsrProvider(transcript)
     vision_model = ScriptedVisionModel(response_deltas)
-    core.asr_pipeline._providers[stream_id] = asr_provider
-    core.vision_model = vision_model
+    app.agent_core.asr_pipeline._providers[stream_id] = asr_provider
+    app.agent_core.vision_model = vision_model
     return asr_provider, vision_model

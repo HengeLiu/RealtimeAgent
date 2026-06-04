@@ -4,7 +4,7 @@
 
 | 目录 | 测试目标和范围 |
 | --- | --- |
-| `agent_core/` | Agent Core、provider 降级、上下文编排、tool bridge 和 Realtime 逻辑。 |
+| `conversation/` | conversation runtime、provider 降级、上下文编排、tool bridge 和 Realtime 逻辑。 |
 | `runtime/` | control、stream、audio pipeline、output、tool、task、memory、runs 等运行时服务。 |
 | `interop/` | Server SDK 与 Device SDK 通过真实 WebSocket 的互操作闭环。 |
 | `config/` | 配置加载、字段同步和默认值契约。 |

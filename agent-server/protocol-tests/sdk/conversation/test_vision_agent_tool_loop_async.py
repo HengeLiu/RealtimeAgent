@@ -6,7 +6,7 @@ import time
 from types import SimpleNamespace
 
 from realtime_agent.asset import AssetRef
-from realtime_agent.agent_core.providers import DashScopeCompatibleVisionModelAdapter, OpenAICompatibleVisionModelAdapter
+from realtime_agent.conversation.providers import DashScopeCompatibleVisionModelAdapter, OpenAICompatibleVisionModelAdapter
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult, VisualAssetRef

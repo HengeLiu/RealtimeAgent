@@ -114,7 +114,7 @@ def test_server_vad_processor_emits_speech_boundaries() -> None:
     assert stopped.diagnostics["speech_active"] is False
 
 
-def test_audio_pipeline_runs_processor_chain_before_agent_core() -> None:
+def test_audio_pipeline_runs_processor_chain_before_audio_consumer() -> None:
     """测试目标：验证 Audio Pipeline 不再只有最小格式校验。
 
     测试方法：用 8k 输入音频跑完整 pipeline，并注入测试 Agent Core。
@@ -122,7 +122,7 @@ def test_audio_pipeline_runs_processor_chain_before_agent_core() -> None:
     """
 
     agent = AgentCore()
-    pipeline = AudioPipeline(agent_core=agent, config=AudioPipelineConfig(expected_sample_rate=16000))
+    pipeline = AudioPipeline(audio_consumer=agent, config=AudioPipelineConfig(expected_sample_rate=16000))
 
     pipeline.process(_chunk(sample_rate=8000, payload=b"\x01\x00" * 160))
 
@@ -131,7 +131,7 @@ def test_audio_pipeline_runs_processor_chain_before_agent_core() -> None:
     assert processors == ["format_validator", "pcm16_resampler", "volume_probe", "quality_vad_probe"]
 
 
-def test_audio_pipeline_server_vad_notifies_agent_core() -> None:
+def test_audio_pipeline_server_vad_notifies_audio_consumer() -> None:
     """测试目标：验证 Audio Pipeline 会把服务端 VAD 边界通知给 Agent Core。
 
     测试方法：注入带 `on_speech_started` 钩子的测试 Agent，并启用 `server_only` VAD。
@@ -160,7 +160,7 @@ def test_audio_pipeline_server_vad_notifies_agent_core() -> None:
             )
 
     agent = VadAwareAgent()
-    pipeline = AudioPipeline(agent_core=agent, config=AudioPipelineConfig(vad="server_only", vad_rms_threshold=96))
+    pipeline = AudioPipeline(audio_consumer=agent, config=AudioPipelineConfig(vad="server_only", vad_rms_threshold=96))
 
     pipeline.process(_chunk(payload=b"\xff\x7f" * 320))
 

@@ -1,15 +1,19 @@
-"""Agent Core 上下文管理入口。
+"""Agent Core 上下文管理兼容导入。
 
-主要功能：
-1. 暴露 PromptRegistry、ContextCompiler 和 ModelContext 等轻量对象。
-2. 让 Text / Realtime Agent Core 通过同一套接口生成模型可见上下文。
-3. 保持第一版实现简单，不绑定外部 prompt 管理平台。
+主要功能：保留历史 `realtime_agent.agent_core.context` 导入路径；正式
+conversation 上下文实现已迁移到 `realtime_agent.conversation.context`。
 """
 
-from realtime_agent.agent_core.context.compiler import ContextCompileRequest, ContextCompiler, record_context_events
-from realtime_agent.agent_core.context.models import ContextSource, ModelContext, PromptAsset
-from realtime_agent.agent_core.context.policy import ContextPolicy
-from realtime_agent.agent_core.context.registry import PromptRegistry
+from realtime_agent.conversation.context import (
+    ContextCompileRequest,
+    ContextCompiler,
+    ContextPolicy,
+    ContextSource,
+    ModelContext,
+    PromptAsset,
+    PromptRegistry,
+    record_context_events,
+)
 
 __all__ = [
     "ContextCompileRequest",

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from realtime_agent.agent_core.base import AgentEventBuffer
-from realtime_agent.agent_core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
+from realtime_agent.conversation.core.base import AgentEventBuffer
+from realtime_agent.conversation.core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 
 
 class Recorder:

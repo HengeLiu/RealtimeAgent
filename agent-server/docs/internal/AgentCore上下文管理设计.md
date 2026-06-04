@@ -49,7 +49,7 @@
 
 ## 4. 总体设计
 
-新增 `realtime_agent.agent_core.context` 包，提供 PromptRegistry、ContextSource、ContextCompiler 和 ModelContext。
+新增 `realtime_agent.conversation.context` 包，提供 PromptRegistry、ContextSource、ContextCompiler 和 ModelContext。
 
 ```plantuml
 @startuml
@@ -400,7 +400,7 @@ agent-server/realtime_agent/
     vision_interpreter.md
     memory_manager.md
     message_summarizer.md
-  agent_core/context/
+  conversation/context/
     __init__.py
     compiler.py
     models.py
@@ -570,9 +570,9 @@ uv run realtime-agent.context.inspect --config examples/simple-agent-server/serv
 优先跑：
 
 ```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_realtime_provider_tool_bridge.py -q
 uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_memory_service.py -q
 uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py -q
 ```
@@ -638,32 +638,32 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 
 - 状态：已完成。
 - 实现：新增 `realtime_agent/prompts/` 平铺目录、`registry.yaml` 和 9 个 Markdown prompt 文件；新增 `PromptRegistry` 和 `PromptAsset`。
-- 文件：`agent-server/realtime_agent/prompts/`、`agent-server/realtime_agent/agent_core/context/registry.py`、`agent-server/realtime_agent/agent_core/context/models.py`。
-- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_context_prompt_registry.py -q` 通过。
+- 文件：`agent-server/realtime_agent/prompts/`、`agent-server/realtime_agent/conversation/context/registry.py`、`agent-server/realtime_agent/conversation/context/models.py`。
+- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_context_prompt_registry.py -q` 通过。
 - 风险：`server.yaml` 仍保留 inline prompt，当前实现先记录为 `omni_system/vision_system` 来源；后续如要改成 prompt name 引用，需要单独做配置迁移。
 
 ### 阶段 2：引入 ContextSource 和 ModelContext
 
 - 状态：已完成。
 - 实现：新增 `ContextSource`、`ModelContext`、`ContextPolicy`、`ContextCompiler`；`source_kind` 保持粗粒度分类；model request 支持输出 `context_sources`、`prompts`、`warnings`、`truncations` 和 `context_metadata`。
-- 文件：`agent-server/realtime_agent/agent_core/context/`、`agent-server/realtime_agent/observability.py`。
-- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_context_compiler.py -q` 通过。
+- 文件：`agent-server/realtime_agent/conversation/context/`、`agent-server/realtime_agent/observability.py`。
+- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_context_compiler.py -q` 通过。
 - 风险：token 估算第一版使用字符数近似，没有接 provider tokenizer。
 
 ### 阶段 3：ContextCompiler 接入 VisionRealtimeAgentCore
 
 - 状态：已完成。
 - 实现：Vision Realtime 工具循环改由 ContextCompiler 生成 `instructions/messages/tools`；保留工具调用、工具结果回填和历史 tool 消息不孤立回灌的语义；工具结果回灌时记录 `context.source.added`。
-- 文件：`agent-server/realtime_agent/agent_core/vision.py`。
-- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 通过。
+- 文件：`agent-server/realtime_agent/conversation/core/vision_host.py`。
+- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py -q` 通过。
 - 风险：没有用真实视觉语言模型做 provider 侧回归，本阶段为 mock/契约验证。
 
 ### 阶段 4：ContextCompiler 接入 OmniRealtimeAgentCore
 
 - 状态：已完成。
 - 实现：Omni Realtime 会话打开时由 ContextCompiler 生成 session instructions、Omni Realtime tools、等价 messages 和 source map；inline vision tool 过滤迁移到 ContextPolicy；Omni Realtime 工具结果记录 `context.source.added`。
-- 文件：`agent-server/realtime_agent/agent_core/omni.py`。
-- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q`、`uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q` 通过。
+- 文件：`agent-server/realtime_agent/conversation/core/omni_host.py`。
+- 验证：`uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py -q`、`uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_realtime_provider_tool_bridge.py -q` 通过。
 - 风险：未做真实 Qwen Omni Realtime 联调；真实 provider 的预音频和工具结果注入仍需设备侧观察。
 
 ### 阶段 5：清理工具可见内容与上下文检查工具
@@ -678,7 +678,7 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 
 - 状态：已完成最小闭环。
 - 实现：ContextSource 记录 `token_estimate`；ContextCompiler 超预算时写 warning，不自动裁剪；`realtime-agent.context.inspect` 支持 `--compare-model-request`，可与已有 `model-request.json` 做摘要级 diff。
-- 文件：`agent-server/realtime_agent/agent_core/context/models.py`、`agent-server/realtime_agent/agent_core/context/compiler.py`、`agent-server/realtime_agent/cli/context.py`。
+- 文件：`agent-server/realtime_agent/conversation/context/models.py`、`agent-server/realtime_agent/conversation/context/compiler.py`、`agent-server/realtime_agent/cli/context.py`。
 - 验证：`uv run realtime-agent.context.inspect --config examples/simple-agent-server/server.yaml --mode vision --text 测试 --compare-model-request /tmp/realtime-agent-context-inspect.json` 输出 `diff` 并通过 JSON 校验。
 - 风险：第一版不做自动裁剪，后续需要基于真实长对话 runs 再确定裁剪优先级。
 
@@ -687,11 +687,11 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 已通过：
 
 ```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_context_prompt_registry.py agent-server/protocol-tests/sdk/agent_core/test_context_compiler.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_text_builds_text_core agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py::test_agent_mode_omni_audio_builds_realtime_core -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_omni_audio_agent_core.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_realtime_provider_tool_bridge.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_context_prompt_registry.py agent-server/protocol-tests/sdk/conversation/test_context_compiler.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py::test_agent_mode_text_builds_text_core agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py::test_agent_mode_omni_audio_builds_realtime_core -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_realtime_provider_tool_bridge.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py -q
 uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_memory_service.py agent-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py agent-server/protocol-tests/sdk/runtime/test_task_signal_bridge.py -q
 uv run python -m pytest agent-server/unit-tests/cli/test_package_boundary.py -q
 git diff --check
@@ -700,7 +700,7 @@ git diff --check
 已发现但未在本阶段处理的既有失败：
 
 ```bash
-uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py -q
 ```
 
 其中 `test_task_engine_create_query_cancel_and_agent_event_bridge` 期望 Task 状态为 `running`，当前实现返回 `started`。

@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from realtime_agent.agent_core.context import PromptRegistry
+from realtime_agent.conversation.context import PromptRegistry
 from realtime_agent.errors import RealtimeAgentError, ErrorCode
 from realtime_agent.protocol import new_id
 

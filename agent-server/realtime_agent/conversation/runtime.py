@@ -3,29 +3,19 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any, Callable
 
-from realtime_agent.agent_core.multimodal import MultimodalMessagePolicy
-from realtime_agent.agent_core.omni import OmniRealtimeAgentCore, RealtimeProviderConfig
-from realtime_agent.agent_core.providers import AsrProviderConfig, VisionModelProviderConfig
-from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
+from realtime_agent.conversation.multimodal import MultimodalMessagePolicy
+from realtime_agent.conversation.core.omni_host import OmniRealtimeAgentCore
+from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
 from realtime_agent.asset import AssetService
 from realtime_agent.control import ControlService
-from realtime_agent.conversation.config import ConversationRuntimeConfig
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
 from realtime_agent.conversation.input import AsrSpeechInputBoundary
+from realtime_agent.conversation.providers import AsrProviderConfig, RealtimeProviderConfig, VisionModelProviderConfig
 from realtime_agent.memory import MemoryService
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import OutputService
 from realtime_agent.tools import ToolGateway
-
-
-class ConversationRuntimeNotEnabled(RuntimeError):
-    """conversation runtime 未启用异常。
-
-    主要功能：保留旧 Phase 0 测试入口，明确区分 legacy runtime 和 conversation
-    runtime。当前 conversation runtime 已有 Omni/VL 可测试实现，因此该异常只用于
-    `ensure_legacy_runtime()` 的配置断言。
-    """
 
 
 @dataclass(frozen=True)
@@ -79,19 +69,6 @@ class ConversationRuntimeDependencies:
     tool_gateway: ToolGateway
     memory_service: MemoryService | None
     on_user_activity: Callable[[str, str], None] | None = None
-
-
-def ensure_legacy_runtime(config: ConversationRuntimeConfig) -> None:
-    """确认当前仍使用旧链路。
-
-    参数：`config` 为 conversation runtime 配置。
-    返回值：无。
-    异常情况：`runtime != legacy` 时抛出 ConversationRuntimeNotEnabled。
-    """
-
-    if config.runtime != "legacy":
-        raise ConversationRuntimeNotEnabled("conversation runtime is enabled")
-
 
 def build_conversation_runtime(
     *,
@@ -198,6 +175,6 @@ def _normalize_mode(mode: str) -> str:
     normalized = str(mode or "vision").strip().lower()
     if normalized in {"realtime", "omni", "omni_realtime"}:
         return "omni"
-    if normalized in {"vision", "vision_realtime"}:
+    if normalized in {"vision", "vision_realtime", "auto"}:
         return "vision"
     return normalized

@@ -193,11 +193,12 @@ class AgentVisualConfig:
 class AgentConversationConfig:
     """conversation runtime 配置。
 
-    主要功能：控制音视频对话链路使用旧 runtime 还是新 conversation runtime。
-    主要属性：`runtime` 默认为 `legacy`，保证新增配置不改变现有运行行为。
+    主要功能：保留历史配置字段的读取兼容性。当前音视频对话正式链路固定为
+    conversation runtime，旧 legacy runtime 不再作为 app 装配入口。
+    主要属性：`runtime` 默认为 `conversation`。
     """
 
-    runtime: str = "legacy"
+    runtime: str = "conversation"
 
 
 @dataclass(frozen=True)

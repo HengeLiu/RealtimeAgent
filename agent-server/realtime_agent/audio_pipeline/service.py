@@ -47,6 +47,39 @@ class AudioProcessor(Protocol):
         ...
 
 
+class AudioInputConsumer(Protocol):
+    """音频输入消费者接口。
+
+    主要功能：约束 `AudioPipeline` 规范化后的音频交付对象。当前正式消费者是
+    conversation runtime，历史测试或外部代码仍可通过同名方法兼容接入。
+    """
+
+    def append_audio_event(self, chunk: StreamChunk) -> None:
+        """消费一片规范化后的麦克风音频。"""
+
+    def on_speech_started(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """接收可选的本地 VAD speech started 诊断通知。"""
+
+    def on_speech_stopped(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str,
+        reason: str,
+        diagnostics: dict,
+    ) -> None:
+        """接收可选的本地 VAD speech stopped 诊断通知。"""
+
+
 class FormatValidator:
     """sensor.mic 格式校验器。
 
@@ -324,39 +357,52 @@ class AudioPipeline:
     """服务器共享音频预处理与路由入口。
 
     主要功能：只接收 sensor.mic，执行格式校验、重采样、音量诊断和可选本地 VAD，
-    再交给当前 Agent Core 或 conversation runtime。该组件仍是新旧链路共享的
-    上行音频预处理入口，不属于 legacy-only。
-    主要属性：`agent_core` 可以是 legacy realtime pipeline，也可以是新的
-    Omni/VL conversation runtime。
+    再交给当前 audio input consumer。该组件是正式 conversation 链路的上行音频
+    规范化入口，不负责模型 turn boundary。
+    主要属性：`audio_consumer` 是规范化音频的正式下游；`agent_core` 仅保留历史
+    注入兼容。
     """
 
     def __init__(
         self,
         *,
+        audio_consumer: AudioInputConsumer | None = None,
         agent_core=None,
         vision_agent_core=None,
         normalizer: FormatNormalizer | None = None,
         config: AudioPipelineConfig | None = None,
         processors: list[AudioProcessor] | None = None,
     ) -> None:
-        self.agent_core = agent_core or vision_agent_core
+        self.audio_consumer = audio_consumer or agent_core or vision_agent_core
         self.config = config or AudioPipelineConfig()
         self.normalizer = normalizer or FormatNormalizer(self.config)
         self.processors = processors or self._default_processors()
         self.last_diagnostics: list[dict] = []
 
+    @property
+    def agent_core(self):
+        """历史下游属性兼容入口。"""
+
+        return self.audio_consumer
+
+    @agent_core.setter
+    def agent_core(self, value) -> None:
+        """历史测试通过 `audio_pipeline.agent_core` 注入下游时同步到正式字段。"""
+
+        self.audio_consumer = value
+
     def process(self, chunk: StreamChunk) -> None:
         """处理一片麦克风音频。
 
         主要逻辑：依次执行格式校验、重采样、音量探针和 VAD 处理器；当启用服务端 VAD
-        时先把 speech_start/stop 通知 Agent Core，再调用 `append_audio_event()`。
+        时先把 speech_start/stop 通知下游，再调用 `append_audio_event()`。
         参数：`chunk` 为 sensor.mic StreamChunk。
         返回值：无。
-        异常情况：格式不符合预期或 Agent Core 缺少接口时抛出异常。
+        异常情况：格式不符合预期或下游缺少接口时抛出异常。
         """
         current = self.normalize(chunk)
         self._emit_vad_boundaries(current, self.last_diagnostics)
-        self.agent_core.append_audio_event(current)
+        self.audio_consumer.append_audio_event(current)
 
     def normalize(self, chunk: StreamChunk) -> StreamChunk:
         """规范化一片上行麦克风音频。
@@ -432,16 +478,16 @@ class AudioPipeline:
         for item in diagnostics:
             if item.get("processor") != "server_vad":
                 continue
-            if item.get("speech_started") and hasattr(self.agent_core, "on_speech_started"):
-                self.agent_core.on_speech_started(
+            if item.get("speech_started") and hasattr(self.audio_consumer, "on_speech_started"):
+                self.audio_consumer.on_speech_started(
                     chunk.user_id,
                     chunk.session_id,
                     stream_id=chunk.stream_id,
                     reason="server_vad_speech_started",
                     diagnostics=dict(item),
                 )
-            if item.get("speech_stopped") and hasattr(self.agent_core, "on_speech_stopped"):
-                self.agent_core.on_speech_stopped(
+            if item.get("speech_stopped") and hasattr(self.audio_consumer, "on_speech_stopped"):
+                self.audio_consumer.on_speech_stopped(
                     chunk.user_id,
                     chunk.session_id,
                     stream_id=chunk.stream_id,

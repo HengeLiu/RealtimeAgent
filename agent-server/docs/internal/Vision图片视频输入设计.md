@@ -281,7 +281,7 @@ VisionRealtimeAgentCore 保留标准 tool result message：
 建议新增 Vision 多模态 message 管理模块，位置在 SDK core 的 Agent Core 边界内，而不是 external-business Tool 内：
 
 ```text
-agent-server/realtime_agent/agent_core/multimodal/
+agent-server/realtime_agent/conversation/multimodal/
   __init__.py
   assets.py
   builder.py
@@ -513,18 +513,18 @@ capture_photo 只负责获取图片，不负责理解图片。工具返回后，
 
 - 状态：已完成。
 - 实现：
-  - 新增 `realtime_agent.agent_core.multimodal` 模块，包含 policy、assets、builder、messages 和 video_sampling。
+  - 新增 `realtime_agent.conversation.multimodal` 模块，包含 policy、assets、builder、messages 和 video_sampling。
   - `VisionRealtimeAgentCore` 初始化 `ModelMessageManager`，复用 `ContextCompiler` 输出的基础 messages。
   - 工具循环保留标准 assistant tool_call message 和 tool result message。
   - `capture_photo` 返回图片 AssetRef 后，追加一条带 `image_url` content block 的 follow-up user message。
   - `model-request.json` 在每次 provider 调用前刷新；对 data URL 做脱敏，只保留 content block 类型和长度。
   - `context_sources` 增加 `visual_asset:*` source map，`agent-events.jsonl` 记录 `multimodal.tool_asset.attached`。
 - 文件：
-  - `agent-server/realtime_agent/agent_core/multimodal/`
-  - `agent-server/realtime_agent/agent_core/vision.py`
-  - `agent-server/realtime_agent/agent_core/router.py`
+  - `agent-server/realtime_agent/conversation/multimodal/`
+  - `agent-server/realtime_agent/conversation/core/vision_host.py`
+  - `agent-server/realtime_agent/conversation/core/vision.py`
 - 验证：
-  - `uv run python -m pytest agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py -q` 已通过。
+  - `uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py -q` 已通过。
   - 新增测试确认 mock 模型第一轮调用 `capture_photo` 后，第二轮收到 `image_url` content block。
 
 ### Phase 3：图片追问和资产选择

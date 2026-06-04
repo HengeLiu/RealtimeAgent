@@ -1,10 +1,9 @@
-"""Vision 多模态 message 管理模块。
+"""Vision 多模态 message 管理兼容导入。
 
-主要功能：把工具返回的图片 / 视频资产转换成 Vision provider 可消费的
-content blocks，并记录可复查的 source map。
+主要功能：保留历史 `realtime_agent.agent_core.multimodal` 导入路径；正式
+conversation 多模态实现已迁移到 `realtime_agent.conversation.multimodal`。
 """
 
-from realtime_agent.agent_core.multimodal.messages import MessageUpdate, ModelMessageManager
-from realtime_agent.agent_core.multimodal.policy import MultimodalMessagePolicy
+from realtime_agent.conversation.multimodal import MessageUpdate, ModelMessageManager, MultimodalMessagePolicy
 
 __all__ = ["MessageUpdate", "ModelMessageManager", "MultimodalMessagePolicy"]

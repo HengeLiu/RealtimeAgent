@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 
-from realtime_agent.agent_core.omni import RealtimeToolBridge
+from realtime_agent.conversation.core.omni_host import RealtimeToolBridge
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult

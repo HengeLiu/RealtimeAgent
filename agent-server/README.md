@@ -9,9 +9,10 @@
 ```text
 agent-server/
   realtime_agent/          # Python SDK 主体，导入名 realtime_agent
-    agent_core/            # Omni / VL Agent Core
+    conversation/          # 正式 Omni / VL conversation runtime、Agent Core 和 provider adapter
+    agent_core/            # 历史导入兼容 shim
     asset/                 # 图片、音频等资产服务
-    audio_pipeline/        # ASR、TTS 和音频链路
+    audio_pipeline/        # 上行音频规范化和质量诊断入口
     cli/                   # realtime-agent.* 命令入口
     control/               # 设备注册、控制事件和事件路由
     memory/                # 长期记忆和会话摘要

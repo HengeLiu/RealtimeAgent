@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from realtime_agent.agent_core.context import PromptRegistry
+from realtime_agent.conversation.context import PromptRegistry
 
 
 def test_prompt_registry_loads_flat_prompt_assets() -> None:

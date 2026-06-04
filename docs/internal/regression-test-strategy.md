@@ -305,8 +305,8 @@ Server SDK 的 L1 测试形式：
 当前已有基础：
 
 - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
-- `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
-- `agent-server/protocol-tests/sdk/agent_core/test_vision_agent_tool_loop_async.py`
+- `agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py`
+- `agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py`
 - `agent-server/protocol-tests/sdk/runtime/test_task_engine_scheduler.py`
 - `agent-server/protocol-tests/sdk/runtime/test_task_manage_tool.py`
 - `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`
@@ -1016,7 +1016,7 @@ agent-server/protocol-tests/sdk/
 runs/regression-reports/latest/l1-server-sdk-report.json
 ```
 
-短期可以先新增 `tests/fakes/`，逐步替换 `test_agent_core_router.py` 等文件中的内联 fake。
+短期可以先新增 `tests/fakes/`，逐步替换 `test_conversation_runtime.py` 等文件中的内联 fake。
 
 验收命令：
 
@@ -1217,7 +1217,7 @@ uv run python -m pytest -m replay -q
   - `dev-support/unit-tests/client/test_device_builder.py`
   - `dev-support/unit-tests/client/test_contract_websocket.py`
   - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
-  - `agent-server/protocol-tests/sdk/agent_core/test_agent_core_router.py`
+  - `agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py`
   - `agent-server/model-provider-tests/test_dashscope_providers.py`
   - `examples/device_app_demo/replay-tests/test_vision_route_audio_samples.py`
 - 验证：
@@ -1381,7 +1381,7 @@ uv run python -m pytest -m replay -q
   - `agent-server/model-provider-tests/artifacts.py`
   - `agent-server/tests/__init__.py`
   - `agent-server/protocol-tests/sdk/runtime/test_server_sdk_protocol_integration.py`
-  - `agent-server/realtime_agent/agent_core/omni.py`
+  - `agent-server/realtime_agent/conversation/core/omni_host.py`
   - `agent-server/realtime_agent/config.py`
   - `agent-server/realtime_agent/app.py`
   - `conftest.py`

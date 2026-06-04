@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from realtime_agent.agent_core.base import AgentCoreEvent
-from realtime_agent.agent_core.vision import VisionRealtimeAgentCore
-from realtime_agent.conversation.core.base import AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
+from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext, TaskSignal
 from realtime_agent.conversation.core.loop import VlAgentLoop
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
@@ -55,6 +54,61 @@ class VisionConversationRuntime:
         self._session_by_user: dict[str, str] = {}
         self._upstream_by_session: dict[str, str] = {}
         setattr(self.core, "_pipeline_event_control_enabled", True)
+
+    @property
+    def asr_pipeline(self):
+        """返回正式语音输入边界使用的 ASR pipeline。
+
+        主要功能：保留旧测试和外部调试代码通过 `app.agent_core.asr_pipeline`
+        注入 ASR provider 的能力，同时确保注入目标是 conversation runtime 当前实际使用
+        的 ASR pipeline。
+        """
+
+        return self.speech_boundary.asr_pipeline
+
+    @asr_pipeline.setter
+    def asr_pipeline(self, value) -> None:
+        """替换正式语音输入边界使用的 ASR pipeline。"""
+
+        self.speech_boundary.asr_pipeline = value
+
+    def __getattr__(self, name: str):
+        """兼容旧调用点读取内部 Vision core 属性。
+
+        参数：`name` 为调用方读取的属性名。
+        返回值：内部 core 上的同名属性。
+        异常情况：内部 core 也不存在该属性时抛出 AttributeError。
+        """
+
+        return getattr(self.core, name)
+
+    def __setattr__(self, name: str, value) -> None:
+        """兼容旧调用点写入内部 Vision core 属性。
+
+        主要逻辑：runtime 自身字段仍写在 wrapper 上；当内部 core 已存在同名字段时，
+        写入 core，避免测试或应用注入 provider 时只改到 wrapper。
+        """
+
+        runtime_fields = {
+            "core",
+            "loop",
+            "speech_boundary",
+            "emitter",
+            "output_delta_bridge",
+            "turn_controller",
+            "_session_by_user",
+            "_upstream_by_session",
+        }
+        if name in runtime_fields or "core" not in self.__dict__:
+            object.__setattr__(self, name, value)
+            return
+        if name == "asr_pipeline":
+            self.speech_boundary.asr_pipeline = value
+            return
+        if hasattr(self.core, name):
+            setattr(self.core, name, value)
+            return
+        object.__setattr__(self, name, value)
 
     def bind_pipeline_event_handler(self, handler) -> None:
         """绑定 app 层 pipeline event 处理器。"""
@@ -189,9 +243,83 @@ class VisionConversationRuntime:
         self.core.on_audio_input_closed(user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
         self.emitter.emit("upstream_detached", user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
 
+    def on_downstream_opened(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        stream_id: str,
+        stream_type: str = "actuator.speaker",
+    ) -> None:
+        """绑定下行扬声器 stream。"""
+
+        self.emitter.emit(
+            "downstream_ready",
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type=stream_type,
+        )
+
+    def pause_downstream(self, user_id: str, session_id: str) -> None:
+        """暂停当前会话下行 speaker 写出。"""
+
+        self.core.output_service.pause_session(user_id=user_id, session_id=session_id)
+        self.emitter.emit("downstream_paused", user_id=user_id, session_id=session_id)
+
+    def resume_downstream(self, user_id: str, session_id: str) -> None:
+        """恢复当前会话下行 speaker 写出。"""
+
+        self.core.output_service.resume_session(user_id=user_id, session_id=session_id)
+        self.emitter.emit("downstream_resumed", user_id=user_id, session_id=session_id)
+
+    def on_speech_started(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str = "",
+        reason: str = "manual_speech_started",
+        diagnostics: dict | None = None,
+    ) -> None:
+        """兼容旧 speech started 入口并转入正式 turn controller。"""
+
+        self._consume_speech_delta(
+            SpeechInputDelta(
+                kind="turn_started",
+                session_id=session_id,
+                user_id=user_id,
+                stream_id=stream_id,
+                metadata={"legacy_reason": reason, **dict(diagnostics or {})},
+            )
+        )
+
+    def on_speech_stopped(
+        self,
+        user_id: str,
+        session_id: str,
+        *,
+        stream_id: str = "",
+        reason: str = "manual_speech_stopped",
+        diagnostics: dict | None = None,
+    ) -> None:
+        """兼容旧 speech stopped 入口并转入正式 turn controller。"""
+
+        self._consume_speech_delta(
+            SpeechInputDelta(
+                kind="turn_ended",
+                session_id=session_id,
+                user_id=user_id,
+                stream_id=stream_id,
+                metadata={"legacy_reason": reason, **dict(diagnostics or {})},
+            )
+        )
+
     def _consume_speech_delta(self, delta: SpeechInputDelta) -> None:
         if delta.kind == "audio_chunk" and delta.audio is not None:
             self.turn_controller.observe_active_output(user_id=delta.user_id or "", session_id=delta.session_id)
+            if delta.user_id:
+                self.core._set_turn_state(delta.user_id, delta.session_id, "transcribing", reason="audio_chunk")
             self.loop.consume_input(delta)
             return
         if delta.kind == "asr_text_delta":
@@ -208,7 +336,7 @@ class VisionConversationRuntime:
 
         self.turn_controller.handle_turn_started(
             delta,
-            reason="conversation_asr_speech_started",
+            reason=_turn_started_reason(delta),
         )
 
     def _sync_conversation_speech_started(
@@ -235,7 +363,7 @@ class VisionConversationRuntime:
 
         context = self.turn_controller.handle_turn_ended(
             delta,
-            reason="conversation_asr_speech_stopped",
+            reason=_turn_ended_reason(delta),
         )
         if context.ignored:
             return
@@ -278,3 +406,25 @@ class VisionConversationRuntime:
         """查询当前 VL 用户生成状态。"""
 
         return str(getattr(self.core, "_state_by_user", {}).get(user_id, "") or "")
+
+
+def _turn_started_reason(delta: SpeechInputDelta) -> str:
+    """根据 ASR/VAD 元数据恢复 turn started 来源。"""
+
+    legacy_reason = str(delta.metadata.get("legacy_reason") or "")
+    if legacy_reason:
+        return legacy_reason
+    if delta.metadata.get("asr_boundary") == "sentence_begin":
+        return "paraformer_sentence_begin"
+    return "conversation_asr_speech_started"
+
+
+def _turn_ended_reason(delta: SpeechInputDelta) -> str:
+    """根据 ASR/VAD 元数据恢复 turn ended 来源。"""
+
+    legacy_reason = str(delta.metadata.get("legacy_reason") or "")
+    if legacy_reason:
+        return legacy_reason
+    if delta.metadata.get("asr_boundary") == "sentence_end":
+        return "paraformer_sentence_end"
+    return "conversation_asr_speech_stopped"

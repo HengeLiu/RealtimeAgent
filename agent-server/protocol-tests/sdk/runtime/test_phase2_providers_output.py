@@ -149,7 +149,7 @@ def test_vision_agent_streams_text_and_tts_audio_before_final_done(tmp_path) -> 
     )
 
     model_events = session_text(app, handle.session_id, "model-events.jsonl")
-    assert model_events.index("assistant_audio.delta") < model_events.index('"final": true')
+    assert model_events.index("assistant_audio.delta") < model_events.index("assistant_audio.done")
     assert model_events.count("assistant_text.delta") >= 2
     assert len(connection.chunks) >= 2
 

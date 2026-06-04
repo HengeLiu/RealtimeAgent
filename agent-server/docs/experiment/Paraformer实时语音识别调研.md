@@ -36,7 +36,7 @@
 
 当前 Vision Realtime 的 ASR 已经有 DashScope 适配器：
 
-- 代码位置：`agent-server/realtime_agent/agent_core/providers.py`
+- 代码位置：`agent-server/realtime_agent/conversation/providers/model_adapters.py`
 - 类：`DashScopeAsrProviderAdapter`
 - 当前参数：
   - `format="pcm"`

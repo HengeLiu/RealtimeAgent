@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import threading
 from typing import Any, Callable
 
-from realtime_agent.agent_core.context import ContextCompileRequest, record_context_events
-from realtime_agent.agent_core.omni import OmniRealtimeAgentCore, RealtimeProviderCallbacks
-from realtime_agent.agent_core.providers import VISION_AGENT_SYSTEM_PROMPT
-from realtime_agent.agent_core.vision import (
+from realtime_agent.conversation.context import ContextCompileRequest, record_context_events
+from realtime_agent.conversation.core.omni_host import OmniRealtimeAgentCore
+from realtime_agent.conversation.core.vision_host import (
     TextResponseGate,
     VisionRealtimeAgentCore,
     _audit_tool_calls,
     _provider_tool_call_message,
     _provider_tool_result_message,
 )
-from realtime_agent.agent_core.visual import VisualAppendContext
+from realtime_agent.conversation.input.visual_appender import VisualAppendContext
 from realtime_agent.conversation.core.base import ConversationContext
+from realtime_agent.conversation.providers import RealtimeProviderCallbacks, VISION_AGENT_SYSTEM_PROMPT
 from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
 
@@ -49,7 +50,7 @@ class OmniRealtimeLoop:
         """
 
         if delta.kind == "audio_chunk" and delta.audio is not None:
-            self.core.append_audio_event(delta.audio)
+            self.core.append_audio_event(replace(delta.audio, final=False))
             return
         if delta.kind == "turn_ended":
             self.commit_and_create_response(

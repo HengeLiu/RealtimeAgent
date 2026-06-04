@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from realtime_agent.agent_core.providers import (
+from realtime_agent.conversation.providers import (
     VisionModelProviderConfig,
     build_vision_model,
     run_provider_call_with_policy,
