@@ -8,7 +8,7 @@
 
 static const char *TAG = "protocol_adapter";
 
-static const char *PROTOCOL_VERSION = "audio-chat.v1";
+static const char *PROTOCOL_VERSION = "realtime-agent.v1";
 
 static uint64_t get_timestamp_ms(void) {
     struct timespec ts;

@@ -169,11 +169,11 @@ void app_main(void) {
     }
 
     if (need_provisioning) {
-        // ===== Provisioning Mode =====
+        // ===== Provisioning Mode (WiFi AP + captive portal) =====
         ESP_LOGI(TAG, "No config found, entering provisioning mode");
         ESP_LOGI(TAG, "Connect to WiFi AP 'Glass-XXXX' to provision this device");
 
-        // Start provisioning (AP + captive portal + DNS + pairing)
+        // Start provisioning (WiFi AP + captive portal + DNS)
         provisioning_start(&g_config);
 
         // Wait for provisioning to complete
@@ -199,19 +199,7 @@ void app_main(void) {
              g_config.device_id, g_config.user_id,
              g_config.server_host, g_config.server_port, g_config.hw_id);
 
-    // Peripherals
-    esp_err_t audio_ret = audio_init(true);
-    ESP_LOGI(TAG, "audio_init returned: %d", audio_ret);
-    tone_play_startup();
-
-    // WiFi fail count: auto-reset after 5 consecutive failures
-    if (g_config.wifi_fail_count >= 5) {
-        ESP_LOGW(TAG, "WiFi failed %d times, clearing config", g_config.wifi_fail_count);
-        config_store_clear_all();
-        esp_restart();
-    }
-
-    // Device model
+    // Device model (before WiFi, matching original order)
     audio_chat_device_init(&g_device, g_config.user_id, g_config.device_id);
     audio_chat_device_set_name(&g_device, "ESP32-S3 Glass");
     audio_chat_device_set_role(&g_device, "glass");
@@ -225,6 +213,13 @@ void app_main(void) {
     // Server URL
     snprintf(s_server_url, sizeof(s_server_url), "ws://%s:%d/ws/control",
              g_config.server_host, g_config.server_port);
+
+    // WiFi fail count: auto-reset after 5 consecutive failures
+    if (g_config.wifi_fail_count >= 5) {
+        ESP_LOGW(TAG, "WiFi failed %d times, clearing config", g_config.wifi_fail_count);
+        config_store_clear_all();
+        esp_restart();
+    }
 
     // WiFi
     config_store_increment_fail_count(NULL);
@@ -245,11 +240,16 @@ void app_main(void) {
         esp_restart();
     }
     config_store_reset_fail_count();
-    tone_play_wifi_connected();
     ESP_LOGI(TAG, "WiFi OK: %s", wifi_manager_get_local_ip());
 
     // Peripherals
     // camera_init();  // DISABLED: conflicts with PDM mic on I2S controller 0
+
+    // Audio init AFTER WiFi (matching verified working order from 229ec06)
+    ESP_LOGI(TAG, "Initializing audio...");
+    esp_err_t audio_ret = audio_init();
+    ESP_LOGI(TAG, "audio_init returned: %d", audio_ret);
+    tone_play_wifi_connected();
 
     ESP_LOGI(TAG, "Initializing wake word...");
     esp_err_t ww_ret = wake_word_init();
@@ -288,6 +288,8 @@ void app_main(void) {
     // Main loop - heartbeat every 10s, connection check every 1s
     int hb_counter = 0;
     int reconnect_cooldown = 0;
+    int ws_fail_count = 0;
+    const int WS_MAX_FAILS = 12;  // ~60 seconds of failures (5s cooldown × 12)
 
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -301,15 +303,26 @@ void app_main(void) {
         // Check WebSocket connection
         if (!ws_control_is_connected()) {
             if (reconnect_cooldown <= 0) {
-                ESP_LOGW(TAG, "WS lost, reconnecting...");
+                ws_fail_count++;
+                ESP_LOGW(TAG, "WS lost, reconnecting... (fail %d/%d)", ws_fail_count, WS_MAX_FAILS);
                 s_registered = false;
                 ws_control_reconnect();
                 reconnect_cooldown = 5;  // Wait 5 seconds before next reconnect
+
+                if (ws_fail_count >= WS_MAX_FAILS) {
+                    ESP_LOGE(TAG, "WS failed %d times, clearing config and re-provisioning...", ws_fail_count);
+                    config_store_clear_all();
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    esp_restart();
+                }
             } else {
                 reconnect_cooldown--;
             }
             continue;
         }
+
+        // Reset fail count when connected
+        ws_fail_count = 0;
 
         // Reset cooldown when connected
         reconnect_cooldown = 0;

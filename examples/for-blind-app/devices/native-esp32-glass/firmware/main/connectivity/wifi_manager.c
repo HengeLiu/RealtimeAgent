@@ -63,7 +63,10 @@ esp_err_t wifi_manager_init(const char *ssid, const char *password) {
     }
 
     if (!s_sta_netif) {
-        s_sta_netif = esp_netif_create_default_wifi_sta();
+        s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (!s_sta_netif) {
+            s_sta_netif = esp_netif_create_default_wifi_sta();
+        }
     }
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
@@ -161,8 +164,14 @@ esp_err_t wifi_manager_stop_ap(void) {
 esp_err_t wifi_manager_scan_and_connect(const char *ssid, const char *password) {
     // Ensure network stack is initialized (may not be if wifi_manager_init was skipped)
     if (!s_initialized) {
-        ESP_ERROR_CHECK(esp_netif_init());
-        ESP_ERROR_CHECK(esp_event_loop_create_default());
+        esp_err_t r1 = esp_netif_init();
+        if (r1 != ESP_OK && r1 != ESP_ERR_INVALID_STATE) {
+            ESP_ERROR_CHECK(r1);
+        }
+        esp_err_t r2 = esp_event_loop_create_default();
+        if (r2 != ESP_OK && r2 != ESP_ERR_INVALID_STATE) {
+            ESP_ERROR_CHECK(r2);
+        }
         s_initialized = true;
     }
 
@@ -171,7 +180,10 @@ esp_err_t wifi_manager_scan_and_connect(const char *ssid, const char *password) 
     }
 
     if (!s_sta_netif) {
-        s_sta_netif = esp_netif_create_default_wifi_sta();
+        s_sta_netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+        if (!s_sta_netif) {
+            s_sta_netif = esp_netif_create_default_wifi_sta();
+        }
     }
 
     // Register event handlers if not already registered

@@ -81,7 +81,7 @@ int audio_chat_stream_encode_ex(const char *stream_id, const char *stream_type,
     if (metadata_json && metadata_json[0]) {
         header_len = snprintf(header_json, sizeof(header_json),
             "{"
-            "\"version\":\"audio-chat.v1\","
+            "\"version\":\"realtime-agent.v1\","
             "\"user_id\":\"%s\","
             "\"session_id\":\"%s\","
             "\"stream_id\":\"%s\","
@@ -109,7 +109,7 @@ int audio_chat_stream_encode_ex(const char *stream_id, const char *stream_type,
     } else {
         header_len = snprintf(header_json, sizeof(header_json),
             "{"
-            "\"version\":\"audio-chat.v1\","
+            "\"version\":\"realtime-agent.v1\","
             "\"user_id\":\"%s\","
             "\"session_id\":\"%s\","
             "\"stream_id\":\"%s\","
@@ -194,7 +194,7 @@ int audio_chat_stream_encode_imu(const char *user_id, const char *session_id,
     char header_json[512];
     int header_len = snprintf(header_json, sizeof(header_json),
         "{"
-        "\"version\":\"audio-chat.v1\","
+        "\"version\":\"realtime-agent.v1\","
         "\"user_id\":\"%s\","
         "\"session_id\":\"%s\","
         "\"stream_id\":\"imu\","
