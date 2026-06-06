@@ -25,8 +25,10 @@ from realtime_agent.conversation.input import (
     AudioInputBoundary,
     CallbackVisualInputBoundary,
     RuntimeAudioInputBoundary,
+    SileroSpeechInputBoundary,
     TurnVisualInputBoundary,
 )
+from realtime_agent.conversation.input.vad import SpeechBoundaryDelta
 from realtime_agent.conversation.recorder import output_delta_record, speech_delta_record
 from realtime_agent.conversation.output import ConversationOutputController, ConversationOutputDeltaBridge
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop, VlAgentLoop
@@ -376,6 +378,62 @@ def test_asr_voice_activity_boundary_outputs_only_speech_boundaries() -> None:
     assert all("interrupt" not in item.metadata for item in started + stopped)
     assert all("commit" not in item.metadata for item in started + stopped)
     assert all("text" not in item.metadata for item in started + stopped)
+
+
+def test_silero_speech_input_boundary_gates_audio_until_speech_started() -> None:
+    """测试目标：验证 Silero 输入边界在 speech_started 前只缓存 pre-roll。
+
+    测试方法：注入 fake VAD，前两片音频不产生边界，第三片产生 speech_started，
+    第四片产生 speech_stopped。
+    预期结果：前两片不会输出 audio_chunk；speech_started 后先输出 turn_started，
+    再 flush pre-roll 音频；speech_stopped 后输出 turn_ended 且不再追加当前静音片。
+    """
+
+    class FakeVoiceBoundary:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def append_audio(self, chunk: StreamChunk) -> list[SpeechBoundaryDelta]:
+            self.calls += 1
+            if self.calls == 3:
+                return [
+                    SpeechBoundaryDelta(
+                        kind="speech_started",
+                        session_id=chunk.session_id,
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        metadata={"vad_boundary": "speech_started"},
+                    )
+                ]
+            if self.calls == 4:
+                return [
+                    SpeechBoundaryDelta(
+                        kind="speech_stopped",
+                        session_id=chunk.session_id,
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        metadata={"vad_boundary": "speech_stopped"},
+                    )
+                ]
+            return []
+
+        def reset(self, *, stream_id: str | None = None) -> None:
+            pass
+
+    boundary = SileroSpeechInputBoundary(pre_roll_ms=1000, voice_boundary=FakeVoiceBoundary())
+
+    first = list(boundary.append_audio(_mic_chunk(seq=1, payload=b"\x01\x00" * 320)))
+    second = list(boundary.append_audio(_mic_chunk(seq=2, payload=b"\x02\x00" * 320)))
+    started = list(boundary.append_audio(_mic_chunk(seq=3, payload=b"\x03\x00" * 320)))
+    stopped = list(boundary.append_audio(_mic_chunk(seq=4, payload=b"\x00\x00" * 320)))
+
+    assert first == []
+    assert second == []
+    assert [delta.kind for delta in started] == ["turn_started", "audio_chunk", "audio_chunk", "audio_chunk"]
+    assert [delta.audio.seq for delta in started if delta.audio is not None] == [1, 2, 3]
+    assert started[0].metadata["reason"] == "conversation_vad_speech_started"
+    assert [delta.kind for delta in stopped] == ["turn_ended"]
+    assert stopped[0].metadata["reason"] == "conversation_vad_speech_stopped"
 
 
 def test_output_interruption_controller_uses_shared_rules() -> None:

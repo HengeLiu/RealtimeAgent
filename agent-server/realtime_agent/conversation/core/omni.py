@@ -5,7 +5,7 @@ from typing import Callable
 from realtime_agent.conversation.core.omni_host import OmniRealtimeAgentCore
 from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext, TaskSignal
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop
-from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary, SileroSpeechInputBoundary
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.output import ConversationOutputController
 from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
@@ -22,7 +22,7 @@ class OmniManualConversationRuntime:
     主要功能：以旧 `AgentCore` 兼容接口接入 `RealtimeAgentApp`，内部使用
     `SpeechInputDelta` 驱动 Omni Manual 的输入提交和响应创建。
     主要属性：`core` 复用现有 `OmniRealtimeAgentCore`；`speech_boundary` 负责把
-    ASR/VAD provider 事件转换为 `audio_chunk/turn_started/turn_ended`。
+    Silero VAD 边界转换为 `audio_chunk/turn_started/turn_ended`。
     """
 
     def __init__(
@@ -31,7 +31,7 @@ class OmniManualConversationRuntime:
         core: OmniRealtimeAgentCore,
         output_service: OutputService,
         recorder: RunRecorder,
-        speech_boundary: AsrSpeechInputBoundary,
+        speech_boundary: AsrSpeechInputBoundary | SileroSpeechInputBoundary,
     ) -> None:
         self.core = core
         self.loop = OmniRealtimeLoop(core=core)
@@ -56,7 +56,10 @@ class OmniManualConversationRuntime:
 
     @property
     def asr_pipeline(self):
-        """返回正式语音输入边界使用的 ASR pipeline。"""
+        """返回正式语音输入边界使用的 ASR pipeline。
+
+        Omni Silero boundary 不使用 ASR，该属性仅保留兼容旧调试入口。
+        """
 
         return self.speech_boundary.asr_pipeline
 
@@ -141,8 +144,10 @@ class OmniManualConversationRuntime:
     def append_audio_event(self, chunk: StreamChunk) -> None:
         """消费归一化后的麦克风音频。
 
-        主要逻辑：`audio_chunk` 持续 append 给 Omni provider；`turn_started` 只负责
-        语音开始通知和打断请求；`turn_ended` 显式提交输入并创建响应。
+        主要逻辑：Silero boundary 在 `turn_started` 后才输出 `audio_chunk`，
+        因此只有真实语音 turn 内的 pre-roll 和后续音频会 append 给 Omni provider；
+        `turn_started` 负责语音开始通知、视觉采样和打断请求；`turn_ended`
+        显式提交输入并创建响应。
         """
 
         for delta in self.speech_boundary.append_audio(chunk):
@@ -283,13 +288,14 @@ class OmniManualConversationRuntime:
             self._handle_turn_ended(delta)
 
     def _handle_turn_started(self, delta: SpeechInputDelta) -> None:
+        reason = str(delta.metadata.get("reason") or "conversation_vad_speech_started")
         self.turn_controller.handle_turn_started(
             delta,
-            reason="conversation_asr_speech_started",
+            reason=reason,
         )
 
     def _handle_turn_ended(self, delta: SpeechInputDelta) -> None:
-        reason = "conversation_asr_speech_stopped"
+        reason = str(delta.metadata.get("reason") or "conversation_vad_speech_stopped")
         context = self.turn_controller.handle_turn_ended(
             delta,
             reason=reason,

@@ -187,9 +187,9 @@ class OutputInterruptionController:
     def _is_server_vad_boundary(*, reason: str, diagnostics: Mapping[str, Any]) -> bool:
         """判断当前 turn 边界是否来自服务端 VAD。
 
-        主要逻辑：conversation runtime 已使用 ASR-backed 边界；这里仅保留旧
-        AudioPipeline 的 `server_vad_*` 回采保护。ASR-backed 边界会带
-        `asr_boundary`，不走该保护。
+        主要逻辑：这里只保留旧 AudioPipeline 的 `server_vad_*` 回采保护。
+        ASR-backed 边界会带 `asr_boundary`，Omni Silero 边界使用
+        `conversation_vad_*` reason，二者都不走该保护。
         参数：`reason` 是 turn controller 传入的边界来源；`diagnostics` 是 VAD/ASR 诊断。
         返回值：是服务端 VAD 边界则返回 True。
         异常情况：无。

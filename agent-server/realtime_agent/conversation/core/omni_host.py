@@ -1598,6 +1598,8 @@ class OmniRealtimeAgentCore:
             payload={"payload_size": len(chunk.payload), "final": chunk.final},
         )
         if chunk.payload:
+            if chunk.session_id in self._visual_input_accepting_by_session:
+                self._start_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id)
             self._mark_realtime_input_activity(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1771,29 +1773,55 @@ class OmniRealtimeAgentCore:
     def interrupt(self, user_id: str, reason: str) -> None:
         """处理用户打断。
 
-        主要逻辑：取消 provider 当前响应，同时取消 Output Service 当前 output stream。
+        主要逻辑：如果 provider 当前仍有活跃 response，则取消 provider response；
+        如果 provider response 已完成但 Output Service 仍有端侧播放流，则只取消播放。
         参数：`user_id` 为用户标识，`reason` 为打断原因。
         返回值：无。
         异常情况：provider cancel 异常由 adapter 转成错误事件。
         """
         existing = self._sessions.get(user_id)
         session_id = existing[0] if existing else None
-        if session_id:
+        response_active = bool(session_id and session_id in self._active_response_sessions)
+        if response_active and session_id:
             self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
-        if existing:
+        if response_active and existing:
             existing[1].cancel(user_id=user_id, reason=reason)
-        self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
+        elif session_id:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.cancel.skipped",
+                    "user_id": user_id,
+                    "reason": reason,
+                    "skip_reason": "no_active_provider_response",
+                },
+            )
+            self._event_buffer.record_event(
+                "response.cancel.skipped",
+                user_id=user_id,
+                session_id=session_id,
+                payload={"reason": reason, "skip_reason": "no_active_provider_response"},
+            )
+        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         self.recorder.record_agent_event(
             session_id or "realtime-interruptions",
-            {"event": "omni.response.cancelled", "user_id": user_id, "reason": reason},
+            {
+                "event": "omni.response.cancelled" if response_active else "omni.playback.cancelled",
+                "user_id": user_id,
+                "reason": reason,
+                "provider_response_active": response_active,
+                "playback_action": decision.action,
+                "playback_reason": decision.reason,
+            },
         )
-        self._event_buffer.record_event(
-            "response.cancelled",
-            user_id=user_id,
-            session_id=session_id or "",
-            payload={"reason": reason},
-        )
-        if session_id:
+        if response_active:
+            self._event_buffer.record_event(
+                "response.cancelled",
+                user_id=user_id,
+                session_id=session_id or "",
+                payload={"reason": reason},
+            )
+        if session_id and (response_active or decision.interrupted_stream_id):
             self._set_turn_state(user_id, session_id, "interrupted", reason=reason)
 
     def close(self, user_id: str, reason: str) -> None:
@@ -2816,7 +2844,17 @@ class OmniRealtimeAgentCore:
         self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
         self._provider_speech_active_by_session.add(session_id)
         self._visual_input_accepting_by_session.add(session_id)
-        self._start_visual_sampler(user_id=user_id, session_id=session_id)
+        if session_id in self._audio_since_commit_by_session:
+            self._start_visual_sampler(user_id=user_id, session_id=session_id)
+        else:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.visual_sampler.deferred_until_audio",
+                    "provider": self.omni_config.provider,
+                    "reason": reason,
+                },
+            )
         self.recorder.record_agent_event(
             session_id,
             {

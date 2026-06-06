@@ -11,7 +11,7 @@ from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop, VlAgentLoop
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
-from realtime_agent.conversation.input import AsrSpeechInputBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary, SileroSpeechInputBoundary
 from realtime_agent.conversation.output import ConversationOutputController
 from realtime_agent.conversation.turn import RealtimeTurnController
 from realtime_agent.output import AssistantTextDelta
@@ -143,7 +143,7 @@ def test_omni_conversation_runtime_exposes_real_sequence_components(tmp_path) ->
     runtime = app.agent_core
 
     assert isinstance(runtime, OmniManualConversationRuntime)
-    assert isinstance(runtime.speech_boundary, AsrSpeechInputBoundary)
+    assert isinstance(runtime.speech_boundary, SileroSpeechInputBoundary)
     assert isinstance(runtime.loop, OmniRealtimeLoop)
     assert isinstance(runtime.output_controller, ConversationOutputController)
     assert isinstance(runtime.turn_controller, RealtimeTurnController)

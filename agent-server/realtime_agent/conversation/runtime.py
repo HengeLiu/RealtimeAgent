@@ -10,7 +10,7 @@ from realtime_agent.asset import AssetService
 from realtime_agent.control import ControlService
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
-from realtime_agent.conversation.input import AsrSpeechInputBoundary
+from realtime_agent.conversation.input import AsrSpeechInputBoundary, SileroSpeechInputBoundary
 from realtime_agent.conversation.providers import AsrProviderConfig, RealtimeProviderConfig, VisionModelProviderConfig
 from realtime_agent.memory import MemoryService
 from realtime_agent.observability import RunRecorder
@@ -78,8 +78,8 @@ def build_conversation_runtime(
     """按 `agent.mode` 构建 conversation runtime。
 
     主要逻辑：Omni 模式构建 `OmniManualConversationRuntime` 并强制 provider
-    `turn_detection=manual`；Omni 和 Vision 都由 ASR-backed boundary 统一产生
-    `SpeechInputDelta`。
+    `turn_detection=manual`；Omni 使用 Silero ONNX VAD 产生 turn boundary，
+    Vision 继续由 ASR-backed boundary 产生 `SpeechInputDelta`。
     参数：`config` 为配置快照；`dependencies` 为 app 已创建的服务依赖。
     返回值：可被 `RealtimeAgentApp` 当作旧 AgentCore 接口使用的 runtime。
     异常情况：未知 `agent_mode` 抛出 NotImplementedError。
@@ -113,7 +113,11 @@ def _build_omni_runtime(
         ),
         output_service=dependencies.output_service,
         recorder=dependencies.recorder,
-        speech_boundary=AsrSpeechInputBoundary(config=config.asr_config, recorder=dependencies.recorder),
+        speech_boundary=SileroSpeechInputBoundary(
+            pre_roll_ms=config.omni_config.turn_detection_prefix_padding_ms or 1200,
+            stop_wait_ms=config.omni_config.turn_detection_silence_duration_ms or 200,
+            threshold=config.omni_config.turn_detection_threshold or 0.5,
+        ),
     )
 
 

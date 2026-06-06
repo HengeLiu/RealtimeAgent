@@ -24,6 +24,7 @@ from realtime_agent.conversation.providers import TranscriptEvent
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.asset.service import AssetRef
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
+from realtime_agent.conversation.types import SpeechInputDelta
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
@@ -59,6 +60,61 @@ class SentenceBoundaryAsrProvider:
 
         self._begun = False
         self._ended = False
+
+
+class DeterministicOmniSpeechBoundary:
+    """测试用 Omni speech boundary。
+
+    主要功能：用固定 seq 产生 `turn_started/audio_chunk/turn_ended`，让测试聚焦
+    Omni runtime 的 append、视觉采样、commit/create 和打断行为。
+    主要属性：`stop_seq` 控制第几片音频触发 turn end。
+    """
+
+    def __init__(self, *, stop_seq: int = 2) -> None:
+        self.stop_seq = stop_seq
+        self.started = False
+        self.ended = False
+        self.asr_pipeline = None
+
+    def prepare_provider(self, *, stream_id: str, session_id: str | None = None) -> None:
+        """兼容 runtime 生命周期入口。"""
+
+    def close_provider(self, *, stream_id: str) -> None:
+        """兼容 runtime 生命周期入口。"""
+
+    def append_audio(self, chunk: StreamChunk):
+        """按固定顺序输出 Omni manual 输入增量。"""
+
+        if not self.started:
+            self.started = True
+            yield SpeechInputDelta(
+                kind="turn_started",
+                session_id=chunk.session_id,
+                user_id=chunk.user_id,
+                stream_id=chunk.stream_id,
+                metadata={"reason": "conversation_vad_speech_started", "test_boundary": "deterministic"},
+            )
+        if not self.ended:
+            yield SpeechInputDelta(
+                kind="audio_chunk",
+                session_id=chunk.session_id,
+                user_id=chunk.user_id,
+                stream_id=chunk.stream_id,
+                audio=chunk,
+                metadata={"test_boundary": "deterministic"},
+            )
+        if not self.ended and (chunk.final or int(chunk.seq or 0) >= self.stop_seq):
+            self.ended = True
+            yield SpeechInputDelta(
+                kind="turn_ended",
+                session_id=chunk.session_id,
+                user_id=chunk.user_id,
+                stream_id=chunk.stream_id,
+                metadata={"reason": "conversation_vad_speech_stopped", "test_boundary": "deterministic"},
+            )
+
+    def cancel(self) -> None:
+        """兼容 runtime 取消入口。"""
 
 
 def patch_sentence_asr(monkeypatch, *, text: str = "做一下自我介绍。") -> None:
@@ -691,9 +747,59 @@ def test_realtime_provider_speech_stopped_publishes_control_event(tmp_path) -> N
 def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
     """测试目标：验证用户打断会取消 provider 响应和当前播放。
 
-    测试方法：fake provider 先输出音频，再发布 `control.user.interrupt.detected`。
+    测试方法：fake provider 先输出音频，并上报 `omni.response.created` 表示 provider
+    response 仍活跃，再发布 `control.user.interrupt.detected`。
     预期结果：fake cancel 被调用，端侧收到 output cancel 事件。
     """
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.response.created",
+            "provider": "fake",
+            "model": "fake-omni",
+            "response": {"id": "resp-active"},
+        }
+    )
+
+    app.publish_control_event(
+        Event(
+            event_name="control.user.interrupt.detected",
+            user_id="user-001",
+            producer_id="dev-web",
+            session_id=handle.session_id,
+            payload={"reason": "test_interrupt"},
+        )
+    )
+
+    assert instances[0].cancelled is True
+    assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+
+
+def test_realtime_interrupt_skips_provider_cancel_without_active_response(tmp_path) -> None:
+    """测试目标：验证已完成 provider response 的残留播放流被打断时不会取消 provider。
+
+    测试方法：fake provider 输出一片音频但不发送 `omni.response.created`，模拟 provider
+    response 已经不活跃但 OutputService 仍有可取消播放流，然后发布用户打断事件。
+    预期结果：端侧收到 output cancel；provider cancel 不被调用，避免真实 provider
+    抛出 “none active response” 导致会话失败。
+    """
+
     instances: list[FakeRealtimeProvider] = []
     app = _realtime_app(tmp_path, instances)
     connection = Connection("dev-web")
@@ -717,12 +823,16 @@ def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
             user_id="user-001",
             producer_id="dev-web",
             session_id=handle.session_id,
-            payload={"reason": "test_interrupt"},
+            payload={"reason": "test_interrupt_after_response_done"},
         )
     )
 
-    assert instances[0].cancelled is True
+    assert instances[0].cancelled is False
     assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+    agent_events = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert "no_active_provider_response" in agent_events
 
 
 def test_realtime_provider_speech_started_cancels_active_output(tmp_path) -> None:
@@ -1616,6 +1726,8 @@ def test_realtime_mode_uses_builtin_mock_provider_for_local_chain(tmp_path) -> N
             omni_model="mock-omni",
         )
     )
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    app.agent_core.speech_boundary = DeterministicOmniSpeechBoundary(stop_seq=0)
     connection = Connection("dev-web")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
@@ -1713,16 +1825,15 @@ def test_realtime_create_response_forwards_to_provider_and_records_event(tmp_pat
     )
 
 
-def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path, monkeypatch) -> None:
+def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path) -> None:
     """测试目标：验证 conversation runtime 下 Omni Manual 最小音频链路可运行。
 
-    测试方法：用 `conversation_runtime=conversation`、mock Omni provider 和 ASR/VAD
-    合一 provider 创建 App，输入三片音频触发 sentence_begin 与 sentence_end。
+    测试方法：用 `conversation_runtime=conversation`、mock Omni provider 和
+    deterministic speech boundary 创建 App，输入三片音频触发 start/end。
     预期结果：App 使用 OmniManualConversationRuntime；speech 边界事件下发给端侧；
     provider 收到 commit 和显式 create_response。
     """
 
-    patch_sentence_asr(monkeypatch)
     app = RealtimeAgentApp(
         RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
@@ -1731,6 +1842,8 @@ def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path,
             omni_provider="mock",
         )
     )
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    app.agent_core.speech_boundary = DeterministicOmniSpeechBoundary(stop_seq=2)
     connection = Connection("dev-web")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
@@ -1774,17 +1887,16 @@ def test_conversation_runtime_omni_manual_commits_and_creates_response(tmp_path,
     assert "conversation.agent_output_delta" in conversation_events
 
 
-def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path, monkeypatch) -> None:
+def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(tmp_path) -> None:
     """测试目标：验证 Omni Manual conversation runtime 能用 turn_started 驱动视觉采样。
 
     测试方法：启用 conversation runtime 和 mock Omni provider，注入 fake asset
-    service，写入一片音频触发 ASR sentence_begin 后等待视觉采样线程追加图片，
+    service，写入一片音频触发 deterministic turn_started 后等待视觉采样线程追加图片，
     再写入 sentence_end 结束 turn。
     预期结果：视觉帧被请求并追加到 provider；turn 结束后执行 commit 和 response
     create，runs 中能看到 conversation speech 与视觉采样事件。
     """
 
-    patch_sentence_asr(monkeypatch)
     image_path = tmp_path / "conversation-turn-frame.jpg"
     image_path.write_bytes(b"\xff\xd8fake-jpeg\xff\xd9")
     asset_service = FakeAssetService(image_path)
@@ -1801,6 +1913,7 @@ def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(
         )
     )
     assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    app.agent_core.speech_boundary = DeterministicOmniSpeechBoundary(stop_seq=2)
     app.agent_core.core.asset_service = asset_service  # type: ignore[assignment]
     connection = Connection("dev-web")
     register_speaker_and_rgb(app, connection)
@@ -1852,17 +1965,16 @@ def test_conversation_runtime_omni_manual_starts_visual_sampler_on_turn_started(
     assert asset_service.clears
 
 
-def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path, monkeypatch) -> None:
+def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(tmp_path) -> None:
     """测试目标：验证 Omni Manual conversation runtime 不把打断逻辑放进输入边界。
 
-    测试方法：使用 mock Omni provider 和 ASR/VAD 合一 provider，先通过 OutputService
-    制造一段活跃原生音频输出，再写入一片触发 sentence_begin 的音频。
+    测试方法：使用 mock Omni provider 和 deterministic speech boundary，先通过 OutputService
+    制造一段活跃原生音频输出，再写入一片触发 turn_started 的音频。
     `turn_started` 由 runtime 判断当前输出状态并发出取消请求。
-    预期结果：App 统一处理 `output_cancel_requested`，最终调用 provider cancel；
-    ASR-backed boundary 只负责 speech 边界与 ASR 文本增量。
+    预期结果：App 统一处理 `output_cancel_requested`；provider response 未处于活跃
+    状态时不调用 provider cancel，避免真实 provider 抛出 no active response。
     """
 
-    patch_sentence_asr(monkeypatch)
     app = RealtimeAgentApp(
         RealtimeAgentConfig(
             runs_root=str(tmp_path / "runs"),
@@ -1871,6 +1983,8 @@ def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(
             omni_provider="mock",
         )
     )
+    assert isinstance(app.agent_core, OmniManualConversationRuntime)
+    app.agent_core.speech_boundary = DeterministicOmniSpeechBoundary(stop_seq=2)
     connection = Connection("dev-web")
     register_speaker(app, connection)
     handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
@@ -1897,8 +2011,9 @@ def test_conversation_runtime_omni_manual_requests_output_cancel_on_user_speech(
     assert isinstance(app.agent_core, OmniManualConversationRuntime)
     provider = app.agent_core.core._sessions["user-001"][1]
     assert isinstance(provider, MockRealtimeProviderAdapter)
-    assert provider.cancelled is True
+    assert provider.cancelled is False
     assert any(event.event_name == "audio.speech.started" for event in connection.events)
+    assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
 
 
 def test_realtime_open_records_equivalent_model_request_and_injects_tool_schema(tmp_path) -> None:

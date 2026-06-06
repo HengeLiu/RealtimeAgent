@@ -355,7 +355,7 @@ stop_wait_ms = 200 / 300 / 400 / 600 / 800 / 1000
 - RMS proxy ground truth 可能偏早或偏晚，不能直接代表人耳标注。
 - 短样本数据多样性不足，本轮只能验证低成本延迟趋势。
 - WebRTC VAD 的 frame 约束较强，脚本必须严格按 10/20/30ms 切帧。
-- Silero / TEN / FireRedVAD 的依赖不要直接加入主包依赖，先放实验安装说明或 optional dependency。
+- 实验阶段 Silero / TEN / FireRedVAD 的依赖不要直接加入主包依赖；正式接入某个方案时，需要同步记录主包依赖和锁文件影响。
 - FunASR 如果只能通过 ASR final 得到句边界，不应算作独立 VAD 方案。
 - 所有 runs 音频都可能包含真实用户数据，默认不得提交。
 

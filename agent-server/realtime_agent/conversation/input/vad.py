@@ -124,3 +124,158 @@ class AsrVoiceActivityBoundary:
             if value not in (None, False, []):
                 metadata[key] = value
         return metadata
+
+
+@dataclass(slots=True)
+class _SileroStreamState:
+    """Silero VAD 单个音频流状态。
+
+    主要功能：保存单个 stream 的 Silero iterator 和不足一帧的 PCM 缓存。
+    主要属性：`iterator` 持有 Silero streaming 状态；`pending_pcm` 保存未满
+    512 samples 的尾部音频。
+    """
+
+    iterator: Any
+    pending_pcm: bytearray = field(default_factory=bytearray)
+
+
+class SileroVoiceActivityBoundary:
+    """Silero ONNX 语音活动边界。
+
+    主要功能：把连续 PCM16 mono 16k 麦克风音频转换为 `speech_started` /
+    `speech_stopped` 两类边界事件。该组件只负责 VAD，不负责打断、commit、
+    response.create 或视觉采样策略。
+    主要属性：`threshold` 是 Silero 语音概率阈值；`min_silence_duration_ms`
+    是 stop wait；`speech_pad_ms` 用于 Silero 返回边界时的轻量 padding。
+    """
+
+    frame_samples = 512
+    sample_rate = 16_000
+
+    def __init__(
+        self,
+        *,
+        threshold: float = 0.5,
+        min_silence_duration_ms: int = 200,
+        speech_pad_ms: int = 30,
+        model_factory: Any | None = None,
+        iterator_factory: Any | None = None,
+    ) -> None:
+        self.threshold = threshold
+        self.min_silence_duration_ms = min_silence_duration_ms
+        self.speech_pad_ms = speech_pad_ms
+        self._model_factory = model_factory
+        self._iterator_factory = iterator_factory
+        self._state_by_stream: dict[str, _SileroStreamState] = {}
+
+    def append_audio(self, chunk: StreamChunk) -> list[SpeechBoundaryDelta]:
+        """追加音频并返回 Silero VAD 边界。
+
+        主要逻辑：把 PCM16LE payload 缓存到 512 samples 一帧后送入 Silero ONNX
+        iterator；iterator 返回 start/end 时转换为统一 `SpeechBoundaryDelta`。
+        参数：`chunk` 为 AudioPipeline 归一化后的 sensor.mic PCM16 mono 16k 音频。
+        返回值：本次音频触发的 speech 边界列表。
+        异常情况：Silero 依赖缺失或模型调用失败时向上抛出，便于启动期暴露问题。
+        """
+
+        if not chunk.payload:
+            return []
+        state = self._state_for_stream(chunk.stream_id or chunk.session_id)
+        state.pending_pcm.extend(chunk.payload)
+        frame_bytes = self.frame_samples * 2
+        deltas: list[SpeechBoundaryDelta] = []
+        while len(state.pending_pcm) >= frame_bytes:
+            frame = bytes(state.pending_pcm[:frame_bytes])
+            del state.pending_pcm[:frame_bytes]
+            result = state.iterator(self._pcm16_frame_to_float(frame), return_seconds=False)
+            if not result:
+                continue
+            metadata = {
+                "vad_provider": "silero_onnx",
+                "threshold": self.threshold,
+                "min_silence_duration_ms": self.min_silence_duration_ms,
+                "speech_pad_ms": self.speech_pad_ms,
+            }
+            if "start" in result:
+                deltas.append(
+                    SpeechBoundaryDelta(
+                        kind="speech_started",
+                        session_id=chunk.session_id,
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        metadata={"vad_boundary": "speech_started", "start_sample": int(result["start"]), **metadata},
+                    )
+                )
+            if "end" in result:
+                deltas.append(
+                    SpeechBoundaryDelta(
+                        kind="speech_stopped",
+                        session_id=chunk.session_id,
+                        user_id=chunk.user_id,
+                        stream_id=chunk.stream_id,
+                        metadata={"vad_boundary": "speech_stopped", "end_sample": int(result["end"]), **metadata},
+                    )
+                )
+        return deltas
+
+    def prepare_stream(self, *, stream_id: str) -> None:
+        """预热指定音频流的 Silero 状态。
+
+        主要逻辑：在麦克风 stream 打开时提前创建 ONNX 模型和 streaming iterator，
+        避免首次音频片到达时才加载模型。
+        参数：`stream_id` 为上行音频流标识。
+        返回值：无。
+        异常情况：Silero 依赖缺失或模型加载失败时向上抛出。
+        """
+
+        self._state_for_stream(stream_id)
+
+    def reset(self, *, stream_id: str | None = None) -> None:
+        """清空 VAD 状态。
+
+        参数：`stream_id` 为空时清空所有 stream；否则只清空指定 stream。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if stream_id is None:
+            self._state_by_stream.clear()
+            return
+        self._state_by_stream.pop(stream_id, None)
+
+    def flush(self) -> list[SpeechBoundaryDelta]:
+        """刷新边界来源。
+
+        Silero streaming 边界不在 flush 时补发事件，返回空列表。
+        """
+
+        return []
+
+    def _state_for_stream(self, stream_id: str) -> _SileroStreamState:
+        state = self._state_by_stream.get(stream_id)
+        if state is not None:
+            return state
+        model, iterator_cls = self._load_model_and_iterator()
+        iterator = iterator_cls(
+            model,
+            threshold=self.threshold,
+            sampling_rate=self.sample_rate,
+            min_silence_duration_ms=self.min_silence_duration_ms,
+            speech_pad_ms=self.speech_pad_ms,
+        )
+        state = _SileroStreamState(iterator=iterator)
+        self._state_by_stream[stream_id] = state
+        return state
+
+    def _load_model_and_iterator(self) -> tuple[Any, Any]:
+        if self._model_factory is not None and self._iterator_factory is not None:
+            return self._model_factory(), self._iterator_factory
+        from silero_vad import VADIterator, load_silero_vad
+
+        return load_silero_vad(onnx=True), VADIterator
+
+    @staticmethod
+    def _pcm16_frame_to_float(frame: bytes) -> Any:
+        import numpy as np
+
+        return np.frombuffer(frame, dtype="<i2").astype("float32") / 32768.0

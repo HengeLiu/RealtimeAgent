@@ -888,17 +888,17 @@ uv run python -m realtime_agent_python_playback_glass conversation-regression --
 7. VLM 响应文本能通过现有 `OutputService` 进入 TTS 和播放。
 8. final text 不重复提交。
 
-### 16.3a Omni Manual ASR-backed 输入收敛
+### 16.3a Omni Manual Silero VAD 输入收敛
 
 本轮根据最新决策调整：Omni Manual conversation runtime 不再保留 RMS VAD 版本，
-也不通过配置选择 VAD / ASR boundary。
+也不再依赖 ASR 句边界作为 provider append/commit 的 turn 边界。
 
 完成标准：
 
-1. Omni Manual 固定使用 `AsrSpeechInputBoundary`。
+1. Omni Manual 固定使用 `SileroSpeechInputBoundary`。
 2. Omni provider 固定以 `turn_detection=manual` 打开。
-3. ASR provider 的 `sentence_begin` 驱动 `turn_started`。
-4. ASR provider 的 `sentence_end/final` 驱动 `turn_ended`。
+3. Silero ONNX VAD 的 `speech_started` 驱动 `turn_started`，随后 flush 短 pre-roll 并开始 append 音频和视觉帧。
+4. Silero ONNX VAD 的 `speech_stopped` 驱动 `turn_ended`。
 5. `turn_ended` 后执行 Omni provider `commit_input()` 和 `create_response()`。
 6. `conversation/` 不再导出 RMS `VoiceActivityBoundary` 或 `ServerVadSpeechInputBoundary`。
 9. 至少完成一次真实 ASR + VLM + TTS 联调。
@@ -998,9 +998,9 @@ git diff --check
 
 1. Phase 0：已新增 `conversation/` 基础类型、运行时配置和旧 `ConversationMemoryService` 导入兼容。
 2. Phase 1：Omni provider 已支持 manual turn detection、显式 `commit_input()` 和 `create_response()`。
-3. Phase 2：Omni conversation runtime 已支持 ASR-backed Manual 链路，`turn_ended` 后执行 commit 和 response create；conversation runtime 不再保留 RMS VAD 版 Omni 链路。
+3. Phase 2：Omni conversation runtime 已支持 Silero VAD Manual 链路，`turn_ended` 后执行 commit 和 response create；conversation runtime 不再保留 RMS VAD 版 Omni 链路。
 4. Phase 3：Omni conversation runtime 已把 `turn_started/turn_ended` 接入现有视觉采样状态，用户说话期间可触发输出取消。
-5. Phase 4：VL conversation runtime 已完成第一版包装式迁移；Omni Manual 和 VL 当前共用 `AsrSpeechInputBoundary`，把 ASR partial 映射为 `asr_text_delta`，并通过 `AsrVoiceActivityBoundary` 把 sentence begin / sentence end / final 统一成 speech boundary 后再转成 `SpeechInputDelta`。
+5. Phase 4：VL conversation runtime 已完成第一版包装式迁移；VL 使用 `AsrSpeechInputBoundary` 把 ASR partial 映射为 `asr_text_delta`，并通过 `AsrVoiceActivityBoundary` 把 sentence begin / sentence end / final 统一成 speech boundary；Omni Manual 使用 `SileroSpeechInputBoundary`。
 6. Phase 5：conversation runtime 装配已从 `RealtimeAgentApp` 抽到 `conversation/runtime.py`，app 只负责传入配置快照和服务依赖；`agent.conversation.runtime` 历史配置值不再决定 app 路由。
 7. Phase 5：`RealtimeAgentApp` 已停止导入和调用 `LegacyAgentCoreRouter`；旧 `agent_core/router.py` 已删除。
 8. Phase 6：`realtime_pipeline/vision.py`、`realtime_pipeline/omni.py` 和 `RealtimeAudioNormalizer` 已删除；conversation runtime 已改用 `ConversationRuntimeEventEmitter` 和 `ConversationOutputController`；现有音频规范化实现已通过 `conversation/input/audio.py` 暴露为 `RuntimeAudioInputBoundary`，App 正式装配从 conversation 输入层导入该入口。
@@ -1046,7 +1046,7 @@ git diff --check
 
 ### 17.3 交付标准满足情况
 
-1. 已满足：conversation runtime 只保留 ASR-backed speech boundary；`AsrVoiceActivityBoundary` 只输出 `speech_started/speech_stopped`，ASR 文本不从 voice boundary 输出。
+1. 已满足：conversation runtime 中 VL 保留 ASR-backed speech boundary，Omni Manual 使用 Silero ONNX VAD speech boundary；两者的 voice boundary 都只输出 `speech_started/speech_stopped`，ASR 文本不从 voice boundary 输出。
 2. 已满足：Omni Manual 和 VL conversation runtime 都通过 `RealtimeTurnController` 统一发出 speech runtime 事件。
 3. 已满足：Omni Manual 和 VL conversation runtime 都通过 `OutputInterruptionController` 使用同一套打断判断规则。
 4. 已满足：旧 `realtime_pipeline/*` 和 `agent_core/router.py` 已删除，新 conversation runtime 不再导入 legacy pipeline helper，也不存在 `agent.conversation.runtime=legacy` 的 app 回退实现。

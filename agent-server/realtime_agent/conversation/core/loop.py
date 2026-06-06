@@ -56,7 +56,7 @@ class OmniRealtimeLoop:
             self.commit_and_create_response(
                 user_id=delta.user_id or "",
                 session_id=delta.session_id,
-                reason="conversation_asr_speech_stopped",
+                reason=str(delta.metadata.get("reason") or "conversation_vad_speech_stopped"),
             )
 
     def commit_and_create_response(self, *, user_id: str, session_id: str, reason: str) -> None:
