@@ -26,6 +26,6 @@ idf_component_register(
         nvs_flash
         esp_websocket_client
         esp_timer
-        esp_driver_i2s
+        driver
         esp32-camera
 )
