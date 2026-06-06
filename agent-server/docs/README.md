@@ -20,4 +20,8 @@
 - [SDK 照片资产处理链路设计](internal/照片资产处理链路设计.md)
 - [SDK 照片资产处理链路开发计划](internal/照片资产处理链路实施计划.md)
 - [Vision 图片和视频输入设计](internal/Vision图片视频输入设计.md)
+
+## Experiment
+
 - [VL 增量图片上下文预览压缩实验](experiment/VL模型连续提交图片实验.md)
+- [VAD 边界检测基准实验方案](experiment/VAD边界检测基准实验方案.md)

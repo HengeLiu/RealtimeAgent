@@ -1,0 +1,11 @@
+{
+  "schema": "realtime-agent.vad-label.v1",
+  "source_path": "/Users/elio/dev/llm-project/OpenAIglassesDemo/testdata/audio-sample/帮我找一下凳子在哪里.wav",
+  "source_name": "帮我找一下凳子在哪里.wav",
+  "sample_rate": 16000,
+  "duration_ms": 3776,
+  "speech_start_ms": 842,
+  "speech_end_ms": 2605,
+  "notes": "",
+  "created_at": "2026-06-05T14:11:43"
+}
