@@ -1764,6 +1764,14 @@ class OmniRealtimeAgentCore:
             with self._input_writer_lock(chunk.session_id):
                 provider.append_audio(chunk)
         except Exception as exc:
+            if self._handle_recoverable_provider_operation_error(
+                user_id=chunk.user_id,
+                session_id=chunk.session_id,
+                message=str(exc),
+                record={"event": "omni.provider.append_audio.failed"},
+                operation="append_audio",
+            ):
+                return
             self._mark_session_failed(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1911,6 +1919,14 @@ class OmniRealtimeAgentCore:
                     }
                 )
         except Exception as exc:  # noqa: BLE001
+            if self._handle_recoverable_provider_operation_error(
+                user_id=user_id,
+                session_id=session_id,
+                message=str(exc),
+                record={"event": "omni.provider.commit_input.failed"},
+                operation="commit_input",
+            ):
+                return
             self._mark_session_failed(
                 user_id=user_id,
                 session_id=session_id,
@@ -1977,6 +1993,14 @@ class OmniRealtimeAgentCore:
                     }
                 )
         except Exception as exc:  # noqa: BLE001
+            if self._handle_recoverable_provider_operation_error(
+                user_id=user_id,
+                session_id=session_id,
+                message=str(exc),
+                record={"event": "omni.provider.create_response.failed"},
+                operation="create_response",
+            ):
+                return
             self._mark_session_failed(
                 user_id=user_id,
                 session_id=session_id,
@@ -2169,7 +2193,7 @@ class OmniRealtimeAgentCore:
                 session_id=session_id,
                 record=record,
             ),
-            error=lambda message, record: self._mark_session_failed(
+            error=lambda message, record: self._handle_provider_error(
                 user_id=user_id,
                 session_id=session_id,
                 message=message,
@@ -2185,6 +2209,168 @@ class OmniRealtimeAgentCore:
                 session_id=session_id,
                 result=result,
             ),
+        )
+
+    def _handle_provider_error(self, *, user_id: str, session_id: str, message: str, record: dict[str, Any]) -> None:
+        """处理 provider 异步错误。
+
+        主要逻辑：provider cancel 和新一轮输入可能并发发生。已知的 cancel 竞态错误
+        只记录为可恢复事件，不终止整段音频会话；其他 provider 错误仍按会话失败处理。
+        参数：`user_id/session_id` 定位会话；`message/record` 是 provider 错误摘要。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if self._handle_recoverable_provider_operation_error(
+            user_id=user_id,
+            session_id=session_id,
+            message=message,
+            record=record,
+            operation="provider_callback",
+        ):
+            return
+        self._mark_session_failed(user_id=user_id, session_id=session_id, message=message, record=record)
+
+    def _handle_recoverable_provider_operation_error(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        message: str,
+        record: dict[str, Any],
+        operation: str,
+    ) -> bool:
+        """尝试把 provider 错误降级为可恢复事件。
+
+        主要逻辑：只有本地已经进入 interrupted/cancel 语境时，才把 provider 返回的
+        `none active response`、`cancel_requested`、连接已关闭等错误视为正常竞态。
+        参数：`operation` 标识错误发生在哪个 provider 操作。
+        返回值：已处理返回 True；不是可恢复错误返回 False。
+        异常情况：无。
+        """
+
+        kind = self._classify_recoverable_provider_error(session_id=session_id, message=message, record=record)
+        if not kind:
+            return False
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None:
+            lifecycle.interrupted = True
+            lifecycle.state = "cancelled"
+        self._active_response_sessions.discard(session_id)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.provider.error.recoverable",
+                "provider": self.omni_config.provider,
+                "user_id": user_id,
+                "operation": operation,
+                "kind": kind,
+                "message": message,
+                "source_event": record.get("event"),
+                "response_generation": lifecycle.generation if lifecycle else self._response_generation_by_session.get(session_id),
+                "response_state": lifecycle.state if lifecycle else None,
+                "provider_event_id": record.get("provider_event_id"),
+                "provider_error_code": record.get("provider_error_code"),
+                "provider_error_type": record.get("provider_error_type"),
+                "provider_error_message": record.get("provider_error_message"),
+            },
+        )
+        if kind == "cancel_no_active_response":
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.cancel.skipped",
+                    "provider": self.omni_config.provider,
+                    "user_id": user_id,
+                    "reason": "provider_no_active_response",
+                    "skip_reason": "provider_no_active_response",
+                    "message": message,
+                },
+            )
+        if kind == "provider_closed_after_cancel":
+            self._detach_provider_after_recoverable_close(
+                user_id=user_id,
+                session_id=session_id,
+                reason=f"{operation}:{kind}",
+            )
+        self._event_buffer.record_event(
+            "provider.error.recoverable",
+            user_id=user_id,
+            session_id=session_id,
+            payload={"operation": operation, "kind": kind, "message": message},
+        )
+        return True
+
+    def _classify_recoverable_provider_error(
+        self,
+        *,
+        session_id: str,
+        message: str,
+        record: dict[str, Any],
+    ) -> str:
+        """识别 cancel 竞态下的可恢复 provider 错误。"""
+
+        if not self._has_cancel_context(session_id=session_id):
+            return ""
+        text = " ".join(
+            str(value or "")
+            for value in (
+                message,
+                record.get("message"),
+                record.get("provider_error_message"),
+                record.get("error_message"),
+            )
+        ).lower()
+        if "active response" in text and ("none" in text or "no " in text):
+            return "cancel_no_active_response"
+        closed_markers = (
+            "connection is already closed",
+            "stream is not open",
+            "state=cancel_requested",
+            "websocket closed",
+        )
+        if any(marker in text for marker in closed_markers):
+            return "provider_closed_after_cancel"
+        return ""
+
+    def _has_cancel_context(self, *, session_id: str) -> bool:
+        """判断当前 session 是否正处于打断或 cancel 竞态上下文。"""
+
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None and (
+            lifecycle.interrupted
+            or lifecycle.state in {"cancel_requested", "cancelled"}
+            or bool(lifecycle.state_before_cancel)
+        ):
+            return True
+        generation = self._response_generation_by_session.get(session_id, 0)
+        return generation > 0 and self._interrupted_response_generation_by_session.get(session_id) == generation
+
+    def _detach_provider_after_recoverable_close(self, *, user_id: str, session_id: str, reason: str) -> None:
+        """在 cancel 导致 provider 不可写后分离旧 provider。
+
+        主要逻辑：不把 audio session 标记为 failed；只移除当前 provider 引用，使后续
+        audio chunk 可以重新 open provider。当前 chunk 不重试，避免把半关闭连接上的
+        错误再次升级。
+        """
+
+        existing = self._sessions.pop(user_id, None)
+        if existing and existing[0] == session_id:
+            try:
+                existing[1].close(user_id=user_id, reason=reason)
+            except Exception:
+                pass
+        elif existing:
+            self._sessions[user_id] = existing
+        self._failed_sessions.discard(session_id)
+        self._input_writer_lock_by_session.pop(session_id, None)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.provider.detached_after_recoverable_error",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+            },
         )
 
     def _cache_replay_audio(self, chunk: StreamChunk) -> None:

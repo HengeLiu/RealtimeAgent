@@ -330,6 +330,32 @@ class FailingRealtimeProvider(FakeRealtimeProvider):
         raise RuntimeError("Connection is already closed.")
 
 
+class CancelClosingRealtimeProvider(FakeRealtimeProvider):
+    """测试用 cancel 后关闭 provider。
+
+    主要功能：模拟真实 Qwen SDK 在 `cancel_response` 后进入不可写状态，下一片
+    音频 append 抛出 `Connection is already closed.`。
+    主要属性：`closed_by_cancel` 记录是否已经收到 cancel。
+    """
+
+    def __init__(self, config: RealtimeProviderConfig) -> None:
+        super().__init__(config)
+        self.closed_by_cancel = False
+
+    def append_audio(self, chunk: StreamChunk) -> None:
+        """cancel 后模拟 provider 不可写。"""
+
+        if self.closed_by_cancel:
+            raise RuntimeError("Connection is already closed.")
+        super().append_audio(chunk)
+
+    def cancel(self, *, user_id: str, reason: str) -> None:
+        """记录 cancel 并把 provider 切到不可写状态。"""
+
+        super().cancel(user_id=user_id, reason=reason)
+        self.closed_by_cancel = True
+
+
 class EchoRealtimeTool(BaseTool):
     """测试用 Realtime 工具。"""
 
@@ -448,6 +474,15 @@ def _realtime_app_with_provider_speech_gate(
 
 def _new_fake(config: RealtimeProviderConfig, instances: list[FakeRealtimeProvider]) -> FakeRealtimeProvider:
     fake = FakeRealtimeProvider(config)
+    instances.append(fake)
+    return fake
+
+
+def _new_cancel_closing_fake(
+    config: RealtimeProviderConfig,
+    instances: list[CancelClosingRealtimeProvider],
+) -> CancelClosingRealtimeProvider:
+    fake = CancelClosingRealtimeProvider(config)
     instances.append(fake)
     return fake
 
@@ -806,6 +841,136 @@ def test_realtime_interrupt_cancels_provider_and_output(tmp_path) -> None:
 
     assert instances[0].cancelled is True
     assert any(event.event_name == "stream.output.cancel.requested" for event in connection.events)
+
+
+def test_realtime_async_no_active_response_after_cancel_is_recoverable(tmp_path) -> None:
+    """测试目标：验证 cancel 后 provider 异步返回无 active response 不会终止对话。
+
+    测试方法：fake provider 上报 active response 后触发打断，再模拟 provider 异步
+    error callback 返回 `Conversation has none active response`。
+    预期结果：runs 记录 recoverable provider error，不出现 `omni.session.failed`，
+    当前音频会话仍可继续接收后续输入。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-001",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"\x00\x00" * 320,
+            final=False,
+        )
+    )
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.response.created",
+            "provider": "fake",
+            "model": "fake-omni",
+            "response": {"id": "resp-active"},
+        }
+    )
+    app.publish_control_event(
+        Event(
+            event_name="control.user.interrupt.detected",
+            user_id="user-001",
+            producer_id="dev-web",
+            session_id=handle.session_id,
+            payload={"reason": "test_interrupt"},
+        )
+    )
+
+    instances[0].callbacks.error(
+        "Conversation has none active response",
+        {
+            "event": "omni.provider.error",
+            "provider": "fake",
+            "provider_error_type": "invalid_request_error",
+            "provider_error_message": "Conversation has none active response",
+        },
+    )
+
+    agent_events = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert handle.session_id not in app.agent_core._failed_sessions
+    assert "cancel_no_active_response" in agent_events
+    assert "omni.provider.error.recoverable" in agent_events
+    assert "omni.session.failed" not in agent_events
+
+
+def test_realtime_append_closed_after_cancel_is_recoverable_and_reopens_next_chunk(tmp_path) -> None:
+    """测试目标：验证 cancel 后 provider 不可写不会终止连续多轮对话。
+
+    测试方法：fake provider 在 cancel 后让下一次 append 抛 `Connection is already closed.`；
+    之后继续写入下一片 mic chunk。
+    预期结果：第一次失败被记录为 recoverable，session 不 failed；后续 chunk 会重新
+    open provider 并继续 append。
+    """
+
+    instances: list[CancelClosingRealtimeProvider] = []
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="vision"))
+    app.agent_core = OmniRealtimeAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        omni_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: _new_cancel_closing_fake(config, instances),
+    )
+    app.vision_agent_core = app.agent_core
+    app.audio_pipeline.agent_core = app.agent_core
+    connection = Connection("dev-web")
+    register_speaker(app, connection)
+    handle = app.open_input_stream(user_id="user-001", producer_id="dev-web")
+    first_chunk = StreamChunk(
+        user_id="user-001",
+        session_id=handle.session_id,
+        stream_id=handle.stream_id,
+        stream_type="sensor.mic",
+        seq=0,
+        payload=b"\x00\x00" * 320,
+        final=False,
+    )
+    app.write_input_chunk(first_chunk)
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.response.created",
+            "provider": "fake",
+            "model": "fake-omni",
+            "response": {"id": "resp-active"},
+        }
+    )
+    app.publish_control_event(
+        Event(
+            event_name="control.user.interrupt.detected",
+            user_id="user-001",
+            producer_id="dev-web",
+            session_id=handle.session_id,
+            payload={"reason": "test_interrupt"},
+        )
+    )
+
+    app.write_input_chunk(StreamChunk(**{**first_chunk.__dict__, "seq": 1}))
+    app.write_input_chunk(StreamChunk(**{**first_chunk.__dict__, "seq": 2}))
+
+    agent_events = (tmp_path / "runs" / "user-001" / handle.session_id / "agent-events.jsonl").read_text(
+        encoding="utf-8"
+    )
+    assert instances[0].cancelled is True
+    assert len(instances) == 2
+    assert instances[1].appended
+    assert handle.session_id not in app.agent_core._failed_sessions
+    assert "provider_closed_after_cancel" in agent_events
+    assert "omni.provider.detached_after_recoverable_error" in agent_events
+    assert "omni.session.failed" not in agent_events
 
 
 def test_realtime_interrupt_skips_provider_cancel_without_active_response(tmp_path) -> None:
