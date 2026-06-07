@@ -24,6 +24,7 @@ from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, Stre
 from realtime_agent.tools import ToolGateway
 
 REALTIME_INLINE_VISION_TOOLS = {"capture_photo", "interpret_current_view", "interpret_image"}
+REALTIME_TERMINAL_SESSION_TOOLS = {"close_audio_session"}
 OMNI_REALTIME_IMAGE_MAX_BYTES = 180_000
 DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS = 10
 DEFAULT_PROVIDER_SPEECH_GATE_WINDOW_CHUNKS = 5
@@ -854,7 +855,7 @@ class QwenOmniRealtimeAdapter:
                 )
             image_path = _resolve_capture_photo_tool_image_path(result)
             image_bytes = image_path.read_bytes() if image_path is not None else None
-            create_followup_response = True
+            create_followup_response = result.get("name") not in REALTIME_TERMINAL_SESSION_TOOLS
             response_instructions = _tool_result_followup_instructions(self.config.prompt, result)
             if image_bytes:
                 append_video = getattr(self._conversation, "append_video", None)
@@ -946,13 +947,38 @@ class QwenOmniRealtimeAdapter:
     def _create_pending_tool_followup_response(self) -> None:
         """在原始 response 完成后创建工具结果后的 follow-up response。"""
 
-        if self._conversation is None or self._pending_tool_followup_response is None:
+        if self._pending_tool_followup_response is None:
             return
         pending = self._pending_tool_followup_response
         self._pending_tool_followup_response = None
+        if self._conversation is None:
+            if self._callbacks:
+                self._callbacks.provider_event(
+                    {
+                        "event": "omni.tool_followup_response.skipped",
+                        "provider": "qwen",
+                        "reason": "conversation_closed",
+                        "tool_call_id": pending.get("tool_call_id"),
+                        "tool_name": pending.get("tool_name"),
+                    }
+                )
+            return
         try:
             with self._operation_lock:
-                self._conversation.create_response(
+                conversation = self._conversation
+                if conversation is None:
+                    if self._callbacks:
+                        self._callbacks.provider_event(
+                            {
+                                "event": "omni.tool_followup_response.skipped",
+                                "provider": "qwen",
+                                "reason": "conversation_closed",
+                                "tool_call_id": pending.get("tool_call_id"),
+                                "tool_name": pending.get("tool_name"),
+                            }
+                        )
+                    return
+                conversation.create_response(
                     instructions=pending.get("instructions"),
                     output_modalities=pending.get("output_modalities"),
                 )

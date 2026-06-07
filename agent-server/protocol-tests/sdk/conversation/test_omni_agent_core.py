@@ -2796,6 +2796,96 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
 
 
+def test_qwen_omni_close_audio_session_tool_does_not_create_followup_response() -> None:
+    """测试目标：验证关闭会话工具不会再触发 Realtime follow-up response。
+
+    测试方法：模拟 Qwen 发起 `close_audio_session` 工具调用并返回成功结果，再触发
+    `response.done`。
+    预期结果：工具结果会写回 provider conversation，但不会创建新的 response，避免关闭
+    会话期间再次调用 provider。
+    """
+
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
+
+    class FakeConversation:
+        """记录 provider adapter 写回的会话操作。"""
+
+        def __init__(self) -> None:
+            self.items = []
+            self.responses = []
+
+        def create_item(self, item: dict) -> None:
+            self.items.append(item)
+
+        def create_response(self, **kwargs) -> None:
+            self.responses.append(kwargs)
+
+    records = []
+    conversation = FakeConversation()
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        tool_call_done=lambda record: {
+            "tool_call_id": record["tool_call_id"],
+            "name": record["name"],
+            "ok": True,
+            "data": {"requested": True},
+        },
+    )
+
+    provider._handle_provider_event(
+        {
+            "type": "response.function_call_arguments.done",
+            "call_id": "call-close",
+            "name": "close_audio_session",
+            "arguments": "{\"reason\":\"用户明确要求结束对话。\",\"user_close_phrase\":\"结束对话\"}",
+        }
+    )
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
+
+    assert conversation.items[0]["type"] == "function_call_output"
+    assert conversation.items[0]["call_id"] == "call-close"
+    assert conversation.responses == []
+    assert not any(record.get("event") == "omni.tool_followup_response.deferred" for record in records)
+    assert not any(record.get("event") == "error" for record in records)
+
+
+def test_qwen_omni_tool_followup_skips_when_conversation_closed() -> None:
+    """测试目标：验证 follow-up response 创建前 provider 会话已关闭时不会报错。
+
+    测试方法：手动放入 pending follow-up，然后把 `_conversation` 置空并触发创建。
+    预期结果：adapter 记录 skipped 事件，不调用 error 回调。
+    """
+
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
+
+    records = []
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
+    provider._conversation = None
+    provider._pending_tool_followup_response = {
+        "instructions": "继续回答",
+        "output_modalities": ["text", "audio"],
+        "tool_call_id": "call-closed",
+        "tool_name": "echo_realtime",
+    }
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+    )
+
+    provider._create_pending_tool_followup_response()
+
+    assert any(record.get("event") == "omni.tool_followup_response.skipped" for record in records)
+    assert not any(record.get("event") == "error" for record in records)
+
+
 def test_qwen_omni_manual_turn_detection_disables_provider_vad(monkeypatch) -> None:
     """测试目标：验证 Qwen Omni manual 模式关闭 provider turn detection。
 
