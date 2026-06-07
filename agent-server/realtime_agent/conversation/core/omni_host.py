@@ -1654,6 +1654,25 @@ class OmniRealtimeAgentCore:
         self._assistant_text_by_session.pop(session_id, None)
         return lifecycle
 
+    def _clear_response_tracking(self, *, session_id: str) -> None:
+        """清理单个 audio session 的 provider response 跟踪状态。
+
+        主要逻辑：web-chat 端会复用稳定 `session_id`。关闭会话后如果不清理
+        active response、response key 和打断 generation，新会话第一次 speech_started
+        会被误判为正在打断旧 response，从而向 provider 发送无效 cancel。
+        参数：`session_id` 为当前音频会话标识。
+        返回值：无。
+        异常情况：无。
+        """
+
+        self._active_response_sessions.discard(session_id)
+        self._response_generation_by_session.pop(session_id, None)
+        self._interrupted_response_generation_by_session.pop(session_id, None)
+        self._response_key_by_session.pop(session_id, None)
+        self._interrupted_response_key_by_session.pop(session_id, None)
+        self._response_lifecycle_by_session.pop(session_id, None)
+        self._assistant_text_by_session.pop(session_id, None)
+
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
 
@@ -1686,6 +1705,7 @@ class OmniRealtimeAgentCore:
         if existing:
             existing[1].close(user_id=user_id, reason="session_replaced")
         self._failed_sessions.discard(session_id)
+        self._clear_response_tracking(session_id=session_id)
         context = self.context_compiler.compile(
             ContextCompileRequest(
                 mode="omni",
@@ -2176,7 +2196,7 @@ class OmniRealtimeAgentCore:
             self._visual_input_accepting_by_session.discard(session_id)
             self._audio_since_commit_by_session.discard(session_id)
             self._manual_turn_by_session.pop(session_id, None)
-            self._response_lifecycle_by_session.pop(session_id, None)
+            self._clear_response_tracking(session_id=session_id)
             self._input_writer_lock_by_session.pop(session_id, None)
             self._visual_sampler_generation_by_session.pop(session_id, None)
             self._visual_turn_id_by_session.pop(session_id, None)

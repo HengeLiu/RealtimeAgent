@@ -906,6 +906,42 @@ def test_realtime_async_no_active_response_after_cancel_is_recoverable(tmp_path)
     assert "omni.session.failed" not in agent_events
 
 
+def test_realtime_reopen_same_session_clears_stale_active_response(tmp_path) -> None:
+    """测试目标：验证 web-chat 复用同一 session_id 重新开始对话时不继承旧 response 状态。
+
+    测试方法：打开 fake realtime 会话并模拟 provider 上报 `response.created`，随后关闭
+    会话；再用相同 session_id 重新 open，并触发用户开始说话的 interrupt 路径。
+    预期结果：新 provider 不会收到 cancel，说明旧 active response 标记已在 close/open
+    边界清理。
+    """
+
+    instances: list[FakeRealtimeProvider] = []
+    app = _realtime_app(tmp_path, instances)
+    session_id = "dev-web"
+
+    app.agent_core.open("user-001", session_id)
+    assert instances[0].callbacks is not None
+    instances[0].callbacks.provider_event(
+        {
+            "event": "omni.response.created",
+            "provider": "fake",
+            "model": "fake-omni",
+            "response": {"id": "resp-before-close"},
+        }
+    )
+    assert session_id in app.agent_core._active_response_sessions
+
+    app.agent_core.close("user-001", reason="user_requested_close")
+    assert session_id not in app.agent_core._active_response_sessions
+
+    app.agent_core.open("user-001", session_id)
+    assert len(instances) == 2
+    app.agent_core.interrupt("user-001", reason="conversation_vad_speech_started")
+
+    assert instances[1].cancelled is False
+    assert session_id not in app.agent_core._failed_sessions
+
+
 def test_realtime_append_closed_after_cancel_is_recoverable_and_reopens_next_chunk(tmp_path) -> None:
     """测试目标：验证 cancel 后 provider 不可写不会终止连续多轮对话。
 
