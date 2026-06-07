@@ -1189,6 +1189,101 @@ def test_output_stream_freezes_consumers_for_chunks_close_and_cancel(tmp_path) -
     assert [event.event_name for event in second.events] == []
 
 
+def test_output_ready_flush_and_realtime_delta_share_single_ordered_queue(tmp_path) -> None:
+    """测试目标：验证 output ready 冲刷缓存音频时，后续实时 audio delta 不能插队。
+
+    测试方法：ready 前写入 0..9 号 speaker chunk；端侧 ready 触发 flush 时，在连接
+    收到首个 chunk 的回调里并发写入 10 号 chunk，模拟 provider audio delta 同时到达。
+    预期结果：设备收到的 chunk 顺序严格为 0..10，证明 ready flush 和实时写入共用同一
+    个 per-stream 发送队列。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    class Connection:
+        """测试连接：记录下发事件和 chunk，并在首个 chunk 到达时触发并发写入。"""
+
+        def __init__(self, device_id: str) -> None:
+            self.device_id = device_id
+            self.events: list[Event] = []
+            self.chunks: list[StreamChunk] = []
+            self.on_first_chunk = None
+            self._triggered = False
+
+        def push_event(self, event: Event) -> None:
+            """记录服务端下发的控制事件。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """记录服务端下发的音频 chunk，并在首包处制造并发写入窗口。"""
+
+            self.chunks.append(chunk)
+            if not self._triggered and self.on_first_chunk is not None:
+                self._triggered = True
+                self.on_first_chunk()
+
+    connection = Connection("dev-ordered-speaker")
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-output",
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [], "actuators": []},
+                "properties": {"realtime_agent.audio_output": "actuator.speaker"},
+            },
+        ),
+        connection,
+    )
+    handle = app.stream_service.open_stream(
+        user_id="user-output",
+        session_id="sess-output",
+        stream_type="actuator.speaker",
+        producer_id="server-main",
+        format=StreamFormat(chunk_ms=20),
+    )
+
+    def chunk(seq: int) -> StreamChunk:
+        """构造固定格式的 speaker chunk。"""
+
+        return StreamChunk(
+            user_id="user-output",
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="actuator.speaker",
+            seq=seq,
+            payload=bytes([seq]),
+            duration_ms=20,
+        )
+
+    for seq in range(10):
+        app.stream_service.write_chunk(chunk(seq))
+    assert connection.chunks == []
+
+    def write_realtime_delta() -> None:
+        """模拟 ready flush 尚未结束时，provider 继续写入下一片音频。"""
+
+        app.stream_service.write_chunk(chunk(10))
+
+    connection.on_first_chunk = write_realtime_delta
+    app.publish_control_event(
+        Event(
+            event_name="stream.output.ready",
+            user_id="user-output",
+            producer_id=connection.device_id,
+            session_id=handle.session_id,
+            stream_id=handle.stream_id,
+            stream_type="actuator.speaker",
+            payload={"stream_type": "actuator.speaker", "reason": "test_ready"},
+        )
+    )
+
+    assert [sent.seq for sent in connection.chunks] == list(range(11))
+
+
 def test_asset_capture_rgb_stream_does_not_route_to_phone_display(tmp_path) -> None:
     """测试目标：确认实时视觉采样的单资产 RGB 流不会在 Task 前转发给手机。
 

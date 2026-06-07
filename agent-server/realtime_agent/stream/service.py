@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
+from threading import RLock
 from typing import Protocol
 
 from realtime_agent.control import ControlService
@@ -45,8 +46,9 @@ class StreamHandle:
     opened_at: float = 0.0
     last_activity_at: float = 0.0
     output_ready: bool = False
-    pending_output_chunks: list[StreamChunk] = field(default_factory=list)
+    output_send_queue: list[StreamChunk] = field(default_factory=list)
     pending_output_finish_event: Event | None = None
+    output_send_lock: RLock = field(default_factory=RLock, repr=False)
 
     def __post_init__(self) -> None:
         """初始化生命周期时间戳。"""
@@ -279,20 +281,25 @@ class StreamService:
         if handle.state != "open":
             raise StreamNotOpenError(handle)
         handle.touch()
-        if handle.stream_type.startswith("actuator.") and not handle.output_ready:
-            handle.pending_output_chunks.append(chunk)
-            self.recorder.record_stream_event(
-                chunk.session_id,
-                {
-                    "event": "stream.output.chunk_buffered_until_ready",
-                    "user_id": chunk.user_id,
-                    "stream_id": chunk.stream_id,
-                    "stream_type": chunk.stream_type,
-                    "seq": chunk.seq,
-                    "payload_size": len(chunk.payload),
-                    "pending_chunks": len(handle.pending_output_chunks),
-                },
-            )
+        if handle.stream_type.startswith("actuator."):
+            with handle.output_send_lock:
+                if handle.state != "open":
+                    raise StreamNotOpenError(handle)
+                handle.output_send_queue.append(chunk)
+                if not handle.output_ready:
+                    self.recorder.record_stream_event(
+                        chunk.session_id,
+                        {
+                            "event": "stream.output.chunk_buffered_until_ready",
+                            "user_id": chunk.user_id,
+                            "stream_id": chunk.stream_id,
+                            "stream_type": chunk.stream_type,
+                            "seq": chunk.seq,
+                            "payload_size": len(chunk.payload),
+                            "pending_chunks": len(handle.output_send_queue),
+                        },
+                    )
+                self._drain_output_queue_locked(handle)
             return
         self._send_output_chunk(handle, chunk)
 
@@ -321,12 +328,36 @@ class StreamService:
         )
         self.control_service.push_stream_chunk_to_devices(handle.consumer_device_ids, chunk)
 
+    def _drain_output_queue_locked(self, handle: StreamHandle) -> None:
+        """按顺序冲刷 output 发送队列。
+
+        主要逻辑：所有 speaker chunk 都先进入 `output_send_queue`，只有本方法负责
+        按 FIFO 顺序发送。调用方必须持有 `handle.output_send_lock`，避免
+        `stream.output.ready` 冲刷旧 chunk 时，新 audio delta 从另一条路径插队。
+        参数：`handle` 为目标 output stream。
+        返回值：无。
+        异常情况：无。
+        """
+
+        if not handle.output_ready:
+            return
+        if handle.state in {"cancel_requested", "cancelled", "failed"}:
+            handle.output_send_queue.clear()
+            handle.pending_output_finish_event = None
+            return
+        while handle.output_send_queue:
+            self._send_output_chunk(handle, handle.output_send_queue.pop(0))
+        pending_finish = handle.pending_output_finish_event
+        if pending_finish is not None:
+            handle.pending_output_finish_event = None
+            self.control_service._push_event_to_device_ids(pending_finish, handle.consumer_device_ids)
+
     def mark_output_endpoint_ready(self, stream_id: str, *, reason: str = "endpoint_ready") -> None:
         """记录端侧已经准备好接收本轮 output stream，并冲刷暂存分片。
 
-        主要逻辑：端侧回 `stream.output.ready` 后，server 才能向已建立的音频下行链路
-        写入本轮 speaker chunk。若上层在 ready 前已经写入 chunk 或请求 finish，这里按
-        原顺序先冲刷 chunk，再发送 finish/close 控制事件。
+        主要逻辑：端侧回 `stream.output.ready` 后，只打开本 stream 的统一发送队列。
+        ready 前和 ready 后产生的 chunk 都通过同一个队列和锁顺序发送，避免首包缓存
+        与后续实时 audio delta 并发插队。
         参数：`stream_id` 为 output stream 标识，`reason` 为回执来源。
         返回值：无。
         异常情况：stream 不存在或不是 output stream 时抛出 `ValueError`。
@@ -335,29 +366,24 @@ class StreamService:
         handle = self.registry.get(stream_id)
         if not handle.stream_type.startswith("actuator."):
             raise ValueError(f"not an output stream: {stream_id}")
-        if handle.output_ready:
-            return
-        handle.output_ready = True
-        handle.touch()
-        pending_chunks = list(handle.pending_output_chunks)
-        handle.pending_output_chunks.clear()
-        self.recorder.record_stream_event(
-            handle.session_id,
-            {
-                "event": "stream.output.endpoint_ready",
-                "stream_id": handle.stream_id,
-                "stream_type": handle.stream_type,
-                "reason": reason,
-                "pending_chunks": len(pending_chunks),
-                "state": handle.state,
-            },
-        )
-        for chunk in pending_chunks:
-            self._send_output_chunk(handle, chunk)
-        pending_finish = handle.pending_output_finish_event
-        if pending_finish is not None:
-            handle.pending_output_finish_event = None
-            self.control_service._push_event_to_device_ids(pending_finish, handle.consumer_device_ids)
+        with handle.output_send_lock:
+            if handle.output_ready:
+                return
+            handle.output_ready = True
+            handle.touch()
+            pending_chunks = len(handle.output_send_queue)
+            self.recorder.record_stream_event(
+                handle.session_id,
+                {
+                    "event": "stream.output.endpoint_ready",
+                    "stream_id": handle.stream_id,
+                    "stream_type": handle.stream_type,
+                    "reason": reason,
+                    "pending_chunks": pending_chunks,
+                    "state": handle.state,
+                },
+            )
+            self._drain_output_queue_locked(handle)
 
     def close_stream(self, stream_id: str, *, reason: str = "completed") -> None:
         handle = self.registry.get(stream_id)
@@ -379,20 +405,23 @@ class StreamService:
             payload={"stream_type": handle.stream_type, "reason": reason},
         )
         if handle.stream_type.startswith("actuator."):
-            if handle.output_ready:
-                self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
-            else:
-                handle.pending_output_finish_event = event
-                self.recorder.record_stream_event(
-                    handle.session_id,
-                    {
-                        "event": "stream.output.close_buffered_until_ready",
-                        "stream_id": handle.stream_id,
-                        "stream_type": handle.stream_type,
-                        "reason": reason,
-                        "state": handle.state,
-                    },
-                )
+            with handle.output_send_lock:
+                if handle.output_ready and not handle.output_send_queue:
+                    self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
+                else:
+                    handle.pending_output_finish_event = event
+                    self.recorder.record_stream_event(
+                        handle.session_id,
+                        {
+                            "event": "stream.output.close_buffered_until_ready",
+                            "stream_id": handle.stream_id,
+                            "stream_type": handle.stream_type,
+                            "reason": reason,
+                            "state": handle.state,
+                            "pending_chunks": len(handle.output_send_queue),
+                        },
+                    )
+                    self._drain_output_queue_locked(handle)
         elif handle.stream_type == "sensor.mic":
             # 麦克风输入流的生产端必须收到关闭通知，否则浏览器会继续复用已关闭的 stream_id。
             self.control_service._push_event_to_device_ids(event, (handle.producer_id,), route_reason="stream_producer")
@@ -453,20 +482,23 @@ class StreamService:
             stream_type=handle.stream_type,
             payload=payload,
         )
-        if handle.output_ready:
-            self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
-        else:
-            handle.pending_output_finish_event = event
-            self.recorder.record_stream_event(
-                handle.session_id,
-                {
-                    "event": "stream.output.finish_buffered_until_ready",
-                    "stream_id": handle.stream_id,
-                    "stream_type": handle.stream_type,
-                    "reason": reason,
-                    "state": handle.state,
-                },
-            )
+        with handle.output_send_lock:
+            if handle.output_ready and not handle.output_send_queue:
+                self.control_service._push_event_to_device_ids(event, handle.consumer_device_ids)
+            else:
+                handle.pending_output_finish_event = event
+                self.recorder.record_stream_event(
+                    handle.session_id,
+                    {
+                        "event": "stream.output.finish_buffered_until_ready",
+                        "stream_id": handle.stream_id,
+                        "stream_type": handle.stream_type,
+                        "reason": reason,
+                        "state": handle.state,
+                        "pending_chunks": len(handle.output_send_queue),
+                    },
+                )
+                self._drain_output_queue_locked(handle)
         record = {
             "event": "stream.output.finish_requested",
             "stream_id": handle.stream_id,
@@ -538,8 +570,9 @@ class StreamService:
         if handle.state in {"cancel_requested", "cancelled", "closed", "failed"}:
             return
         handle.state = "cancel_requested"
-        handle.pending_output_chunks.clear()
-        handle.pending_output_finish_event = None
+        with handle.output_send_lock:
+            handle.output_send_queue.clear()
+            handle.pending_output_finish_event = None
         request = Event(
             event_name="stream.output.cancel.requested",
             user_id=handle.user_id,
@@ -575,8 +608,9 @@ class StreamService:
         if handle.state == "failed":
             return
         handle.state = "failed"
-        handle.pending_output_chunks.clear()
-        handle.pending_output_finish_event = None
+        with handle.output_send_lock:
+            handle.output_send_queue.clear()
+            handle.pending_output_finish_event = None
         event_name = "stream.output.failed" if handle.stream_type.startswith("actuator.") else "stream.input.failed"
         event = Event(
             event_name=event_name,
