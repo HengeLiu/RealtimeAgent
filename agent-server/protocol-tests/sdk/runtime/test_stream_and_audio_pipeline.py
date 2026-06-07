@@ -1,7 +1,7 @@
 import json
 import asyncio
 import time
-from threading import Event as ThreadEvent
+from threading import Event as ThreadEvent, Thread
 from pathlib import Path
 
 import realtime_agent.conversation.input.asr_session as asr_session_module
@@ -211,6 +211,102 @@ def test_rgb_input_opened_with_esp32_jpeg_format(tmp_path) -> None:
     assert asset.metadata["request_id"] == "asset_req_esp32"
     assert app.asset_service.wait_for_archive(asset.asset_id, timeout_seconds=1)
     assert Path(asset.uri).read_bytes() == payload
+
+
+def test_asset_request_params_are_merged_into_returned_rgb_metadata(tmp_path) -> None:
+    """测试目标：验证服务端请求图片时的 turn_id 会写回返回资产 metadata。
+
+    测试方法：通过 `AssetService.request_asset()` 发起单帧 RGB 请求，端侧上传图片时
+    只回传 `request_id`、宽高等最小 metadata。
+    预期结果：返回的 AssetRef metadata 包含服务端请求中的 `turn_id`、
+    `correlation_id`、`direction`，避免 Omni manual 误判为其他 turn 的图片。
+    """
+
+    class Connection:
+        """记录下发给测试设备的控制事件。"""
+
+        device_id = "dev-rgb-pending"
+
+        def __init__(self) -> None:
+            self.events: list[Event] = []
+
+        def push_event(self, event: Event) -> None:
+            """保存控制事件，供测试读取 request_id。"""
+
+            self.events.append(event)
+
+        def push_stream_chunk(self, chunk: StreamChunk) -> None:
+            """本测试不验证下行数据流。"""
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), asset_request_timeout_seconds=2))
+    connection = Connection()
+    app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id="user-pending-photo",
+            producer_id=connection.device_id,
+            payload={
+                "device_id": connection.device_id,
+                "auth": {"mode": "disabled"},
+                "supports": {"sensors": [{"type": "rgb"}], "actuators": []},
+            },
+        ),
+        connection,
+    )
+    result: dict[str, object] = {}
+
+    def request_photo() -> None:
+        result["asset"] = app.asset_service.request_asset(
+            user_id="user-pending-photo",
+            stream_type="sensor.rgb",
+            freshness_seconds=0,
+            params={
+                "turn_id": "turn-request-1",
+                "correlation_id": "turn-request-1",
+                "direction": "front",
+                "capture_reason": "realtime_video",
+                "ttl_seconds": 5,
+            },
+            session_id=connection.device_id,
+            timeout_seconds=2,
+            device_ids=(connection.device_id,),
+        )
+
+    thread = Thread(target=request_photo)
+    thread.start()
+    deadline = time.time() + 1
+    while time.time() < deadline and not connection.events:
+        time.sleep(0.01)
+    assert connection.events
+    request = connection.events[-1]
+    request_id = str(request.payload["request_id"])
+
+    app.write_input_chunk(
+        StreamChunk(
+            user_id="user-pending-photo",
+            session_id=connection.device_id,
+            stream_id="stream-rgb-pending",
+            stream_type="sensor.rgb",
+            seq=0,
+            payload=b"\xff\xd8pending-photo\xff\xd9",
+            codec="jpeg",
+            sample_rate=1,
+            channels=1,
+            duration_ms=1,
+            final=True,
+            metadata={"request_id": request_id, "width": 640, "height": 480},
+        )
+    )
+    thread.join(timeout=1)
+
+    asset = result["asset"]
+    assert asset is not None
+    assert asset.metadata["request_id"] == request_id
+    assert asset.metadata["turn_id"] == "turn-request-1"
+    assert asset.metadata["correlation_id"] == "turn-request-1"
+    assert asset.metadata["direction"] == "front"
+    assert asset.metadata["width"] == 640
+    assert asset.metadata["height"] == 480
 
 
 def test_sensor_chunk_before_open_event_auto_registers_input_stream(tmp_path) -> None:

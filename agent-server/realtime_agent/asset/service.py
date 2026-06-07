@@ -267,13 +267,15 @@ class _PendingAssetCapture:
     """等待端侧回传的内部资产捕获状态。
 
     主要功能：用 request_id 把控制请求和后续 asset stream chunk 精确关联起来。
-    主要属性：`event` 用于阻塞等待，`asset` 保存匹配 request_id 的返回资产。
+    主要属性：`event` 用于阻塞等待，`asset` 保存匹配 request_id 的返回资产，
+    `params` 保存请求时下发给端侧的采集参数。
     """
 
-    def __init__(self, *, user_id: str, stream_type: str, request_id: str) -> None:
+    def __init__(self, *, user_id: str, stream_type: str, request_id: str, params: dict | None = None) -> None:
         self.user_id = user_id
         self.stream_type = stream_type
         self.request_id = request_id
+        self.params = dict(params or {})
         self.event = ThreadEvent()
         self.asset: AssetRef | None = None
         self.error: dict | None = None
@@ -518,9 +520,6 @@ class AssetService:
             if cached:
                 return cached[-1]
         request_id = new_id("asset_req")
-        pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id)
-        with self._lock:
-            self._pending[request_id] = pending
         payload = {"stream_type": stream_type, "mode": "single", "max_samples": 1, **dict(params or {})}
         payload["request_id"] = request_id
         if stream_type == "sensor.rgb":
@@ -528,6 +527,9 @@ class AssetService:
             payload.setdefault("ttl_seconds", self.default_ttl_seconds)
             payload.setdefault("capture_reason", payload.get("reason") or "capture_photo")
             payload.setdefault("direction", "front")
+        pending = _PendingAssetCapture(user_id=user_id, stream_type=stream_type, request_id=request_id, params=payload)
+        with self._lock:
+            self._pending[request_id] = pending
         self._reject_media_bytes(payload)
         event = Event(
             event_name="stream.control.open.requested",
@@ -674,6 +676,23 @@ class AssetService:
         """
         return self.store.window(user_id=user_id, stream_type=stream_type, limit=limit)
 
+    def _pending_params_for_request(self, request_id: str) -> dict:
+        """返回 request_id 对应的服务端采集参数。
+
+        主要逻辑：端侧上传单帧图片时通常只回传 `request_id` 和图片尺寸，不会把
+        服务端请求中的 `turn_id/correlation_id` 原样带回。这里在保存资产前根据
+        request_id 取回请求参数，用于补齐 AssetRef metadata。
+        参数：`request_id` 为 AssetService 生成的请求标识。
+        返回值：匹配时返回请求参数副本，否则返回空字典。
+        异常情况：无。
+        """
+
+        if not request_id:
+            return {}
+        with self._lock:
+            pending = self._pending.get(request_id)
+        return dict(pending.params) if pending is not None else {}
+
     def _photo_metadata(self, chunk: StreamChunk) -> dict:
         """归一化照片资产 metadata。
 
@@ -688,6 +707,8 @@ class AssetService:
         if chunk.stream_type != "sensor.rgb":
             return metadata
         request_id = str(metadata.get("request_id") or "")
+        request_params = self._pending_params_for_request(request_id)
+        metadata = {**request_params, **metadata}
         metadata.setdefault("upload_mode", "server_requested" if request_id else "device_push")
         metadata.setdefault("turn_id", chunk.stream_id or chunk.session_id)
         metadata.setdefault("capture_reason", metadata.get("reason") or ("server_requested" if request_id else "device_push"))

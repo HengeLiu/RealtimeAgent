@@ -42,6 +42,7 @@ QUIET_AGENT_TURN_STATE_REASONS = {
 QUIET_AGENT_EVENTS = {
     "context.source.added",
     "omni.input_audio.appended",
+    "omni.input_audio.appended_to_turn",
     "omni.response.audio.delta",
     "omni.response.function_call_arguments.delta",
     "omni.response.tool_call_arguments.delta",

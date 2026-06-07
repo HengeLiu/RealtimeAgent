@@ -29,6 +29,44 @@ DEFAULT_REALTIME_PROVIDER_MAX_CONCURRENT_SESSIONS = 10
 DEFAULT_PROVIDER_SPEECH_GATE_WINDOW_CHUNKS = 5
 
 
+@dataclass(slots=True)
+class _OmniManualUserTurn:
+    """Omni manual 用户语音 turn 状态。
+
+    主要功能：把 `speech_started/speech_stopped` 边界、provider audio append、
+    图片采样和 commit 状态绑定到同一个 turn_id，避免 session 级标记跨 turn 误用。
+    """
+
+    turn_id: str
+    user_id: str
+    session_id: str
+    stream_id: str
+    reason: str
+    phase: str = "open"
+    has_provider_audio: bool = False
+    audio_appended_ms: int = 0
+    visual_started: bool = False
+    visual_interval_seconds: float = 1.0
+    commit_started: bool = False
+    frame_index: int = 0
+
+
+@dataclass(slots=True)
+class _OmniResponseLifecycle:
+    """Omni response generation 生命周期状态。
+
+    主要功能：覆盖 `response.create` 已发但 provider 尚未输出的 pending 阶段，
+    并把后续 provider 输出、播放和 cancel 绑定到本地 generation。
+    """
+
+    generation: int
+    state: str = "pending"
+    response_key: str = ""
+    interrupted: bool = False
+    reason: str = ""
+    state_before_cancel: str = ""
+
+
 class RealtimeProviderConcurrencyLimitError(RuntimeError):
     """Realtime provider 并发连接数超过限制。
 
@@ -1425,12 +1463,170 @@ class OmniRealtimeAgentCore:
         self._audio_since_commit_by_session: set[str] = set()
         self._visual_stream_id_by_session: dict[str, str] = {}
         self._visual_appended_asset_ids_by_session: dict[str, set[str]] = {}
+        self._manual_turn_by_session: dict[str, _OmniManualUserTurn] = {}
+        self._response_lifecycle_by_session: dict[str, _OmniResponseLifecycle] = {}
+        self._input_writer_lock_by_session: dict[str, threading.RLock] = {}
         self._audio_stream_by_session: dict[str, str] = {}
         self._closed_audio_streams_by_session: dict[str, set[str]] = {}
         self._input_levels_by_session: dict[str, list[InputAudioLevel]] = {}
         self._input_audio_ms_by_session: dict[str, int] = {}
         self._state_by_session: dict[str, str] = {}
         self._user_activity_callback: Callable[[str, str], None] | None = None
+
+    def _input_writer_lock(self, session_id: str) -> threading.RLock:
+        """返回 session 级 provider 输入写入锁。
+
+        主要逻辑：Omni provider 的 audio/image/commit/create 顺序必须稳定；
+        同一 session 内通过一把可重入锁串行化写入，避免视觉线程与音频线程并发
+        调用 provider。
+        参数：`session_id` 为会话标识。
+        返回值：可重入锁对象。
+        异常情况：无。
+        """
+
+        lock = self._input_writer_lock_by_session.get(session_id)
+        if lock is None:
+            lock = threading.RLock()
+            self._input_writer_lock_by_session[session_id] = lock
+        return lock
+
+    def _start_manual_user_turn(self, *, user_id: str, session_id: str, stream_id: str, reason: str) -> _OmniManualUserTurn:
+        """创建新的 Omni manual 用户 turn。
+
+        主要逻辑：每次 `speech_started` 都生成新的 turn_id，重置 provider audio 与
+        图片采样状态，并让旧视觉 generation 失效，确保迟到图片不能跨 turn append。
+        参数：`user_id/session_id/stream_id` 定位当前输入流；`reason` 为边界来源。
+        返回值：新建的 turn 状态。
+        异常情况：无。
+        """
+
+        turn = _OmniManualUserTurn(
+            turn_id=new_id("turn"),
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            reason=reason,
+            visual_interval_seconds=float(self.omni_config.visual_frame_interval_seconds or 1.0),
+        )
+        self._manual_turn_by_session[session_id] = turn
+        self._visual_sampler_generation_by_session[session_id] = (
+            self._visual_sampler_generation_by_session.get(session_id, 0) + 1
+        )
+        self._visual_turn_id_by_session[session_id] = turn.turn_id
+        self._visual_appended_asset_ids_by_session[session_id] = set()
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.turn.started",
+                "provider": self.omni_config.provider,
+                "turn_id": turn.turn_id,
+                "stream_id": stream_id,
+                "reason": reason,
+            },
+        )
+        return turn
+
+    def _current_manual_turn(self, session_id: str) -> _OmniManualUserTurn | None:
+        """返回当前 session 的未提交用户 turn。"""
+
+        turn = self._manual_turn_by_session.get(session_id)
+        if turn is None or turn.phase == "committed":
+            return None
+        return turn
+
+    def _mark_manual_turn_audio_appended(self, chunk: StreamChunk) -> _OmniManualUserTurn | None:
+        """记录当前 turn 已成功 append provider audio。
+
+        主要逻辑：首段 audio append 成功后把 turn 切换到 `audio_ready`，并立即启动
+        首帧视觉请求；后续视觉采样仍按固定时间间隔执行，不按 audio chunk 计数。
+        参数：`chunk` 为已成功写入 provider 的音频分片。
+        返回值：当前 turn；若没有活跃 turn 则返回 None。
+        异常情况：无。
+        """
+
+        turn = self._current_manual_turn(chunk.session_id)
+        if turn is None or turn.commit_started:
+            return None
+        turn.has_provider_audio = True
+        if turn.phase == "open":
+            turn.phase = "audio_ready"
+        try:
+            duration = int(chunk.duration_ms or 0)
+        except (TypeError, ValueError):
+            duration = 0
+        turn.audio_appended_ms += max(0, duration)
+        self.recorder.record_agent_event(
+            chunk.session_id,
+            {
+                "event": "omni.input_audio.appended_to_turn",
+                "provider": self.omni_config.provider,
+                "turn_id": turn.turn_id,
+                "duration_ms": duration,
+                "audio_appended_ms": turn.audio_appended_ms,
+                "phase": turn.phase,
+            },
+        )
+        if not turn.visual_started and chunk.session_id in self._visual_input_accepting_by_session:
+            turn.visual_started = True
+            self._start_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id, turn=turn)
+        return turn
+
+    def _close_manual_user_turn_for_commit(self, *, user_id: str, session_id: str, reason: str) -> _OmniManualUserTurn | None:
+        """在 `speech_stopped` 后关闭当前用户 turn 并禁止迟到图片。
+
+        主要逻辑：切换为 closing、设置 commit_started，并让视觉 generation 立即失效；
+        不等待 in-flight 图片返回，迟到图片只能进入 runs discarded 事件。
+        参数：`user_id/session_id` 定位会话；`reason` 为关闭来源。
+        返回值：被关闭的 turn，若不存在则返回 None。
+        异常情况：无。
+        """
+
+        turn = self._current_manual_turn(session_id)
+        if turn is None:
+            return None
+        turn.phase = "closing"
+        turn.commit_started = True
+        self._provider_speech_active_by_session.discard(session_id)
+        self._visual_input_accepting_by_session.discard(session_id)
+        self._stop_visual_sampler(
+            user_id=user_id,
+            session_id=session_id,
+            reason=reason,
+            close_stream=False,
+            invalidate_generation=True,
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.turn.stopped",
+                "provider": self.omni_config.provider,
+                "turn_id": turn.turn_id,
+                "reason": reason,
+                "phase": turn.phase,
+                "audio_appended_ms": turn.audio_appended_ms,
+                "has_provider_audio": turn.has_provider_audio,
+            },
+        )
+        return turn
+
+    def _open_response_generation(self, *, session_id: str, reason: str) -> _OmniResponseLifecycle:
+        """创建本地 Omni response generation。
+
+        主要逻辑：`response.create` 请求发出前即建立 generation，使 pending 阶段也能
+        被后续 `speech_started` 打断；provider 返回真实 response_id 后再绑定 key。
+        参数：`session_id` 定位会话；`reason` 为创建来源。
+        返回值：新建 response 生命周期。
+        异常情况：无。
+        """
+
+        generation = self._response_generation_by_session.get(session_id, 0) + 1
+        lifecycle = _OmniResponseLifecycle(generation=generation, state="pending", reason=reason)
+        self._response_generation_by_session[session_id] = generation
+        self._response_lifecycle_by_session[session_id] = lifecycle
+        self._response_key_by_session[session_id] = f"generation:{generation}"
+        self._active_response_sessions.add(session_id)
+        self._assistant_text_by_session.pop(session_id, None)
+        return lifecycle
 
     def bind_tool_gateway(self, tool_gateway: ToolGateway) -> None:
         """绑定 Realtime provider 工具桥使用的 ToolGateway。"""
@@ -1564,13 +1760,10 @@ class OmniRealtimeAgentCore:
             return
         _session_id, provider = self._sessions[chunk.user_id]
         has_payload = bool(chunk.payload)
-        if has_payload:
-            self._audio_since_commit_by_session.add(chunk.session_id)
         try:
-            provider.append_audio(chunk)
+            with self._input_writer_lock(chunk.session_id):
+                provider.append_audio(chunk)
         except Exception as exc:
-            if has_payload:
-                self._audio_since_commit_by_session.discard(chunk.session_id)
             self._mark_session_failed(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1578,6 +1771,10 @@ class OmniRealtimeAgentCore:
                 record={"event": "omni.provider.append_audio.failed"},
             )
             return
+        turn: _OmniManualUserTurn | None = None
+        if has_payload:
+            self._audio_since_commit_by_session.add(chunk.session_id)
+            turn = self._mark_manual_turn_audio_appended(chunk)
         if has_payload:
             self._record_provider_input_audio(chunk)
         self.recorder.record_agent_event(
@@ -1589,17 +1786,22 @@ class OmniRealtimeAgentCore:
                 "payload_size": len(chunk.payload),
                 "final": chunk.final,
                 "duration_ms": chunk.duration_ms,
+                "turn_id": turn.turn_id if turn else None,
+                "audio_appended_ms": turn.audio_appended_ms if turn else None,
             },
         )
         self._event_buffer.record_event(
             "input_audio.appended",
             user_id=chunk.user_id,
             session_id=chunk.session_id,
-            payload={"payload_size": len(chunk.payload), "final": chunk.final},
+            payload={
+                "payload_size": len(chunk.payload),
+                "final": chunk.final,
+                "turn_id": turn.turn_id if turn else None,
+                "audio_appended_ms": turn.audio_appended_ms if turn else None,
+            },
         )
         if chunk.payload:
-            if chunk.session_id in self._visual_input_accepting_by_session:
-                self._start_visual_sampler(user_id=chunk.user_id, session_id=chunk.session_id)
             self._mark_realtime_input_activity(
                 user_id=chunk.user_id,
                 session_id=chunk.session_id,
@@ -1696,7 +1898,8 @@ class OmniRealtimeAgentCore:
         try:
             commit = getattr(provider, "commit_input", None)
             if callable(commit):
-                commit(user_id=user_id, session_id=session_id, reason=reason)
+                with self._input_writer_lock(session_id):
+                    commit(user_id=user_id, session_id=session_id, reason=reason)
             else:
                 self.recorder.record_system_event(
                     {
@@ -1715,7 +1918,23 @@ class OmniRealtimeAgentCore:
                 record={"event": "omni.provider.commit_input.failed"},
             )
             return
-        self._record_event("input.committed", user_id=user_id, session_id=session_id, reason=reason)
+        turn = self._manual_turn_by_session.get(session_id)
+        self._record_event(
+            "input.committed",
+            user_id=user_id,
+            session_id=session_id,
+            reason=reason,
+            turn_id=turn.turn_id if turn else None,
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.input.committed",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+                "turn_id": turn.turn_id if turn else None,
+            },
+        )
 
     def create_response(
         self,
@@ -1740,10 +1959,13 @@ class OmniRealtimeAgentCore:
             self._record_event("response.create.skipped", user_id=user_id, session_id=session_id, reason="session_not_open")
             return
         provider = existing[1]
+        lifecycle = self._open_response_generation(session_id=session_id, reason=reason)
+        turn = self._manual_turn_by_session.get(session_id)
         try:
             create_response = getattr(provider, "create_response", None)
             if callable(create_response):
-                create_response(user_id=user_id, session_id=session_id, reason=reason, instructions=instructions)
+                with self._input_writer_lock(session_id):
+                    create_response(user_id=user_id, session_id=session_id, reason=reason, instructions=instructions)
             else:
                 self.recorder.record_system_event(
                     {
@@ -1768,6 +1990,19 @@ class OmniRealtimeAgentCore:
             session_id=session_id,
             reason=reason,
             has_instructions=instructions is not None,
+            response_generation=lifecycle.generation,
+            turn_id=turn.turn_id if turn else None,
+        )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.response.create.requested",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+                "turn_id": turn.turn_id if turn else None,
+                "response_generation": lifecycle.generation,
+                "has_instructions": instructions is not None,
+            },
         )
 
     def interrupt(self, user_id: str, reason: str) -> None:
@@ -1781,9 +2016,60 @@ class OmniRealtimeAgentCore:
         """
         existing = self._sessions.get(user_id)
         session_id = existing[0] if existing else None
-        response_active = bool(session_id and session_id in self._active_response_sessions)
+        lifecycle = self._response_lifecycle_by_session.get(session_id) if session_id else None
+        cancel_already_requested = bool(
+            lifecycle is not None
+            and lifecycle.interrupted
+            and lifecycle.state in {"cancel_requested", "cancelled"}
+        )
+        response_active = bool(
+            session_id
+            and session_id in self._active_response_sessions
+            and not cancel_already_requested
+        )
+        played_text_available = bool(
+            session_id and "".join(self._assistant_text_by_session.get(session_id, [])).strip()
+        )
         if response_active and session_id:
             self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
+            lifecycle = self._response_lifecycle_by_session.get(session_id)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.cancel.requested",
+                    "user_id": user_id,
+                    "reason": reason,
+                    "response_generation": lifecycle.generation if lifecycle else self._response_generation_by_session.get(session_id),
+                    "response_state": lifecycle.state if lifecycle else None,
+                },
+            )
+        elif cancel_already_requested and session_id:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.cancel.skipped",
+                    "user_id": user_id,
+                    "reason": reason,
+                    "skip_reason": "cancel_already_requested",
+                    "response_generation": lifecycle.generation if lifecycle else self._response_generation_by_session.get(session_id),
+                    "response_state": lifecycle.state if lifecycle else None,
+                },
+            )
+        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
+        if session_id and decision.interrupted_stream_id:
+            lifecycle = self._response_lifecycle_by_session.get(session_id)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.playback.interrupted",
+                    "user_id": user_id,
+                    "reason": reason,
+                    "response_generation": lifecycle.generation if lifecycle else self._response_generation_by_session.get(session_id),
+                    "played_text_available": played_text_available,
+                    "interrupted_stream_id": decision.interrupted_stream_id,
+                    "playback_action": decision.action,
+                },
+            )
         if response_active and existing:
             existing[1].cancel(user_id=user_id, reason=reason)
         elif session_id:
@@ -1802,7 +2088,6 @@ class OmniRealtimeAgentCore:
                 session_id=session_id,
                 payload={"reason": reason, "skip_reason": "no_active_provider_response"},
             )
-        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         self.recorder.record_agent_event(
             session_id or "realtime-interruptions",
             {
@@ -1840,6 +2125,9 @@ class OmniRealtimeAgentCore:
             self._provider_speech_active_by_session.discard(session_id)
             self._visual_input_accepting_by_session.discard(session_id)
             self._audio_since_commit_by_session.discard(session_id)
+            self._manual_turn_by_session.pop(session_id, None)
+            self._response_lifecycle_by_session.pop(session_id, None)
+            self._input_writer_lock_by_session.pop(session_id, None)
             self._visual_sampler_generation_by_session.pop(session_id, None)
             self._visual_turn_id_by_session.pop(session_id, None)
             self._visual_request_in_flight_by_session.discard(session_id)
@@ -2173,6 +2461,9 @@ class OmniRealtimeAgentCore:
         self._provider_speech_active_by_session.discard(session_id)
         self._visual_input_accepting_by_session.discard(session_id)
         self._audio_since_commit_by_session.discard(session_id)
+        self._manual_turn_by_session.pop(session_id, None)
+        self._response_lifecycle_by_session.pop(session_id, None)
+        self._input_writer_lock_by_session.pop(session_id, None)
         existing = self._sessions.pop(user_id, None)
         if existing:
             try:
@@ -2481,6 +2772,12 @@ class OmniRealtimeAgentCore:
 
         response_key = self._response_key_from_record(metadata)
         if self._is_response_inactive(session_id=session_id, response_key=response_key):
+            self._record_late_response_event(
+                session_id=session_id,
+                event_type="response.audio.delta",
+                reason="interrupted_response",
+                response_key=response_key,
+            )
             self.recorder.record_agent_event(
                 session_id,
                 {
@@ -2498,6 +2795,9 @@ class OmniRealtimeAgentCore:
             format=format,
             metadata=metadata,
         )
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None and not lifecycle.interrupted:
+            lifecycle.state = "playing"
         self._set_turn_state(user_id, session_id, "speaking", reason="audio_delta")
         self._sessions_with_provider_output.add(session_id)
 
@@ -2513,6 +2813,12 @@ class OmniRealtimeAgentCore:
 
         response_key = self._response_key_from_record(metadata)
         if self._is_response_inactive(session_id=session_id, response_key=response_key):
+            self._record_late_response_event(
+                session_id=session_id,
+                event_type="response.audio.done",
+                reason="interrupted_response",
+                response_key=response_key,
+            )
             self.recorder.record_agent_event(
                 session_id,
                 {
@@ -2525,6 +2831,9 @@ class OmniRealtimeAgentCore:
             )
             return
         self.output_adapter.emit_audio_done(user_id=user_id, session_id=session_id, metadata=metadata)
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None and not lifecycle.interrupted:
+            lifecycle.state = "done"
         self._set_turn_state(user_id, session_id, "completed", reason="audio_done")
 
     def _track_provider_response_event(self, *, session_id: str, record: dict[str, Any]) -> None:
@@ -2540,14 +2849,71 @@ class OmniRealtimeAgentCore:
         event = str(record.get("event") or "")
         if event == "omni.response.done":
             self._active_response_sessions.discard(session_id)
+            lifecycle = self._response_lifecycle_by_session.get(session_id)
+            if lifecycle is not None:
+                lifecycle.state = "cancelled" if lifecycle.interrupted else "done"
             return
         if event != "omni.response.created":
             return
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is None:
+            lifecycle = self._open_response_generation(session_id=session_id, reason="provider_response_created")
+        incoming_response_key = self._response_key_from_record(record)
+        if lifecycle.interrupted and (
+            (incoming_response_key and incoming_response_key != lifecycle.response_key)
+            or (not incoming_response_key and lifecycle.state_before_cancel != "pending")
+        ):
+            lifecycle = self._open_response_generation(session_id=session_id, reason="provider_response_created_after_interrupt")
+        response_key = incoming_response_key or f"generation:{lifecycle.generation}"
+        lifecycle.response_key = response_key
+        if lifecycle.interrupted:
+            lifecycle.state = "cancelled"
+            self._interrupted_response_key_by_session[session_id] = response_key
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.response.late_event.discarded",
+                    "reason": "interrupted_response",
+                    "event_type": event,
+                    "response_generation": lifecycle.generation,
+                    "response_key": response_key,
+                },
+            )
+            return
+        lifecycle.state = "streaming"
         self._active_response_sessions.add(session_id)
-        self._response_generation_by_session[session_id] = self._response_generation_by_session.get(session_id, 0) + 1
-        generation = self._response_generation_by_session[session_id]
-        self._response_key_by_session[session_id] = self._response_key_from_record(record) or f"generation:{generation}"
+        self._response_key_by_session[session_id] = response_key
         self._assistant_text_by_session.pop(session_id, None)
+
+    def _record_late_response_event(
+        self,
+        *,
+        session_id: str,
+        event_type: str,
+        reason: str,
+        response_key: str = "",
+    ) -> None:
+        """记录被关闭 response generation 的迟到 provider 事件。
+
+        主要逻辑：迟到事件仍进入 runs 便于排障，但不能进入播放或模型上下文。
+        参数：`session_id` 定位会话；`event_type` 为 provider 事件名；`reason`
+        为丢弃原因；`response_key` 为 provider response id。
+        返回值：无。
+        异常情况：无。
+        """
+
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.response.late_event.discarded",
+                "reason": reason,
+                "event_type": event_type,
+                "response_generation": lifecycle.generation if lifecycle else self._response_generation_by_session.get(session_id),
+                "response_state": lifecycle.state if lifecycle else None,
+                "response_key": response_key,
+            },
+        )
 
     def _mark_current_response_interrupted(self, *, user_id: str, session_id: str, reason: str) -> None:
         """标记当前 provider response 已被用户打断。
@@ -2564,11 +2930,17 @@ class OmniRealtimeAgentCore:
         generation = self._response_generation_by_session.get(session_id, 0)
         self._interrupted_response_generation_by_session[session_id] = generation
         self._interrupted_response_key_by_session[session_id] = self._response_key_by_session.get(session_id, f"generation:{generation}")
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None:
+            lifecycle.interrupted = True
+            lifecycle.state_before_cancel = lifecycle.state
+            lifecycle.state = "cancel_requested"
+            lifecycle.reason = reason
         partial = "".join(self._assistant_text_by_session.get(session_id, [])).strip()
         if partial and self.control_service is not None:
-            played_text = partial
-            unheard_text = ""
-            split_source = "omni_generated_tail"
+            played_text = ""
+            unheard_text = partial
+            split_source = "unconfirmed_playback_prefix"
             estimate = getattr(self.output_service, "estimate_played_text_prefix", None)
             if callable(estimate):
                 try:
@@ -2583,21 +2955,24 @@ class OmniRealtimeAgentCore:
                             "error": f"{type(exc).__name__}: {exc}",
                         },
                     )
-                if isinstance(estimated_played, str) and len(estimated_played) < len(partial):
+                if isinstance(estimated_played, str) and estimated_played:
                     played_text = estimated_played
                     unheard_text = partial[len(estimated_played) :]
                     split_source = "output_service_estimate"
-            content = f"{played_text}<用户打断>{unheard_text}"
-            self.control_service.append_message(
-                user_id,
-                {
-                    "session_id": session_id,
-                    "role": "assistant",
-                    "content": content,
-                    "event": "assistant_text.interrupted",
-                    "source": "omni_realtime",
-                },
-            )
+            if played_text:
+                content = f"{played_text}<用户打断>"
+                self.control_service.append_message(
+                    user_id,
+                    {
+                        "session_id": session_id,
+                        "role": "assistant",
+                        "content": content,
+                        "event": "assistant_text.interrupted",
+                        "source": "omni_realtime",
+                        "interrupted": True,
+                        "playback_complete": False,
+                    },
+                )
         else:
             played_text = ""
             unheard_text = ""
@@ -2609,6 +2984,7 @@ class OmniRealtimeAgentCore:
                 "event": "omni.response.marked_interrupted",
                 "reason": reason,
                 "response_generation": generation,
+                "response_state": lifecycle.state if lifecycle is not None else None,
                 "partial_chars": len(partial),
                 "played_chars": len(played_text),
                 "unheard_chars": len(unheard_text),
@@ -2620,6 +2996,9 @@ class OmniRealtimeAgentCore:
         """判断当前 provider response 是否已被打断。"""
 
         generation = self._response_generation_by_session.get(session_id, 0)
+        lifecycle = self._response_lifecycle_by_session.get(session_id)
+        if lifecycle is not None and lifecycle.generation == generation:
+            return lifecycle.interrupted
         return self._interrupted_response_generation_by_session.get(session_id) == generation
 
     def _response_key_from_record(self, record: dict[str, Any] | None) -> str:
@@ -2693,9 +3072,9 @@ class OmniRealtimeAgentCore:
             return
         self._mark_current_response_interrupted(user_id=user_id, session_id=session_id, reason=reason)
         existing = self._sessions.get(user_id)
+        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         if existing:
             existing[1].cancel(user_id=user_id, reason=reason)
-        decision = self.output_service.interrupt_user(user_id, session_id=session_id, reason=reason)
         if active_stream_id is None:
             self.recorder.record_agent_event(
                 session_id,
@@ -2841,26 +3220,28 @@ class OmniRealtimeAgentCore:
         异常情况：视觉采样启动失败由采样线程内部记录，不阻塞音频输入。
         """
 
+        stream_id = self._audio_stream_by_session.get(session_id, "")
         self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
+        self.interrupt(user_id=user_id, reason=reason)
+        turn = self._start_manual_user_turn(user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
         self._provider_speech_active_by_session.add(session_id)
         self._visual_input_accepting_by_session.add(session_id)
-        if session_id in self._audio_since_commit_by_session:
-            self._start_visual_sampler(user_id=user_id, session_id=session_id)
-        else:
-            self.recorder.record_agent_event(
-                session_id,
-                {
-                    "event": "omni.visual_sampler.deferred_until_audio",
-                    "provider": self.omni_config.provider,
-                    "reason": reason,
-                },
-            )
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.visual_sampler.deferred_until_audio",
+                "provider": self.omni_config.provider,
+                "reason": reason,
+                "turn_id": turn.turn_id,
+            },
+        )
         self.recorder.record_agent_event(
             session_id,
             {
                 "event": "omni.conversation_speech.started",
                 "provider": self.omni_config.provider,
                 "reason": reason,
+                "turn_id": turn.turn_id,
                 "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
                 "audio_since_commit": session_id in self._audio_since_commit_by_session,
             },
@@ -2878,20 +3259,14 @@ class OmniRealtimeAgentCore:
         """
 
         self._notify_user_activity(user_id=user_id, session_id=session_id, reason=reason)
-        self._provider_speech_active_by_session.discard(session_id)
-        self._stop_visual_sampler(
-            user_id=user_id,
-            session_id=session_id,
-            reason=reason,
-            close_stream=False,
-            invalidate_generation=False,
-        )
+        turn = self._close_manual_user_turn_for_commit(user_id=user_id, session_id=session_id, reason=reason)
         self.recorder.record_agent_event(
             session_id,
             {
                 "event": "omni.conversation_speech.stopped",
                 "provider": self.omni_config.provider,
                 "reason": reason,
+                "turn_id": turn.turn_id if turn else None,
                 "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
                 "audio_since_commit": session_id in self._audio_since_commit_by_session,
             },
@@ -2910,12 +3285,17 @@ class OmniRealtimeAgentCore:
         self._provider_speech_active_by_session.discard(session_id)
         self._visual_input_accepting_by_session.discard(session_id)
         self._audio_since_commit_by_session.discard(session_id)
+        turn = self._manual_turn_by_session.get(session_id)
+        if turn is not None:
+            turn.phase = "committed"
+            turn.commit_started = True
         self.recorder.record_agent_event(
             session_id,
             {
                 "event": "omni.conversation_input.committed",
                 "provider": self.omni_config.provider,
                 "reason": reason,
+                "turn_id": turn.turn_id if turn else None,
             },
         )
 
@@ -2929,7 +3309,27 @@ class OmniRealtimeAgentCore:
 
         event = str(record.get("event") or "")
         if event == "omni.input_audio_buffer.speech_started":
-            self._start_visual_sampler(user_id=user_id, session_id=session_id)
+            turn = self._current_manual_turn(session_id)
+            if turn is None:
+                turn = self._start_manual_user_turn(
+                    user_id=user_id,
+                    session_id=session_id,
+                    stream_id=self._audio_stream_by_session.get(session_id, ""),
+                    reason="provider_speech_started",
+                )
+                if session_id in self._audio_since_commit_by_session:
+                    turn.phase = "audio_ready"
+                    turn.has_provider_audio = True
+                else:
+                    self._record_visual_frame_discarded(
+                        session_id=session_id,
+                        frame_index=0,
+                        reason="visual_turn_inactive",
+                        generation=self._visual_sampler_generation_by_session.get(session_id, 0),
+                    )
+            if turn.has_provider_audio and not turn.commit_started:
+                turn.visual_started = True
+                self._start_visual_sampler(user_id=user_id, session_id=session_id, turn=turn)
         elif event == "omni.input_audio_buffer.speech_stopped":
             self._stop_visual_sampler(
                 user_id=user_id,
@@ -2946,7 +3346,13 @@ class OmniRealtimeAgentCore:
                 close_stream=False,
             )
 
-    def _start_visual_sampler(self, *, user_id: str, session_id: str) -> None:
+    def _start_visual_sampler(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        turn: _OmniManualUserTurn | None = None,
+    ) -> None:
         """启动当前用户语音 turn 的实时视觉帧消费线程。"""
 
         if not bool(self.omni_config.realtime_video_enabled):
@@ -2959,7 +3365,7 @@ class OmniRealtimeAgentCore:
             return
         stop_event = threading.Event()
         generation = self._visual_sampler_generation_by_session.get(session_id, 0) + 1
-        turn_id = new_id("turn")
+        turn_id = turn.turn_id if turn is not None else new_id("turn")
         self._visual_sampler_generation_by_session[session_id] = generation
         self._visual_turn_id_by_session[session_id] = turn_id
         self._visual_sampler_stop_by_session[session_id] = stop_event
@@ -2985,6 +3391,7 @@ class OmniRealtimeAgentCore:
                 "interval_seconds": interval,
                 "generation": generation,
                 "turn_id": turn_id,
+                "audio_offset_ms": turn.audio_appended_ms if turn is not None else None,
             },
         )
         thread.start()
@@ -3164,7 +3571,7 @@ class OmniRealtimeAgentCore:
         while not stop_event.is_set():
             started_at = time.monotonic()
             try:
-                if not self._can_append_visual_frame(session_id=session_id, generation=generation):
+                if not self._can_append_visual_frame(session_id=session_id, generation=generation, turn_id=turn_id):
                     self._record_visual_frame_discarded(
                         session_id=session_id,
                         frame_index=frame_index,
@@ -3206,7 +3613,7 @@ class OmniRealtimeAgentCore:
             elapsed = time.monotonic() - started_at
             stop_event.wait(max(0.0, interval - elapsed))
 
-    def _can_append_visual_frame(self, *, session_id: str, generation: int) -> bool:
+    def _can_append_visual_frame(self, *, session_id: str, generation: int, turn_id: str) -> bool:
         """判断图片是否仍属于当前 provider 语音输入 buffer。
 
         主要逻辑：采样线程可能正在等待端侧上传图片；等待期间 provider 可能已经
@@ -3215,10 +3622,15 @@ class OmniRealtimeAgentCore:
         committed，并且本轮 buffer 已经追加过音频时，才允许追加图片。
         """
 
+        turn = self._current_manual_turn(session_id)
         return (
-            self._visual_sampler_generation_by_session.get(session_id) == generation
+            turn is not None
+            and turn.turn_id == turn_id
+            and turn.phase == "audio_ready"
+            and turn.has_provider_audio
+            and not turn.commit_started
+            and self._visual_sampler_generation_by_session.get(session_id) == generation
             and session_id in self._visual_input_accepting_by_session
-            and session_id in self._audio_since_commit_by_session
         )
 
     def _record_visual_frame_discarded(
@@ -3241,6 +3653,10 @@ class OmniRealtimeAgentCore:
                 "reason": reason,
                 "generation": generation,
                 "current_generation": self._visual_sampler_generation_by_session.get(session_id),
+                "turn_id": self._visual_turn_id_by_session.get(session_id),
+                "current_turn_id": self._manual_turn_by_session.get(session_id).turn_id
+                if self._manual_turn_by_session.get(session_id)
+                else None,
                 "speech_active": session_id in self._provider_speech_active_by_session,
                 "visual_input_accepting": session_id in self._visual_input_accepting_by_session,
                 "audio_since_commit": session_id in self._audio_since_commit_by_session,
@@ -3290,6 +3706,19 @@ class OmniRealtimeAgentCore:
         existing = self._sessions.get(user_id)
         if not existing or existing[0] != session_id:
             return
+        turn = self._current_manual_turn(session_id)
+        audio_offset_ms = turn.audio_appended_ms if turn and turn.turn_id == turn_id else 0
+        self.recorder.record_agent_event(
+            session_id,
+            {
+                "event": "omni.visual_frame.requested",
+                "provider": self.omni_config.provider,
+                "turn_id": turn_id,
+                "frame_index": frame_index,
+                "audio_offset_ms": audio_offset_ms,
+                "timeout_seconds": timeout_seconds,
+            },
+        )
         self._visual_request_in_flight_by_session.add(session_id)
         try:
             asset = self.asset_service.request_asset(
@@ -3351,7 +3780,23 @@ class OmniRealtimeAgentCore:
         existing = self._sessions.get(user_id)
         if not existing or existing[0] != session_id:
             return False
-        if not self._can_append_visual_frame(session_id=session_id, generation=generation):
+        asset_turn_id = str(asset.metadata.get("turn_id") or "") if isinstance(asset.metadata, dict) else ""
+        if asset_turn_id and asset_turn_id != turn_id:
+            self._record_visual_frame_discarded(
+                session_id=session_id,
+                frame_index=frame_index,
+                reason="visual_asset_turn_mismatch",
+                generation=generation,
+                asset_id=asset.asset_id,
+            )
+            self._clear_visual_turn_buffer(
+                user_id=user_id,
+                session_id=session_id,
+                turn_id=turn_id,
+                reason="visual_asset_turn_mismatch",
+            )
+            return False
+        if not self._can_append_visual_frame(session_id=session_id, generation=generation, turn_id=turn_id):
             self._record_visual_frame_discarded(
                 session_id=session_id,
                 frame_index=frame_index,
@@ -3371,20 +3816,43 @@ class OmniRealtimeAgentCore:
             return False
         appended_ids.add(asset.asset_id)
         provider = existing[1]
-        appended = OmniVisualAppender(
-            asset_service=self.asset_service,
-            recorder=self.recorder,
-            provider_name=self.omni_config.provider,
-            default_direction=self.omni_config.visual_direction,
-        ).append_agent_inline(
-            provider=provider,
-            asset=asset,
-            context=VisualAppendContext(user_id=user_id, session_id=session_id, turn_id=turn_id),
-            frame_index=frame_index,
-            source=source,
-        )
+        with self._input_writer_lock(session_id):
+            if not self._can_append_visual_frame(session_id=session_id, generation=generation, turn_id=turn_id):
+                self._record_visual_frame_discarded(
+                    session_id=session_id,
+                    frame_index=frame_index,
+                    reason="visual_turn_inactive_before_provider_append",
+                    generation=generation,
+                    asset_id=asset.asset_id,
+                )
+                appended_ids.discard(asset.asset_id)
+                return False
+            appended = OmniVisualAppender(
+                asset_service=self.asset_service,
+                recorder=self.recorder,
+                provider_name=self.omni_config.provider,
+                default_direction=self.omni_config.visual_direction,
+            ).append_agent_inline(
+                provider=provider,
+                asset=asset,
+                context=VisualAppendContext(user_id=user_id, session_id=session_id, turn_id=turn_id),
+                frame_index=frame_index,
+                source=source,
+            )
         if not appended:
             appended_ids.discard(asset.asset_id)
+        else:
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "omni.visual_frame.appended",
+                    "provider": self.omni_config.provider,
+                    "turn_id": turn_id,
+                    "frame_index": frame_index,
+                    "asset_id": asset.asset_id,
+                    "source": source,
+                },
+            )
         return appended
 
     def _capture_provider_message(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
@@ -3422,6 +3890,12 @@ class OmniRealtimeAgentCore:
             return
         if event in {"omni.response.audio_transcript.delta", "omni.response.vision.delta", "omni.response.output_text.delta"}:
             if self._is_response_inactive(session_id=session_id, response_key=self._response_key_from_record(record)):
+                self._record_late_response_event(
+                    session_id=session_id,
+                    event_type=event,
+                    reason="interrupted_response",
+                    response_key=self._response_key_from_record(record),
+                )
                 return
             delta = str(record.get("delta") or record.get("text") or "")
             if delta:
@@ -3430,6 +3904,12 @@ class OmniRealtimeAgentCore:
         if event in {"omni.response.audio_transcript.done", "omni.response.vision.done", "omni.response.output_text.done"}:
             if self._is_response_inactive(session_id=session_id, response_key=self._response_key_from_record(record)):
                 self._assistant_text_by_session.pop(session_id, None)
+                self._record_late_response_event(
+                    session_id=session_id,
+                    event_type=event,
+                    reason="interrupted_response",
+                    response_key=self._response_key_from_record(record),
+                )
                 self.recorder.record_agent_event(
                     session_id,
                     {
