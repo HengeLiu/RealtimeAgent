@@ -170,7 +170,14 @@ def _serve_static_page(*, html_path: Path, host: str, port: int, print_url: bool
 
 
 def _open_url(url: str) -> None:
-    """按当前平台打开 URL。"""
+    """按当前平台打开 URL。
+
+    主要逻辑：本地桌面环境调用系统打开命令；Linux 服务器经常没有
+    `xdg-open`，此时只提示用户手动打开 URL，不影响静态服务继续运行。
+    参数：`url` 为要打开的页面地址。
+    返回值：无。
+    异常情况：系统打开命令存在但执行失败时抛出异常，便于暴露真实桌面环境问题。
+    """
 
     if sys.platform == "darwin":
         command = ["open", url]
@@ -180,7 +187,10 @@ def _open_url(url: str) -> None:
         command = ["cmd", "/c", "start", "", url]
     else:
         raise RuntimeError(f"unsupported platform for web open: {sys.platform}")
-    subprocess.run(command, check=True)
+    try:
+        subprocess.run(command, check=True)
+    except FileNotFoundError:
+        print(f"无法自动打开浏览器，请手动访问：{url}")
 
 
 class _QuietStaticHandler(SimpleHTTPRequestHandler):

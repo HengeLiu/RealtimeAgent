@@ -5,6 +5,8 @@ import sys
 import tomllib
 from pathlib import Path
 
+from realtime_agent.cli import web as web_cli
+
 
 AUDIO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -195,6 +197,27 @@ def test_web_chat_open_print_url_uses_local_http_origin() -> None:
     url = completed.stdout.strip()
     assert url.startswith("http://127.0.0.1:8766/")
     assert "/examples/device_app_demo/web-chat/" in url
+
+
+def test_linux_open_url_missing_xdg_open_keeps_cli_usable(monkeypatch, capsys) -> None:
+    """测试目标：确认 Linux 服务器缺少 `xdg-open` 时 CLI 不会崩溃。
+
+    测试方法：把平台伪装成 Linux，并让 subprocess.run 抛出 FileNotFoundError。
+    预期结果：`_open_url` 打印手动访问提示后正常返回，静态服务可继续运行。
+    """
+
+    monkeypatch.setattr(web_cli.sys, "platform", "linux")
+
+    def missing_command(*args: object, **kwargs: object) -> None:
+        raise FileNotFoundError("xdg-open")
+
+    monkeypatch.setattr(web_cli.subprocess, "run", missing_command)
+
+    web_cli._open_url("http://127.0.0.1:8766/examples/device_app_demo/web-chat/")
+
+    output = capsys.readouterr().out
+    assert "无法自动打开浏览器" in output
+    assert "http://127.0.0.1:8766/examples/device_app_demo/web-chat/" in output
 
 
 def test_package_check_can_write_report(tmp_path) -> None:

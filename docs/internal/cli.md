@@ -57,6 +57,13 @@ Web Chat 通过 JavaScript Device SDK 接入 server，适合验证浏览器麦�
 uv run realtime-agent.web-chat.open --print-url
 ```
 
+在没有图形桌面的 Linux 服务器上，系统可能没有 `xdg-open`，CLI 会打印 URL 并继续
+保持静态服务运行。需要从本机浏览器访问远程服务器时，把监听地址改成对外可访问地址：
+
+```bash
+uv run realtime-agent.web-chat.open --host 0.0.0.0
+```
+
 ## 浏览器眼镜模拟组件
 
 打开 browser-glass 开发支持组件：
