@@ -607,6 +607,7 @@ class RealtimeAgentApp:
         self._active_device_by_user: dict[str, str] = {}
         self._device_dialogs_by_user: dict[str, DeviceDialogState] = {}
         self.output_service.add_output_finished_listener(self._handle_output_finished)
+        self.web_app_hooks: list = []
 
     def _extension_tool_enabled(self, tool_name: str) -> bool:
         """判断 C 线内置扩展工具是否启用。"""

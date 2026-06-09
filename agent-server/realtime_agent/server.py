@@ -4,15 +4,20 @@ import argparse
 import asyncio
 import importlib
 import json
+import os
+import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.app_loader import load_app_config, load_config_as_app
+from realtime_agent.control import HmacSignedTokenIssuer
 from realtime_agent.observability import (
     LogContext,
     configure_console_logging,
@@ -345,7 +350,7 @@ class RealtimeAgentHttpServer:
     def create_web_app(self) -> web.Application:
         """创建 aiohttp 应用。
 
-        主要逻辑：注册 HTTP debug 路由和两条 WebSocket 路由。
+        主要逻辑：注册 HTTP debug 路由、设备配对路由和 WebSocket 路由。
         参数：无。
         返回值：`web.Application`。
         异常情况：无。
@@ -363,9 +368,62 @@ class RealtimeAgentHttpServer:
         app.router.add_get("/ws/stream/audio/output", self.audio_output_ws)
         app.router.add_get("/ws/stream/visual/input", self.visual_input_ws)
         app.router.add_get("/ws/stream", self.stream_ws)
+
+        # Mount device pairing routes
+        self._mount_device_routes(app)
+
+        # Run web app hooks registered by app modules
+        for hook in self.audio_app.web_app_hooks:
+            try:
+                hook(app)
+            except Exception as e:
+                self.logger.error(f"web_app_hook failed: {e}")
+
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
         return app
+
+    def _mount_device_routes(self, app: web.Application) -> None:
+        """挂载设备配对/注册/绑定 API 路由。"""
+        try:
+            # Add audio-server to path for device module import
+            repo_root = Path(__file__).resolve().parent.parent.parent
+            audio_server_path = str(repo_root / "audio-server")
+            if audio_server_path not in sys.path:
+                sys.path.insert(0, audio_server_path)
+
+            from audio_chat.device.pairing import PairingService
+            from audio_chat.device.routes import register_device_routes
+
+            # Resolve token secret from env
+            secret_env = self.audio_app.config.signed_token_secret_env
+            secret = os.environ.get(secret_env, "")
+            if not secret:
+                self.logger.warning(
+                    "Device pairing routes mounted WITHOUT token secret "
+                    f"(set {secret_env} env var for production)"
+                )
+                secret = "dev-only-placeholder-secret"
+
+            token_issuer = HmacSignedTokenIssuer(secret)
+
+            # Resolve server host for device callbacks
+            server_host = self.audio_app.config.server_host
+            if server_host in ("0.0.0.0", "127.0.0.1", "localhost"):
+                server_host = _detect_lan_ip()
+
+            pairing_service = PairingService(
+                token_issuer=token_issuer,
+                server_host=server_host,
+                server_port=self.audio_app.config.server_port,
+            )
+
+            register_device_routes(app, pairing_service)
+            self.logger.info(
+                f"Device pairing routes mounted (server={server_host}:{self.audio_app.config.server_port})"
+            )
+        except Exception as e:
+            self.logger.error(f"Failed to mount device pairing routes: {e}")
 
     async def _on_startup(self, app: web.Application) -> None:
         """注册 server 后台清理任务。
@@ -375,18 +433,20 @@ class RealtimeAgentHttpServer:
         """
 
         app[REALTIME_AGENT_SWEEPER_TASK_KEY] = asyncio.create_task(self._sweeper_loop())
+        app["device_status_push_task"] = asyncio.create_task(self._device_status_push_loop())
 
     async def _on_cleanup(self, app: web.Application) -> None:
         """停止 server 后台清理任务。"""
 
-        task = app.get(REALTIME_AGENT_SWEEPER_TASK_KEY)
-        if task is None:
-            return
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
+        for key in (REALTIME_AGENT_SWEEPER_TASK_KEY, "device_status_push_task"):
+            task = app.get(key)
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
 
     async def _sweeper_loop(self) -> None:
         """后台清理循环。"""
@@ -395,6 +455,141 @@ class RealtimeAgentHttpServer:
         while True:
             self.audio_app.run_maintenance_once()
             await asyncio.sleep(interval)
+
+    def _notify_peer_device_online(
+        self,
+        user_id: str,
+        new_device_id: str,
+        client_type: str,
+        device_name: str,
+    ) -> None:
+        """通知同用户其他在线设备：新设备已上线。"""
+
+        try:
+            active = self.audio_app.control_service.get_active_device_set(user_id)
+            for device in active.devices:
+                if device.device_id == new_device_id:
+                    continue
+                conn = self.connections.get(device.device_id)
+                if conn is None:
+                    continue
+                notification = Event(
+                    event_name="control.device.registered",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    payload={
+                        "device_id": new_device_id,
+                        "client_type": client_type,
+                        "device_name": device_name,
+                        "online": True,
+                        "peer_notification": True,
+                    },
+                )
+                conn.push_event(notification)
+                log_info(
+                    self.logger,
+                    "已通知设备 peer 上线",
+                    LogContext(
+                        user_id=user_id,
+                        device_id=new_device_id,
+                        fields={"target_device": device.device_id, "client_type": client_type},
+                    ),
+                )
+        except Exception as exc:
+            log_error(
+                self.logger,
+                f"通知 peer 设备上线失败: {exc}",
+                LogContext(user_id=user_id, device_id=new_device_id),
+            )
+
+    def _notify_peer_device_offline(
+        self,
+        user_id: str,
+        offline_device_id: str,
+        reason: str = "disconnected",
+    ) -> None:
+        """通知同用户其他在线设备：某设备已离线。"""
+
+        try:
+            active = self.audio_app.control_service.get_active_device_set(user_id)
+            for device in active.devices:
+                if device.device_id == offline_device_id:
+                    continue
+                conn = self.connections.get(device.device_id)
+                if conn is None:
+                    continue
+                notification = Event(
+                    event_name="control.device.state.changed",
+                    user_id=user_id,
+                    producer_id=SERVER_PRODUCER_ID,
+                    payload={
+                        "device_id": offline_device_id,
+                        "connection_state": "offline",
+                        "reason": reason,
+                        "peer_notification": True,
+                    },
+                )
+                conn.push_event(notification)
+                log_info(
+                    self.logger,
+                    "已通知设备 peer 离线",
+                    LogContext(
+                        user_id=user_id,
+                        device_id=offline_device_id,
+                        fields={"target_device": device.device_id, "reason": reason},
+                    ),
+                )
+        except Exception as exc:
+            log_error(
+                self.logger,
+                f"通知 peer 设备离线失败: {exc}",
+                LogContext(user_id=user_id, device_id=offline_device_id),
+            )
+
+    async def _device_status_push_loop(self) -> None:
+        """周期性向 App 推送眼镜在线状态。"""
+
+        interval = 30.0
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                self._push_device_status_updates()
+            except Exception as exc:
+                log_error(self.logger, f"设备状态推送失败: {exc}")
+
+    def _push_device_status_updates(self) -> None:
+        """遍历所有用户，向 phone 设备推送 glasses 状态。"""
+
+        users_with_devices: dict[str, list] = {}
+        for device in self.audio_app.control_service._devices.values():
+            if device.connection_state != "online":
+                continue
+            users_with_devices.setdefault(device.user_id, []).append(device)
+
+        for user_id, devices in users_with_devices.items():
+            phones = [d for d in devices if d.properties.get("device_role") == "phone"]
+            glasses = [d for d in devices if d.properties.get("device_role") in ("glass", "front_glass")]
+            if not phones or not glasses:
+                continue
+            for phone in phones:
+                conn = self.connections.get(phone.device_id)
+                if conn is None:
+                    continue
+                for glass in glasses:
+                    status_event = Event(
+                        event_name="control.device.state.changed",
+                        user_id=user_id,
+                        producer_id=SERVER_PRODUCER_ID,
+                        payload={
+                            "device_id": glass.device_id,
+                            "device_name": glass.device_name,
+                            "client_type": glass.client_type,
+                            "connection_state": glass.connection_state,
+                            "last_seen_at": glass.last_seen_at,
+                            "online": glass.connection_state == "online",
+                        },
+                    )
+                    conn.push_event(status_event)
 
     async def health(self, _request: web.Request) -> web.Response:
         """返回服务健康状态。
@@ -549,6 +744,13 @@ class RealtimeAgentHttpServer:
                                     },
                                 ),
                             )
+                            # Notify other online devices of the same user
+                            self._notify_peer_device_online(
+                                user_id=event.user_id,
+                                new_device_id=device_id,
+                                client_type=event.payload.get("client_type", "unknown"),
+                                device_name=event.payload.get("device_name") or event.payload.get("name", ""),
+                            )
                     else:
                         self.audio_app.publish_control_event(event)
                 except Exception as exc:
@@ -569,15 +771,23 @@ class RealtimeAgentHttpServer:
             if sender_task is not None:
                 sender_task.cancel()
             if connection is not None:
+                offline_device_id = connection.device_id
+                user_id = self.audio_app.control_service._bindings.get(offline_device_id)
                 self.audio_app.mark_device_connection_offline(
-                    connection.device_id,
+                    offline_device_id,
                     connection_id=connection.connection_id,
                     reason="control_ws_disconnected",
                 )
+                if user_id:
+                    self._notify_peer_device_offline(
+                        user_id,
+                        offline_device_id,
+                        reason="control_ws_disconnected",
+                    )
                 log_info(
                     self.logger,
                     "控制 WebSocket 已断开",
-                    LogContext(device_id=connection.device_id, fields={"connection_id": connection.connection_id}),
+                    LogContext(device_id=offline_device_id, fields={"connection_id": connection.connection_id}),
                 )
         return ws
 
@@ -915,6 +1125,18 @@ def _load_app_module(path: str, audio_app: RealtimeAgentApp) -> None:
         factory(audio_app)
     except TypeError:
         factory()
+
+
+def _detect_lan_ip() -> str:
+    """检测本机局域网 IP（非 127.0.0.1）。"""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
 
 
 def main(argv: list[str] | None = None) -> None:

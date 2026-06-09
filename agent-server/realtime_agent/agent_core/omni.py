@@ -286,14 +286,23 @@ class QwenOmniRealtimeAdapter:
                 callbacks.provider_event({"event": "omni.websocket.opened", "provider": "qwen"})
 
             def on_close(self, close_status_code: Any, close_msg: Any) -> None:  # pragma: no cover - provider callback
-                callbacks.provider_event(
-                    {
-                        "event": "omni.websocket.closed",
-                        "provider": "qwen",
-                        "code": close_status_code,
-                        "message": str(close_msg),
-                    }
-                )
+                event_data = {
+                    "event": "omni.websocket.closed",
+                    "provider": "qwen",
+                    "code": close_status_code,
+                    "message": str(close_msg),
+                }
+                callbacks.provider_event(event_data)
+                # Propagate unexpected close as error so agent core can recover
+                if close_status_code and int(close_status_code) not in (1000, 1001):
+                    callbacks.error(
+                        f"Qwen websocket closed unexpectedly: {close_status_code} {close_msg}",
+                        {
+                            "provider": "qwen",
+                            "close_code": close_status_code,
+                            "close_message": str(close_msg),
+                        },
+                    )
 
             def on_event(self, message: dict[str, Any]) -> None:  # pragma: no cover - provider callback
                 adapter._handle_provider_event(message)
@@ -2630,15 +2639,13 @@ class OmniRealtimeAgentCore:
     def _handle_visual_sampler_provider_event(self, *, user_id: str, session_id: str, record: dict[str, Any]) -> None:
         """根据 provider VAD 事件管理视觉采样生命周期。
 
-        主要逻辑：端侧摄像头预览可以常开，但向模型上传的 RGB 帧只能跟随真实用户
-        语音 turn。provider 确认 speech_started 后开始按需请求单帧，speech_stopped 后
-        停止后续请求，避免会话空闲阶段继续采集或复用旧图。
+        主要逻辑：视觉采样不再跟随语音自动启动。摄像头只在 LLM 显式调用
+        capture_photo 等工具时按需使用，避免每次说话都请求摄像头帧。
+        speech_stopped 和 response.done 时清理残留状态。
         """
 
         event = str(record.get("event") or "")
-        if event == "omni.input_audio_buffer.speech_started":
-            self._start_visual_sampler(user_id=user_id, session_id=session_id)
-        elif event == "omni.input_audio_buffer.speech_stopped":
+        if event == "omni.input_audio_buffer.speech_stopped":
             self._stop_visual_sampler(
                 user_id=user_id,
                 session_id=session_id,
