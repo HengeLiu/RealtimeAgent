@@ -77,19 +77,29 @@ def test_memory_service_writes_searches_and_deletes_user_memory_json(tmp_path) -
     assert (tmp_path / "memory" / "user-001" / "memory.json").exists()
 
 
-def test_memory_disabled_does_not_expose_memory_tools(tmp_path) -> None:
-    """测试目标：验证 memory.enabled=false 不影响现有内置工具。
+def test_memory_disabled_exposes_memory_tools_with_structured_error(tmp_path) -> None:
+    """测试目标：验证 memory.enabled=false 时记忆 Tool 仍是稳定内置入口。
 
-    测试方法：创建默认 App，读取 ToolRegistry 中的工具名。
-    预期结果：基础工具仍存在，memory_search 和 manage_memory 不暴露给 Agent。
+    测试方法：创建默认 App，读取 ToolRegistry 中的工具名并调用 memory_search。
+    预期结果：模型仍能看到 memory_search 和 manage_memory；执行时返回明确权限错误。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), memory_enabled=False))
 
     names = app.tool_registry.list_names()
     assert "query_device_state" in names
-    assert "memory_search" not in names
-    assert "manage_memory" not in names
+    assert "memory_search" in names
+    assert "manage_memory" in names
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="memory_search",
+            user_id="user-memory-disabled",
+            session_id="session-memory-disabled",
+            input_data={"topic": "任意主题"},
+        )
+    )
+    assert result.ok is False
+    assert result.error["code"] == "permission_denied"
 
 
 def test_memory_enabled_exposes_and_executes_builtin_tools(tmp_path) -> None:

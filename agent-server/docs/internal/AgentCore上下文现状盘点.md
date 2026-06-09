@@ -35,13 +35,13 @@
 | --- | --- | --- | --- | --- |
 | `query_device_state` | SDK 内置 | 查询当前用户在线设备、设备名称、能力、连接状态或播放状态 | `include_properties` | 低风险，偏调试/状态查询。 |
 | `task_runtime_manager` | SDK 内置 | 查询、取消、列出 Task；启动任务必须调用具体 `start_*` Tool | `action`, `task_id`, `include_terminal` | 和 TaskStartTool 配套。 |
-| `memory_search` | SDK 内置 | 读取已保存长期记忆详情；不用于维护记忆 | `topic`, `topics` | 只有 memory enabled 且工具允许时有用。 |
-| `manage_memory` | SDK 内置 | 用户要求记住、更新、忘记、删除，或自然提供值得保存的信息时调用 | `memory_context` | 会触发记忆管理子 Agent。 |
-| `query_route_plan` | external-business-app Tool | 用户询问怎么走、需要路线时调用，目的地不明确先确认 | `destination`, `origin`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
-| `search_web` | external-business-app Tool | 用户明确要求搜索、查询资料、查最新公开信息，或问题需要外部资料时调用 | `query`, `limit`, `timeout_seconds` | 当前无 MCP 时返回 fallback。 |
-| `start_find_object_task` | TaskStartTool 自动生成 | 启动找物后台任务；任务返回前不要自行回答已找到、位置、距离或方向 | `object_name`, `timeout_seconds` | 由 `FindObjectTask.description` 和通用 TaskStartTool 描述拼成。 |
+| `close_audio_session` | SDK 内置 | 用户明确要求结束语音会话时关闭当前连续对话 | `reason`, `user_close_phrase` | 必须提供用户原话中的明确关闭短语。 |
+| `search_web` | SDK 内置 | 使用 Bocha 查询公开网页资料 | `query`, `limit`, `freshness`, `summary`, `timeout_seconds` | 依赖 `BOCHA_SEARCH_API_KEY`，未配置时返回 fallback。 |
+| `query_route_plan` | SDK 内置 | 通过 AMap MCP 查询路线，目的地不明确先确认 | `destination`, `origin`, `timeout_seconds` | 优先使用应用 MCP；未配置时读取 `AMAP_MCP_*` 环境变量。 |
+| `memory_search` | SDK 内置 | 读取已保存长期记忆详情；不用于维护记忆 | `topic`, `topics` | `memory.enabled=false` 时可见但返回权限错误。 |
+| `manage_memory` | SDK 内置 | 用户要求记住、更新、忘记、删除，或自然提供值得保存的信息时调用 | `memory_context` | `memory.enabled=true` 时会触发记忆管理子 Agent。 |
+| `search_conversation_history` | SDK 内置 | 检索 runs 中的历史对话记录 | `query`, `session_id`, `limit` | 只读扫描当前用户 `messages.jsonl`。 |
 | `start_timer_task` | TaskStartTool 自动生成 | 启动计时器后台任务，到点通过 speaker 播报提醒 | `seconds`, `message`, `auto_fire` | `auto_fire` 字段当前模型可见。 |
-| `start_traffic_light_task` | TaskStartTool 自动生成 | 启动红绿灯识别后台任务，返回通行建议 | `timeout_seconds` | description 中仍写有 YOLO mock。 |
 
 ## 当前存在但默认不可见的工具提示词
 

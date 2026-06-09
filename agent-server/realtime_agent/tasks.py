@@ -12,6 +12,8 @@ from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
+from pydantic import BaseModel, Field
+
 from realtime_agent.asset import ArtifactRef
 from realtime_agent.errors import RealtimeAgentError, ErrorCode
 from realtime_agent.protocol import Event, SERVER_PRODUCER_ID, new_id
@@ -580,6 +582,109 @@ class JsonlTaskStore(TaskStore):
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+class TimerTaskInput(BaseModel):
+    """计时器 Task 启动参数。"""
+
+    seconds: int = Field(
+        ge=0,
+        description="计时器时长，单位秒。模型必须把分钟、小时换算成秒；普通用户计时应大于 0。",
+    )
+    message: str = Field(
+        default="",
+        description="计时结束时播报给用户的话；用户没有指定内容时可以留空。",
+    )
+    auto_fire: bool = Field(
+        default=True,
+        description="是否由 SDK 调度器自动到点触发提醒；普通计时器应保持 true。",
+    )
+
+
+class TimerTask(BaseTask):
+    """计时器后台任务。
+
+    主要功能：使用 TaskEngine 的延时信号机制创建计时器，到点后通过
+    TaskSignalBridge 直接通知用户，并把任务标记为完成。
+    主要方法：`run()` 调度到点信号，`on_finish()` 处理 `timer.due`。
+    主要属性：`task_spec` 声明模型可见启动 Tool 的输入 schema。
+    """
+
+    task_spec = TaskSpec(
+        task_type="timer_task",
+        input_model=TimerTaskInput,
+        start_result_timeout_seconds=1.0,
+    )
+    description = "启动计时器后台任务。用于用户要求倒计时、计时、稍后提醒或到点提示；任务会立即返回 task_id，并在指定秒数后通过 speaker 播报提醒。"
+
+    async def run(self, context: TaskContext) -> TaskRunResult:
+        """启动计时器并注册到点信号。
+
+        主要逻辑：从 TaskRef metadata 读取启动输入，先记录 timer.scheduled
+        信号，再通过 `context.schedule_signal()` 调度 `timer.due`。到点通知由
+        TaskSignalBridge 处理，Task 本身只负责状态闭环。
+        参数：`context` 为 SDK 注入的 Task 上下文。
+        返回值：启动阶段 `TaskRunResult`，供自动生成的 start_timer_task 返回。
+        异常情况：调度失败会由 TaskEngine 捕获并转为任务失败。
+        """
+
+        input_data = dict(context.metadata.get("input") or {})
+        seconds = max(0, int(input_data.get("seconds") or 0))
+        message = str(input_data.get("message") or "").strip() or f"{seconds} 秒计时器到点了"
+        auto_fire = bool(input_data.get("auto_fire", True))
+        if context.engine is not None:
+            context.engine.emit_signal(
+                TaskSignal(
+                    task_id=context.task_ref.task_id,
+                    task_type=context.task_ref.task_type,
+                    signal_name="timer.scheduled",
+                    user_id=context.user_id,
+                    session_id=context.session_id,
+                    payload={"seconds": seconds, "message": message},
+                    allow_direct_notify=False,
+                )
+            )
+        if auto_fire:
+            await context.schedule_signal(
+                "timer.due",
+                payload={"seconds": seconds, "message": message},
+                delay_seconds=seconds,
+                priority="high",
+                requires_agent_decision=False,
+                allow_direct_notify=True,
+            )
+        text = "计时器已启动。" if seconds <= 0 else f"{seconds} 秒计时器已启动。"
+        return TaskRunResult.started(message=text, instructions=f"请告诉用户{text}")
+
+    async def on_finish(self, context: TaskContext, event: TaskEventView) -> None:
+        """处理计时器到点事件。
+
+        主要逻辑：只响应 `timer.due` 信号转换来的 finish 事件，完成任务并记录
+        notified=true。
+        参数：`context` 为任务上下文，`event` 为 TaskEngine 投递的 finish 事件。
+        返回值：无。
+        异常情况：无关 finish 事件会被忽略。
+        """
+
+        payload = dict(event.event.payload or {})
+        if payload.get("signal_name") != "timer.due":
+            return
+        await context.complete(
+            {"seconds": int(payload.get("seconds") or 0), "message": str(payload.get("message") or ""), "notified": True},
+            summary="计时器到点",
+        )
+
+    async def on_cancel(self, context: TaskContext, event: TaskEventView | None = None) -> None:
+        """取消计时器任务。"""
+
+        if context.engine is None:
+            return
+        for schedule in context.engine.list_scheduled_signals():
+            if schedule.get("task_id") == context.task_ref.task_id:
+                context.engine.cancel_scheduled_signal(str(schedule.get("schedule_id") or ""))
+
+
+BUILTIN_TASKS = (TimerTask,)
 
 
 class TaskRegistry:

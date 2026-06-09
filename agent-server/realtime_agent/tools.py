@@ -3,11 +3,16 @@ from __future__ import annotations
 import asyncio
 import importlib
 import inspect
+import json
+import os
 import pkgutil
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, AsyncIterator, Literal
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -15,6 +20,7 @@ from realtime_agent.asset import ArtifactRef, AssetRef
 from realtime_agent.control import PublishResult
 from realtime_agent.errors import RealtimeAgentError, ErrorCode
 from realtime_agent.memory import memory_record_to_public_dict
+from realtime_agent.mcp import McpGateway, McpServerSpec, McpToolSpec
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, new_id
 
 
@@ -536,7 +542,12 @@ class ToolContextFactory:
     def create(self, *, user_id: str, session_id: str, tool_name: str | None = None) -> ToolContext:
         context_cls = SystemToolContext if tool_name in SYSTEM_CONTEXT_TOOL_NAMES else ToolContext
         internal_devices = DeviceRuntime(user_id=user_id, app=self.app, allow_long_running=False)
-        kwargs = {}
+        kwargs = {
+            "metadata": {
+                "app_name": getattr(getattr(self.app, "config", None), "app_name", ""),
+                "runs_root": str(getattr(getattr(self.app, "recorder", None), "runs_root", "")),
+            }
+        }
         kwargs.update({"memory": self.memory_service, "skills": self.skill_service, "mcp": self.mcp_gateway})
         if context_cls is SystemToolContext:
             kwargs.update(
@@ -2484,6 +2495,483 @@ def _normalize_timer_task_input(input_data: dict) -> dict:
     return normalized
 
 
+BOCHA_SEARCH_API_URL_DEFAULT = "https://api.bochaai.com/v1/web-search"
+AMAP_MCP_ROUTE_TOOL = "amap.route_plan"
+AMAP_MCP_GEO_TOOL = "amap.geo"
+
+
+class SearchWebInput(BaseModel):
+    """联网搜索 Tool 输入参数。"""
+
+    query: str = Field(description="要搜索的问题、关键词或公开资料主题。")
+    limit: int = Field(default=3, ge=1, le=10, description="最多返回的搜索结果数量。")
+    freshness: str = Field(default="noLimit", description="搜索时间范围，例如 noLimit、oneDay、oneWeek、oneMonth、oneYear。")
+    summary: bool = Field(default=True, description="是否请求 Bocha 返回摘要内容。")
+    timeout_seconds: float = Field(default=5, gt=0, description="等待搜索结果的超时时间，单位秒。")
+
+
+class SearchWebOutput(BaseModel):
+    """联网搜索 Tool 输出结构。"""
+
+    provider: str = Field(description="搜索结果来源。")
+    fallback: bool = Field(description="是否进入无结果降级。")
+    query: str = Field(description="实际搜索词。")
+    items: list[dict] = Field(default_factory=list, description="搜索结果列表。")
+    search: dict | None = Field(default=None, description="搜索返回的结构化结果。")
+    error: str | None = Field(default=None, description="降级或失败原因。")
+
+
+class SearchWebTool(BaseTool):
+    """联网搜索 Tool。
+
+    主要功能：通过 Bocha Web Search API 查询公开网页信息，并把结果归一成
+    标题、链接、摘要、站点和发布时间，供模型组织回答。
+    """
+
+    spec = ToolSpec(
+        name="search_web",
+        description="当用户明确要求联网搜索、查询资料、查最新公开信息，或问题需要外部资料时调用。",
+        input_model=SearchWebInput,
+        output_model=SearchWebOutput,
+        capability_type="tool",
+        tags=["search", "web"],
+        progress_message=("我查一下资料。", "稍等，我搜索一下。"),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行联网搜索。
+
+        主要逻辑：读取 `BOCHA_SEARCH_API_KEY` 和 `BOCHA_SEARCH_API_URL`，用
+        Bocha Web Search API 获取结果；缺少配置或网络失败时返回明确 fallback，
+        不伪装成真实搜索成功。
+        参数：`context` 为 SDK 注入上下文，`input_data` 包含 query、limit、freshness。
+        返回值：成功时返回归一化搜索结果。
+        异常情况：参数缺失返回结构化失败；外部服务异常返回 fallback 结果。
+        """
+
+        query = str(input_data.get("query") or "").strip()
+        if not query:
+            return ToolResult.failed(ToolError("query is required", code=ErrorCode.INVALID_ARGUMENT))
+        api_key = os.getenv("BOCHA_SEARCH_API_KEY") or os.getenv("BOCHA_API_KEY")
+        if not api_key:
+            return ToolResult.success(
+                data={"provider": "fallback", "fallback": True, "query": query, "items": [], "error": "BOCHA_SEARCH_API_KEY is not configured"},
+                message="搜索服务未配置，暂时没有搜索结果。",
+            )
+        try:
+            search = await asyncio.to_thread(
+                _call_bocha_web_search,
+                api_key=api_key,
+                query=query,
+                count=int(input_data.get("limit") or 3),
+                freshness=str(input_data.get("freshness") or "noLimit"),
+                summary=bool(input_data.get("summary", True)),
+                timeout_seconds=float(input_data.get("timeout_seconds") or 5),
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.success(
+                data={"provider": "fallback", "fallback": True, "query": query, "items": [], "error": str(exc)},
+                message="搜索服务暂时不可用。",
+            )
+        return ToolResult.success(
+            data={"provider": "bocha", "fallback": False, "query": query, "items": search["items"], "search": search},
+            message="搜索完成。",
+        )
+
+
+def _call_bocha_web_search(
+    *,
+    api_key: str,
+    query: str,
+    count: int,
+    freshness: str,
+    summary: bool,
+    timeout_seconds: float,
+) -> dict:
+    """调用 Bocha Web Search API 并归一化结果。
+
+    主要逻辑：向 `BOCHA_SEARCH_API_URL` 指定接口发送 JSON 请求，默认使用
+    Bocha 官方 Web Search 地址；响应中只保留模型回答需要的轻量字段。
+    参数：`api_key/query/count/freshness/summary/timeout_seconds` 为搜索请求参数。
+    返回值：包含 provider、api_url、raw 和 items 的字典。
+    异常情况：HTTP、网络、JSON 或响应结构异常时抛出 RuntimeError。
+    """
+
+    api_url = os.getenv("BOCHA_SEARCH_API_URL") or BOCHA_SEARCH_API_URL_DEFAULT
+    payload = {"query": query, "freshness": freshness, "summary": summary, "count": max(1, min(10, int(count)))}
+    request = urllib_request.Request(
+        api_url,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout_seconds) as response:
+            body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Bocha 搜索 HTTP {exc.code}: {detail}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Bocha 搜索网络失败：{exc.reason}") from exc
+    try:
+        raw = json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Bocha 搜索返回非 JSON：{exc}") from exc
+    pages = (((raw.get("data") or {}).get("webPages") or {}).get("value") or [])
+    if not isinstance(pages, list):
+        raise RuntimeError("Bocha 搜索返回结构缺少 data.webPages.value[]")
+    items = [_normalize_bocha_page(page) for page in pages[: payload["count"]] if isinstance(page, dict)]
+    return {"provider": "bocha", "api_url": api_url, "raw": raw, "items": items}
+
+
+def _normalize_bocha_page(page: dict) -> dict:
+    """把 Bocha 单条网页结果归一成模型更容易消费的结构。"""
+
+    return {
+        "title": str(page.get("name") or page.get("title") or "").strip(),
+        "url": str(page.get("url") or "").strip(),
+        "snippet": str(page.get("snippet") or "").strip(),
+        "summary": str(page.get("summary") or page.get("content") or "").strip(),
+        "site_name": str(page.get("siteName") or "").strip(),
+        "date_published": str(page.get("datePublished") or "").strip(),
+    }
+
+
+class QueryRoutePlanInput(BaseModel):
+    """路线规划 Tool 输入参数。"""
+
+    destination: str = Field(description="用户想去的目的地名称、地址或经纬度。")
+    origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名或经纬度。")
+    timeout_seconds: float = Field(default=8, gt=0, description="单次 MCP 调用超时时间，单位秒。")
+
+
+class QueryRoutePlanOutput(BaseModel):
+    """路线规划 Tool 输出结构。"""
+
+    route_ready: bool = Field(description="是否准备好可用路线。")
+    provider: str = Field(description="路线来源。")
+    destination: str = Field(description="导航目的地。")
+    origin: str = Field(description="导航起点。")
+    route: dict | None = Field(default=None, description="MCP 返回的路线结构化结果。")
+    error: str | None = Field(default=None, description="失败或 fallback 原因。")
+
+
+class QueryRoutePlanTool(BaseTool):
+    """AMap MCP 路线规划 Tool。
+
+    主要功能：通过 `context.mcp` 或 `AMAP_MCP_*` 环境变量构造的 MCP Gateway
+    调用 AMap 路线规划能力。地址会先尝试用 AMap geo 工具转成经纬度。
+    """
+
+    spec = ToolSpec(
+        name="query_route_plan",
+        description="当用户想去某个地点、询问怎么走或需要路线规划时调用。目的地不明确时先向用户确认。",
+        input_model=QueryRoutePlanInput,
+        output_model=QueryRoutePlanOutput,
+        capability_type="mcp",
+        tags=["navigation", "amap", "mcp"],
+        progress_message=("我先规划一下路线。", "稍等，我查一下怎么走。"),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行路线规划。
+
+        主要逻辑：优先复用应用配置的 MCP Gateway；如果未启用或未配置 AMap，
+        则从 `AMAP_MCP_URL`、`AMAP_MCP_BEARER_TOKEN`、`AMAP_MCP_API_KEY`
+        临时构造 Gateway 调用 `maps_geo` 和 `maps_direction_walking`。
+        参数：`context` 为 SDK 注入上下文，`input_data` 包含 origin/destination。
+        返回值：成功时返回路线和地理编码信息；失败时返回 fallback 结构。
+        异常情况：目的地缺失返回结构化失败；外部 MCP 异常返回 fallback。
+        """
+
+        destination = str(input_data.get("destination") or "").strip()
+        origin = str(input_data.get("origin") or "当前位置").strip() or "当前位置"
+        timeout_seconds = float(input_data.get("timeout_seconds") or 8)
+        if not destination:
+            return ToolResult.failed(ToolError("destination is required", code=ErrorCode.INVALID_ARGUMENT))
+        try:
+            mcp = _resolve_amap_mcp_gateway(getattr(context, "mcp", None))
+            origin_location, origin_geo = _route_point_for_mcp(mcp, value=origin, label="起点", timeout_seconds=timeout_seconds)
+            destination_location, destination_geo = _route_point_for_mcp(
+                mcp,
+                value=destination,
+                label="终点",
+                timeout_seconds=timeout_seconds,
+            )
+            route = mcp.call(
+                tool_name=AMAP_MCP_ROUTE_TOOL,
+                arguments={"origin": origin_location, "destination": destination_location},
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return ToolResult.success(
+                data={
+                    "route_ready": False,
+                    "provider": "fallback",
+                    "origin": origin,
+                    "destination": destination,
+                    "route": None,
+                    "error": str(exc),
+                },
+                message="路线规划服务暂时不可用。",
+            )
+        return ToolResult.success(
+            data={
+                "route_ready": True,
+                "provider": "amap_mcp",
+                "origin": origin,
+                "destination": destination,
+                "origin_location": origin_location,
+                "destination_location": destination_location,
+                "origin_geo": origin_geo,
+                "destination_geo": destination_geo,
+                "route": route,
+            },
+            message="路线已准备。",
+        )
+
+
+def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
+    """返回可调用 AMap 的 MCP Gateway。
+
+    主要逻辑：如果应用已配置 MCP，优先使用；否则根据 `AMAP_MCP_*` 环境变量
+    构造一个只包含 AMap geo 和步行路线规划的临时 Gateway。
+    参数：`configured_gateway` 为 ToolContext 注入的 MCP Gateway。
+    返回值：可调用 `amap.geo` 和 `amap.route_plan` 的对象。
+    异常情况：环境变量不足时后续 MCP 调用会返回明确错误。
+    """
+
+    if configured_gateway is not None:
+        try:
+            tool_names = {tool.name for tool in configured_gateway.list_tools()}
+            if AMAP_MCP_ROUTE_TOOL in tool_names:
+                return configured_gateway
+        except Exception:
+            pass
+    headers = {}
+    bearer_token = os.getenv("AMAP_MCP_BEARER_TOKEN") or ""
+    api_key = os.getenv("AMAP_MCP_API_KEY") or ""
+    if bearer_token:
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    if api_key:
+        headers["x-api-key"] = api_key
+    gateway = McpGateway(enabled=True)
+    gateway.register_server(
+        McpServerSpec(
+            name="amap",
+            transport="streamable_http",
+            url=os.getenv("AMAP_MCP_URL") or "",
+            headers=headers,
+        )
+    )
+    gateway.register_tool(McpToolSpec(name=AMAP_MCP_GEO_TOOL, server="amap", target_name="maps_geo"))
+    gateway.register_tool(McpToolSpec(name=AMAP_MCP_ROUTE_TOOL, server="amap", target_name="maps_direction_walking"))
+    return gateway
+
+
+def _looks_like_lnglat(value: str) -> bool:
+    """判断字符串是否已经是 `经度,纬度` 坐标。"""
+
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 2:
+        return False
+    try:
+        longitude = float(parts[0])
+        latitude = float(parts[1])
+    except ValueError:
+        return False
+    return -180 <= longitude <= 180 and -90 <= latitude <= 90
+
+
+def _route_point_for_mcp(mcp: Any, *, value: str, label: str, timeout_seconds: float) -> tuple[str, dict | None]:
+    """把地址、地点名或坐标转换成 AMap 路线规划可用坐标。"""
+
+    if _looks_like_lnglat(value):
+        return value, None
+    geo_result = mcp.call(tool_name=AMAP_MCP_GEO_TOOL, arguments={"address": value}, timeout_seconds=timeout_seconds)
+    return _extract_geo_location(geo_result, label)
+
+
+def _extract_geo_location(call_result: dict, label: str) -> tuple[str, dict]:
+    """从 AMap geo MCP 结果中提取第一个可用坐标。"""
+
+    parsed = _mcp_text_json(call_result)
+    candidates = parsed.get("return") or parsed.get("geocodes") or []
+    if isinstance(candidates, dict):
+        candidates = [candidates]
+    if not isinstance(candidates, list):
+        raise ValueError(f"{label}地理编码结果格式不正确")
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        location = str(item.get("location") or item.get("lnglat") or "").strip()
+        if _looks_like_lnglat(location):
+            return location, item
+    raise ValueError(f"{label}未找到可用坐标")
+
+
+def _mcp_text_json(call_result: dict) -> dict:
+    """从 MCP `content[text]` 或直接 JSON 响应中解析对象。"""
+
+    result = dict(call_result.get("result") or call_result)
+    if result.get("isError"):
+        raise ValueError(_mcp_first_text(result) or "mcp tool returned error")
+    for item in result.get("content") or []:
+        if not isinstance(item, dict) or item.get("type") != "text":
+            continue
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return parsed
+    if isinstance(result, dict):
+        return result
+    raise ValueError("mcp response has no json object")
+
+
+def _mcp_first_text(result: dict) -> str:
+    """读取 MCP result 中第一段文本，主要用于错误说明。"""
+
+    for item in result.get("content") or []:
+        if isinstance(item, dict) and item.get("type") == "text":
+            return str(item.get("text") or "").strip()
+    return ""
+
+
+class SearchConversationHistoryInput(BaseModel):
+    """历史对话检索 Tool 输入参数。"""
+
+    query: str = Field(default="", description="要检索的关键词；留空时返回最近历史消息。")
+    session_id: str = Field(default="", description="可选会话编号；留空时检索当前用户所有会话。")
+    limit: int = Field(default=5, ge=1, le=20, description="最多返回多少条历史片段。")
+
+
+class SearchConversationHistoryTool(BaseTool):
+    """历史对话检索 Tool。
+
+    主要功能：只读扫描 runs 目录中的 `messages.jsonl`，按用户、会话和关键词
+    返回轻量历史片段，供模型回答“我刚才说过什么”等问题。
+    """
+
+    spec = ToolSpec(
+        name="search_conversation_history",
+        description="当用户询问历史对话、刚才说过什么、之前提到的信息或需要从 runs 产物检索历史消息时调用。",
+        input_model=SearchConversationHistoryInput,
+        output_model=dict,
+        capability_type="tool",
+        tags=["history", "runs"],
+        progress_message=("我查一下历史对话。", "稍等，我看一下之前的记录。"),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """检索历史对话。
+
+        主要逻辑：从上下文 metadata 读取 runs_root，只读当前 user_id 目录下的
+        `messages.jsonl`；关键词匹配采用轻量包含匹配，不解析或修改运行产物。
+        参数：`context` 为 SDK 注入上下文，`input_data` 包含 query、session_id、limit。
+        返回值：匹配消息片段和来源路径。
+        异常情况：runs_root 不存在时返回空结果。
+        """
+
+        runs_root = Path(str((context.metadata or {}).get("runs_root") or "runs/default-app")).expanduser()
+        query = str(input_data.get("query") or "").strip()
+        session_id = str(input_data.get("session_id") or "").strip()
+        limit = max(1, min(20, int(input_data.get("limit") or 5)))
+        matches = await asyncio.to_thread(
+            _search_conversation_messages,
+            runs_root=runs_root,
+            user_id=context.user_id,
+            session_id=session_id,
+            query=query,
+            limit=limit,
+        )
+        message = "已找到历史对话。" if matches else "没有找到匹配的历史对话。"
+        return ToolResult.success(
+            data={"query": query, "session_id": session_id or None, "matches": matches, "count": len(matches)},
+            message=message,
+        )
+
+
+def _search_conversation_messages(
+    *,
+    runs_root: Path,
+    user_id: str,
+    session_id: str,
+    query: str,
+    limit: int,
+) -> list[dict]:
+    """扫描 runs 中的 messages.jsonl 并返回匹配片段。"""
+
+    user_root = runs_root / user_id
+    if not user_root.is_dir():
+        return []
+    files = [user_root / session_id / "messages.jsonl"] if session_id else list(user_root.glob("*/messages.jsonl"))
+    existing = [path for path in files if path.is_file()]
+    existing.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    rows: list[dict] = []
+    query_lower = query.lower()
+    for path in existing:
+        for line_number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), start=1):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            text = _message_record_text(record)
+            if query_lower and query_lower not in text.lower():
+                continue
+            rows.append(
+                {
+                    "session_id": path.parent.name,
+                    "line": line_number,
+                    "role": str(record.get("role") or record.get("speaker") or ""),
+                    "text": text[:1000],
+                    "source": str(path),
+                }
+            )
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
+def _message_record_text(record: Any) -> str:
+    """从不同 messages.jsonl 记录形态中提取可检索文本。"""
+
+    if isinstance(record, str):
+        return record
+    if not isinstance(record, dict):
+        return ""
+    candidates = [record.get("text"), record.get("transcript"), record.get("content"), record.get("message")]
+    parts: list[str] = []
+    for value in candidates:
+        parts.extend(_text_fragments(value))
+    return "\n".join(part for part in parts if part).strip()
+
+
+def _text_fragments(value: Any) -> list[str]:
+    """递归提取消息 content 中的文本片段。"""
+
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, dict):
+        parts = []
+        for key in ("text", "content", "transcript", "message"):
+            parts.extend(_text_fragments(value.get(key)))
+        return parts
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            parts.extend(_text_fragments(item))
+        return parts
+    return []
+
+
 class MemorySearchTool(BaseTool):
     """按主题读取长期记忆详情的内置 Tool。"""
 
@@ -2645,11 +3133,14 @@ BUILTIN_TOOLS = (
     QueryDeviceStateTool,
     TaskRuntimeManagerTool,
     CloseAudioSessionTool,
+    SearchWebTool,
+    QueryRoutePlanTool,
+    MemorySearchTool,
+    ManageMemoryTool,
+    SearchConversationHistoryTool,
 )
 
 EXTENSION_BUILTIN_TOOLS = (
-    MemorySearchTool,
-    ManageMemoryTool,
     ReadSkillTool,
     McpCallTool,
 )
@@ -2658,6 +3149,7 @@ SYSTEM_CONTEXT_TOOL_NAMES = {
     TaskRuntimeManagerTool.spec.name,
     MemorySearchTool.spec.name,
     ManageMemoryTool.spec.name,
+    SearchConversationHistoryTool.spec.name,
     ReadSkillTool.spec.name,
     McpCallTool.spec.name,
 }

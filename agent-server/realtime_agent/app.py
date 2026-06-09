@@ -24,7 +24,7 @@ from realtime_agent.output import OutputService, TtsProviderConfig
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from realtime_agent.skills import SkillService
 from realtime_agent.stream import StreamHandle, StreamService
-from realtime_agent.tasks import JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
+from realtime_agent.tasks import BUILTIN_TASKS, JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
 from realtime_agent.tools import (
     AssetFacade,
     BUILTIN_TOOLS,
@@ -446,6 +446,8 @@ class RealtimeAgentApp:
             max_running_per_user=self.config.tasks_max_running_per_user,
         )
         self.discovery_errors: list[dict[str, str]] = []
+        for task_cls in BUILTIN_TASKS:
+            self.task_engine.register(task_cls)
         if self.config.tasks_discover_enabled:
             task_discovery = TaskAutoDiscovery()
             for task_cls in task_discovery.discover(
@@ -489,17 +491,28 @@ class RealtimeAgentApp:
                     continue
                 self.tool_registry.register(tool)
             self.discovery_errors.extend(tool_discovery.errors)
-        for task_info in self.task_engine.list_task_types():
+        builtin_task_types = {task_cls.spec().task_type for task_cls in BUILTIN_TASKS}
+        task_infos = sorted(
+            self.task_engine.list_task_types(),
+            key=lambda item: (str(item.get("task_type") or "") not in builtin_task_types, str(item.get("task_type") or "")),
+        )
+        for task_info in task_infos:
             task_type = str(task_info.get("task_type") or "").strip()
             if not task_type:
                 continue
             task_cls = self.task_engine.registry.get(task_type)
             task_spec = task_cls.spec()
+            start_tool_name = task_spec.start_tool_name or str(task_info.get("start_tool_name") or "")
+            if start_tool_name in self.tool_registry.list_names() and task_type not in builtin_task_types:
+                fallback_tool_name = f"start_{task_type}"
+                start_tool_name = fallback_tool_name if fallback_tool_name not in self.tool_registry.list_names() else start_tool_name
+            if start_tool_name in self.tool_registry.list_names():
+                continue
             start_tool = TaskStartTool(
                 task_type=task_type,
                 description=str(getattr(task_cls, "description", "") or f"启动 {task_type} 后台任务。"),
                 input_model=task_spec.input_model,
-                tool_name=task_spec.start_tool_name or str(task_info.get("start_tool_name") or ""),
+                tool_name=start_tool_name,
                 timeout_seconds=task_spec.start_result_timeout_seconds,
             )
             self.tool_registry.register(start_tool)

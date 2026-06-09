@@ -75,7 +75,9 @@ class CapturePhotoTool(BaseTool):
 
 ## 写一个 Task
 
-Task 适合处理持续动作或后台动作。下面是简化后的计时器 Task 结构：
+Task 适合处理持续动作或后台动作。SDK 已经内置 `timer_task`，默认会暴露
+`start_timer_task` 给模型，用于倒计时、稍后提醒和到点提示。下面的简化代码展示
+自定义 Task 的结构，业务应用可以按同样方式实现自己的后台任务：
 
 ```python
 from pydantic import BaseModel, Field
