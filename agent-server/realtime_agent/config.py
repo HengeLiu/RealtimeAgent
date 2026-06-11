@@ -267,7 +267,9 @@ class SkillConfig:
 class McpConfig:
     enabled: bool = False
     config_path: str = "mcp.json"
-    default_timeout_seconds: float = 30.0
+    default_timeout_seconds: float = 3.0
+    prepare_on_startup: bool = True
+    prepare_timeout_seconds: float = 3.0
 
 
 @dataclass(frozen=True)
@@ -284,7 +286,8 @@ class ToolConfig:
     builtin_enabled: bool = True
     allowlist: list[str] = field(default_factory=list)
     denylist: list[str] = field(default_factory=list)
-    default_timeout_seconds: int = 30
+    default_timeout_seconds: float = 3.0
+    max_wait_timeout_seconds: float = 3.0
     allow_parallel_calls: bool = True
     discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     extra: dict[str, Any] = field(default_factory=dict)
@@ -383,7 +386,12 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
         tasks=_task_config(data.get("tasks", {})),
         memory=_memory_config(data.get("memory", {})),
         skill=SkillConfig(**_known(data.get("skill", {}), {"enabled", "roots", "allow_tool_policy"})),
-        mcp=McpConfig(**_known(data.get("mcp", {}), {"enabled", "config_path", "default_timeout_seconds"})),
+        mcp=McpConfig(
+            **_known(
+                data.get("mcp", {}),
+                {"enabled", "config_path", "default_timeout_seconds", "prepare_on_startup", "prepare_timeout_seconds"},
+            )
+        ),
         endpoint_defaults=data.get("endpoint_defaults", {}),
         observability=ObservabilityConfig(**data.get("observability", {})),
         dev_checks=DevChecksConfig(**_dev_checks(data.get("dev_checks", {}))),
@@ -492,6 +500,7 @@ def _tool_config(data: dict[str, Any]) -> ToolConfig:
         "allowlist",
         "denylist",
         "default_timeout_seconds",
+        "max_wait_timeout_seconds",
         "allow_parallel_calls",
     }
     values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}

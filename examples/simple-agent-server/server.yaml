@@ -158,7 +158,10 @@ tools:
   denylist:
     - "interpret_image"
     - "interpret_current_view"
-  default_timeout_seconds: 30
+  # 前台 Tool 默认等待时间，单位秒；未单独声明 timeout_seconds 的 Tool 使用该值。
+  default_timeout_seconds: 3
+  # 大模型等待 Tool 返回的硬上限；Tool 自己声明的 timeout_seconds 不允许超过该值。
+  max_wait_timeout_seconds: 3
   allow_parallel_calls: true
 
 tasks:
@@ -190,7 +193,12 @@ skill:
 mcp:
   enabled: false
   config_path: ""
-  default_timeout_seconds: 30
+  # MCP 单次 HTTP 请求默认超时。MCP 专用 Tool 仍受 tools.max_wait_timeout_seconds 约束。
+  default_timeout_seconds: 3
+  # 服务启动时是否预热 MCP streamable_http session。
+  prepare_on_startup: true
+  # MCP 启动预热单次 HTTP 请求超时。
+  prepare_timeout_seconds: 3
 
 endpoint_defaults:
   wake_word: "browser"

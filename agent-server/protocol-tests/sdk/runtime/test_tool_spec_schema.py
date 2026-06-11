@@ -125,7 +125,7 @@ def test_tool_spec_validation_error_returns_structured_tool_result(tmp_path) -> 
 
 
 def test_plain_tool_without_timeout_uses_short_action_default(tmp_path) -> None:
-    """测试目标：验证普通 Tool 未声明超时时由架构层使用 10 秒默认值。
+    """测试目标：验证普通 Tool 未声明超时时由架构层使用 3 秒默认值。
 
     测试方法：注册未声明 timeout_seconds 的 Tool，读取 ToolGateway 内部 schema。
     预期结果：执行层保留短生命周期默认超时，不需要每个 Tool 重复声明。
@@ -137,19 +137,19 @@ def test_plain_tool_without_timeout_uses_short_action_default(tmp_path) -> None:
     schema = next(item for item in app.tool_gateway.schemas() if item["name"] == "weather_spec")
 
     assert schema["timeout_seconds"] == TOOL_DEFAULT_TIMEOUT_SECONDS
-    assert TOOL_DEFAULT_TIMEOUT_SECONDS == 10.0
+    assert TOOL_DEFAULT_TIMEOUT_SECONDS == 3.0
 
 
 def test_tool_registry_rejects_timeout_over_short_action_limit(tmp_path) -> None:
-    """测试目标：验证普通 Tool 不能声明超过 10 秒的运行超时。
+    """测试目标：验证普通 Tool 不能声明超过模型等待上限的运行超时。
 
     测试方法：注册 timeout_seconds 超过上限的 Tool。
-    预期结果：注册阶段抛出 ToolError，提示开发者应改用 Task。
+    预期结果：注册阶段抛出 ToolError，提示开发者调低 Tool 超时或改用 Task。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
 
-    with pytest.raises(ToolError, match="max short-action timeout"):
+    with pytest.raises(ToolError, match="model wait timeout"):
         app.tool_registry.register(OverlongTool())
 
 

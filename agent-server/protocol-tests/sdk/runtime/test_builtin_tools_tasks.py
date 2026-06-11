@@ -5,7 +5,9 @@ import json
 import time
 
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.errors import ErrorCode
 from realtime_agent.protocol import Event
+from realtime_agent.tools import BaseTool, ToolError, ToolRegistry, ToolResult, ToolSpec
 
 
 class RecordingEndpoint:
@@ -79,6 +81,36 @@ def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> Non
         "task_runtime_manager",
     }.issubset(tool_names)
     assert [item["task_type"] for item in app.task_engine.list_task_types()] == ["timer_task"]
+
+
+def test_tool_gateway_uses_three_second_default_and_rejects_over_budget_tool(tmp_path) -> None:
+    """测试目标：验证前台 Tool 默认超时为 3 秒，且单个 Tool 不能超过模型等待上限。
+
+    测试方法：读取内置 Tool schema 的 timeout_seconds，再向注册表注册一个声明
+    4 秒超时的测试 Tool。
+    预期结果：默认 schema 为 3 秒；超出 `max_wait_timeout_seconds` 的 Tool 被拒绝。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    schemas = {schema["name"]: schema for schema in app.tool_gateway.schemas()}
+
+    class SlowTool(BaseTool):
+        """测试用慢 Tool。"""
+
+        spec = ToolSpec(name="slow_tool", description="测试慢工具", timeout_seconds=4)
+
+        async def run(self, context, input_data):
+            return ToolResult.success(data={})
+
+    assert schemas["query_system_time"]["timeout_seconds"] == 3
+    registry = ToolRegistry(default_timeout_seconds=3, max_wait_timeout_seconds=3)
+    try:
+        registry.register(SlowTool())
+    except ToolError as exc:
+        assert exc.code == ErrorCode.PROTOCOL_ERROR
+        assert exc.details["max_wait_timeout_seconds"] == 3
+    else:
+        raise AssertionError("超出模型等待上限的 Tool 不应注册成功")
 
 
 def test_search_web_calls_bocha_api_and_normalizes_items(tmp_path, monkeypatch) -> None:

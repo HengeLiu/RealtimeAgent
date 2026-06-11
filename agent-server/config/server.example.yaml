@@ -252,7 +252,10 @@ tools:
   # 禁止暴露给模型的工具名，优先级高于 allowlist。
   denylist: []
   # 单次 Tool 调用默认超时秒数。
-  default_timeout_seconds: 30
+  # 前台 Tool 默认等待时间，单位秒；未单独声明 timeout_seconds 的 Tool 使用该值。
+  default_timeout_seconds: 3
+  # 大模型等待 Tool 返回的硬上限；Tool 自己声明的 timeout_seconds 不允许超过该值。
+  max_wait_timeout_seconds: 3
   # 是否允许并行工具调用。
   allow_parallel_calls: true
 
@@ -313,8 +316,12 @@ mcp:
   enabled: false
   # MCP 配置文件路径，支持 JSON / YAML。
   config_path: ""
-  # 单次 MCP 调用默认超时秒数。
-  default_timeout_seconds: 30
+  # MCP 单次 HTTP 请求默认超时秒数。MCP 专用 Tool 仍受 tools.max_wait_timeout_seconds 约束。
+  default_timeout_seconds: 3
+  # 服务启动时是否预热 MCP streamable_http session。
+  prepare_on_startup: true
+  # MCP 启动预热单次 HTTP 请求超时。
+  prepare_timeout_seconds: 3
 
 # endpoint_defaults 给参考端侧提供默认能力口径；真实端侧仍以注册声明为准。
 endpoint_defaults:

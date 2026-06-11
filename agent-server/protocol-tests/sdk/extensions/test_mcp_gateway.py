@@ -176,6 +176,66 @@ def test_mcp_gateway_calls_streamable_http_tool(tmp_path, monkeypatch) -> None:
     assert calls[2]["payload"]["params"]["name"] == "maps_direction_walking"
 
 
+def test_mcp_gateway_prepare_reuses_streamable_http_session(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 MCP Gateway 可在服务启动阶段预热 Streamable HTTP session。
+
+    测试方法：先调用 `prepare()`，再调用同一 MCP tool，并记录 HTTP JSON-RPC 方法。
+    预期结果：prepare 阶段完成 initialize/initialized，正式工具调用只发送 tools/call。
+    """
+
+    config_path = tmp_path / "mcp.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "servers": [{"name": "amap", "transport": "streamable_http", "url": "https://mcp.example.com/mcp"}],
+                "tools": [{"name": "amap.route_plan", "server": "amap", "target_name": "maps_direction_walking"}],
+            },
+            allow_unicode=True,
+        ),
+        encoding="utf-8",
+    )
+    calls = []
+
+    class FakeHeaders(dict):
+        def get(self, key, default=None):
+            return super().get(key, default)
+
+    class FakeResponse:
+        def __init__(self, body: dict, headers: dict | None = None) -> None:
+            self._body = body
+            self.headers = FakeHeaders(headers or {})
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return json.dumps(self._body, ensure_ascii=False).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        payload = json.loads(request.data.decode("utf-8"))
+        calls.append({"payload": payload, "headers": dict(request.header_items()), "timeout": timeout})
+        if payload.get("method") == "initialize":
+            return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {"capabilities": {}}}, {"Mcp-Session-Id": "warm-session"})
+        if payload.get("method") == "notifications/initialized":
+            return FakeResponse({})
+        return FakeResponse({"jsonrpc": "2.0", "id": payload["id"], "result": {"content": [{"type": "text", "text": "ok"}]}})
+
+    monkeypatch.setattr("realtime_agent.mcp.urllib_request.urlopen", fake_urlopen)
+    gateway = McpGateway(enabled=True, config_path=config_path)
+
+    prepare_results = gateway.prepare(timeout_seconds=3)
+    result = gateway.call(tool_name="amap.route_plan", arguments={"origin": "家", "destination": "地铁站"}, timeout_seconds=3)
+
+    assert prepare_results[0]["ok"] is True
+    assert prepare_results[0]["session_ready"] is True
+    assert result["result"]["content"][0]["text"] == "ok"
+    assert [call["payload"]["method"] for call in calls] == ["initialize", "notifications/initialized", "tools/call"]
+    assert calls[-1]["headers"]["Mcp-session-id"] == "warm-session"
+
+
 def test_mcp_gateway_reports_empty_streamable_http_url(tmp_path, monkeypatch) -> None:
     """测试目标：验证远程 MCP URL 未注入时返回可读错误。
 

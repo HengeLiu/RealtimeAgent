@@ -291,3 +291,37 @@ agent:
     assert explicit_loaded.agent.conversation.runtime == "legacy"
     assert explicit_runtime_config.conversation_runtime == "conversation"
     assert explicit_runtime_config.agent_mode == "omni"
+
+
+def test_tools_and_mcp_timeout_config_maps_to_runtime(tmp_path) -> None:
+    """测试目标：验证前台 Tool 和 MCP 超时配置会同步到运行时配置。
+
+    测试方法：写入包含 `tools.default_timeout_seconds`、`tools.max_wait_timeout_seconds`
+    以及 MCP 预热配置的 server.yaml，再加载为 RealtimeAgentConfig。
+    预期结果：运行时配置保留这些字段，供 ToolGateway 和 McpGateway 装配使用。
+    """
+
+    config_path = tmp_path / "server.yaml"
+    config_path.write_text(
+        """
+tools:
+  default_timeout_seconds: 2
+  max_wait_timeout_seconds: 4
+mcp:
+  enabled: true
+  config_path: "mcp.yaml"
+  default_timeout_seconds: 1.5
+  prepare_on_startup: false
+  prepare_timeout_seconds: 1
+""".lstrip(),
+        encoding="utf-8",
+    )
+
+    loaded = load_yaml_config(config_path)
+    runtime_config = RealtimeAgentConfig.from_loaded_config(loaded)
+
+    assert runtime_config.tools_default_timeout_seconds == 2
+    assert runtime_config.tools_max_wait_timeout_seconds == 4
+    assert runtime_config.mcp_default_timeout_seconds == 1.5
+    assert runtime_config.mcp_prepare_on_startup is False
+    assert runtime_config.mcp_prepare_timeout_seconds == 1

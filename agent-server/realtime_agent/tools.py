@@ -185,8 +185,9 @@ CapabilityTrace = ToolTrace
 
 ProgressMessage = str | tuple[str, ...] | list[str]
 
-TOOL_DEFAULT_TIMEOUT_SECONDS = 10.0
-TOOL_MAX_TIMEOUT_SECONDS = 10.0
+TOOL_DEFAULT_TIMEOUT_SECONDS = 3.0
+TOOL_MAX_WAIT_TIMEOUT_SECONDS = 3.0
+TOOL_MAX_TIMEOUT_SECONDS = TOOL_MAX_WAIT_TIMEOUT_SECONDS
 TASK_START_TOOL_TIMEOUT_SECONDS = 3.0
 
 
@@ -308,7 +309,9 @@ class ToolRegistry:
     主要方法：`register()`、`get()`、`list_tools()`。
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS, max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS) -> None:
+        self.default_timeout_seconds = float(default_timeout_seconds)
+        self.max_wait_timeout_seconds = float(max_wait_timeout_seconds)
         self._tools: dict[str, BaseTool] = {}
 
     def register(self, tool: BaseTool) -> None:
@@ -325,7 +328,11 @@ class ToolRegistry:
             raise ToolError("tool name is required", code=ErrorCode.INVALID_ARGUMENT)
         if name in self._tools:
             raise ToolError(f"duplicate tool name: {name}", code=ErrorCode.PROTOCOL_ERROR)
-        _validate_tool_timeout(spec)
+        _validate_tool_timeout(
+            spec,
+            default_timeout_seconds=self.default_timeout_seconds,
+            max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+        )
         tool.name = name
         tool.description = spec.description
         tool.input_model = spec.input_model
@@ -455,6 +462,10 @@ class ToolSchemaBuilder:
     主要功能：把 BaseTool 元数据转换成 Agent Core 可传给 provider 的工具说明。
     """
 
+    def __init__(self, *, default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS, max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS) -> None:
+        self.default_timeout_seconds = float(default_timeout_seconds)
+        self.max_wait_timeout_seconds = float(max_wait_timeout_seconds)
+
     def build(self, tool: BaseTool) -> dict:
         """构造 SDK 内部工具 schema。
 
@@ -474,7 +485,11 @@ class ToolSchemaBuilder:
             "tags": list(spec.tags),
             "progress_message": _first_progress_message(spec.progress_message),
             "progress_messages": _progress_candidates(spec.progress_message),
-            "timeout_seconds": _effective_tool_timeout(spec),
+            "timeout_seconds": _effective_tool_timeout(
+                spec,
+                default_timeout_seconds=self.default_timeout_seconds,
+                max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+            ),
         }
 
     def build_provider_schema(self, tool: BaseTool) -> dict:
@@ -573,11 +588,24 @@ class ToolExecutor:
     主要功能：封装 Tool.run 调用和错误转换，后续可接入超时、并发和取消策略。
     """
 
+    def __init__(
+        self,
+        *,
+        default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
+        max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
+    ) -> None:
+        self.default_timeout_seconds = float(default_timeout_seconds)
+        self.max_wait_timeout_seconds = float(max_wait_timeout_seconds)
+
     async def execute(self, tool: BaseTool, context: ToolContext, input_data: dict) -> ToolResult:
         try:
             validated_input = self._validate_input(tool, input_data)
             coroutine = tool.run(context, validated_input)
-            timeout_seconds = _effective_tool_timeout(tool.resolved_spec())
+            timeout_seconds = _effective_tool_timeout(
+                tool.resolved_spec(),
+                default_timeout_seconds=self.default_timeout_seconds,
+                max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+            )
             return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
         except ValidationError as exc:
             return ToolResult.failed(
@@ -629,11 +657,24 @@ class ToolGateway:
         context_factory: ToolContextFactory | None = None,
         recorder: Any = None,
         skill_service: Any = None,
+        default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
+        max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
     ) -> None:
-        self.registry = registry or ToolRegistry()
+        self.default_timeout_seconds = float(default_timeout_seconds)
+        self.max_wait_timeout_seconds = float(max_wait_timeout_seconds)
+        self.registry = registry or ToolRegistry(
+            default_timeout_seconds=self.default_timeout_seconds,
+            max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+        )
         self.policy = policy or ToolPolicy()
-        self.schema_builder = schema_builder or ToolSchemaBuilder()
-        self.executor = executor or ToolExecutor()
+        self.schema_builder = schema_builder or ToolSchemaBuilder(
+            default_timeout_seconds=self.default_timeout_seconds,
+            max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+        )
+        self.executor = executor or ToolExecutor(
+            default_timeout_seconds=self.default_timeout_seconds,
+            max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+        )
         self.context_factory = context_factory
         self.recorder = recorder
         self.skill_service = skill_service
@@ -2400,23 +2441,38 @@ def _coerce_tool_timeout(timeout_seconds: float | None, *, fallback: float) -> f
     return value
 
 
-def _effective_tool_timeout(spec: ToolSpec) -> float:
+def _effective_tool_timeout(
+    spec: ToolSpec,
+    *,
+    default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
+    max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
+) -> float:
     """返回 ToolExecutor 实际使用的超时时间。"""
 
-    timeout_seconds = _coerce_tool_timeout(spec.timeout_seconds, fallback=TOOL_DEFAULT_TIMEOUT_SECONDS)
-    if timeout_seconds > TOOL_MAX_TIMEOUT_SECONDS:
+    timeout_seconds = _coerce_tool_timeout(spec.timeout_seconds, fallback=default_timeout_seconds)
+    max_timeout_seconds = _coerce_tool_timeout(max_wait_timeout_seconds, fallback=TOOL_MAX_WAIT_TIMEOUT_SECONDS)
+    if timeout_seconds > max_timeout_seconds:
         raise ToolError(
-            "tool timeout_seconds exceeds max short-action timeout",
+            "tool timeout_seconds exceeds model wait timeout",
             code=ErrorCode.PROTOCOL_ERROR,
-            details={"timeout_seconds": timeout_seconds, "max_timeout_seconds": TOOL_MAX_TIMEOUT_SECONDS},
+            details={"timeout_seconds": timeout_seconds, "max_wait_timeout_seconds": max_timeout_seconds},
         )
     return timeout_seconds
 
 
-def _validate_tool_timeout(spec: ToolSpec) -> None:
+def _validate_tool_timeout(
+    spec: ToolSpec,
+    *,
+    default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
+    max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
+) -> None:
     """校验 Tool 注册时的短生命周期超时上限。"""
 
-    _effective_tool_timeout(spec)
+    _effective_tool_timeout(
+        spec,
+        default_timeout_seconds=default_timeout_seconds,
+        max_wait_timeout_seconds=max_wait_timeout_seconds,
+    )
 
 
 def _task_ref_agent_reply(ref: Any) -> dict[str, Any]:
@@ -2509,7 +2565,7 @@ class SearchWebInput(BaseModel):
     limit: int = Field(default=3, ge=1, le=10, description="最多返回的搜索结果数量。")
     freshness: str = Field(default="noLimit", description="搜索时间范围，例如 noLimit、oneDay、oneWeek、oneMonth、oneYear。")
     summary: bool = Field(default=True, description="是否请求 Bocha 返回摘要内容。")
-    timeout_seconds: float = Field(default=5, gt=0, description="等待搜索结果的超时时间，单位秒。")
+    timeout_seconds: float = Field(default=3, gt=0, description="等待搜索结果的超时时间，单位秒。")
 
 
 class SearchWebOutput(BaseModel):
@@ -2708,7 +2764,7 @@ class QuerySystemTimeTool(BaseTool):
 class QueryCurrentLocationInput(BaseModel):
     """当前位置查询 Tool 输入参数。"""
 
-    timeout_seconds: float = Field(default=6, gt=0, le=30, description="等待端侧 GPS/定位回报的最长时间，单位秒。")
+    timeout_seconds: float = Field(default=3, gt=0, description="等待端侧 GPS/定位回报的最长时间，单位秒。")
     high_accuracy: bool = Field(default=True, description="是否请求端侧尽量使用高精度定位。")
 
 
@@ -3010,7 +3066,7 @@ class QueryRoutePlanInput(BaseModel):
 
     destination: str = Field(description="用户想去的目的地名称、地址或经纬度。")
     origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名、经纬度或“当前位置”。传入“当前位置”时会先请求端侧定位。")
-    timeout_seconds: float = Field(default=8, gt=0, description="路线规划整体最大等待时间，单位秒。")
+    timeout_seconds: float = Field(default=3, gt=0, description="路线规划整体最大等待时间，单位秒。")
 
 
 class QueryRoutePlanOutput(BaseModel):
@@ -3061,7 +3117,7 @@ class QueryRoutePlanTool(BaseTool):
         origin_location_source: str | None = None
         origin_location_accuracy: float | None = None
         if _is_ambiguous_current_location(origin):
-            location_timeout = min(3.0, _remaining_seconds(deadline))
+            location_timeout = min(1.0, _remaining_seconds(deadline))
             location_result = await _request_device_location(
                 context,
                 timeout_seconds=location_timeout,
@@ -3268,7 +3324,7 @@ async def _call_mcp_with_deadline(mcp: Any, *, tool_name: str, arguments: dict, 
     """
 
     remaining = _remaining_seconds(deadline)
-    per_http_timeout = max(0.2, min(1.5, remaining))
+    per_http_timeout = max(0.2, remaining)
     try:
         return await asyncio.wait_for(
             asyncio.to_thread(
@@ -3641,7 +3697,8 @@ class McpCallTool(BaseTool):
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         if context.mcp is None:
             return ToolResult.failed(ToolError("mcp gateway is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        result = context.mcp.call(
+        result = await asyncio.to_thread(
+            context.mcp.call,
             tool_name=str(input_data.get("tool_name") or ""),
             arguments=dict(input_data.get("arguments") or {}),
             timeout_seconds=input_data.get("timeout_seconds"),

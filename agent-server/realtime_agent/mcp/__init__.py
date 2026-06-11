@@ -76,6 +76,8 @@ class McpGateway:
         self._tools: dict[str, McpToolSpec] = {}
         self._servers: dict[str, McpServerSpec] = {}
         self._local_env: dict[str, str] = {}
+        self._streamable_http_sessions: dict[str, str | None] = {}
+        self.prepare_results: list[dict[str, Any]] = []
         if self.config_path and self.config_path.exists():
             self.load_config(self.config_path)
 
@@ -91,6 +93,7 @@ class McpGateway:
         self._local_env = _load_local_env(config_path)
         self._servers.clear()
         self._tools.clear()
+        self._streamable_http_sessions.clear()
         raw_text = config_path.read_text(encoding="utf-8")
         data = json.loads(raw_text) if config_path.suffix == ".json" else yaml.safe_load(raw_text)
         root = dict(data or {})
@@ -193,6 +196,47 @@ class McpGateway:
             results.append(result)
         return results
 
+    def prepare(self, *, timeout_seconds: float | None = None) -> list[dict[str, Any]]:
+        """预热外部 MCP server。
+
+        主要逻辑：服务启动时先对 streamable_http server 完成 initialize 和
+        notifications/initialized，并缓存 session id，避免第一次工具调用才承担 MCP
+        初始化开销。预热失败只记录结果，不抛出异常阻塞 Server 启动。
+        参数：`timeout_seconds` 为单次 HTTP 请求超时；不传时使用 Gateway 默认超时。
+        返回值：每个外部 server 的预热结果。
+        异常情况：单个 server 失败会写入 `ok=false` 和 error，不向外抛出。
+        """
+
+        if not self.enabled:
+            self.prepare_results = []
+            return []
+        if self.config_path and self.config_path.exists():
+            try:
+                self.load_config(self.config_path)
+            except Exception:
+                pass
+        timeout = float(timeout_seconds if timeout_seconds is not None else self.default_timeout_seconds)
+        results: list[dict[str, Any]] = []
+        for server in self._servers.values():
+            result = {"server": server.name, "transport": server.transport, "ok": True, "session_ready": False}
+            if not server.enabled:
+                result.update({"ok": False, "error": "mcp server is disabled"})
+                results.append(result)
+                continue
+            if server.transport != "streamable_http":
+                result["error"] = "prepare skipped for non streamable_http server"
+                results.append(result)
+                continue
+            try:
+                session_id = self._open_streamable_http_session(server=server, timeout_seconds=timeout)
+                self._streamable_http_sessions[server.name] = session_id
+                result["session_ready"] = True
+            except Exception as exc:  # noqa: BLE001 - 启动预热不能阻断主服务
+                result.update({"ok": False, "error": f"{type(exc).__name__}: {exc}"})
+            results.append(result)
+        self.prepare_results = results
+        return results
+
     def call(self, *, tool_name: str, arguments: dict[str, Any] | None = None, timeout_seconds: float | None = None) -> dict[str, Any]:
         """调用 MCP tool。
 
@@ -272,17 +316,10 @@ class McpGateway:
                 code=ErrorCode.PROTOCOL_ERROR,
                 details={"server": server.name, "transport": server.transport},
             )
-        session_id = self._initialize_streamable_http(server=server, timeout_seconds=timeout_seconds)
-        self._post_streamable_http(
-            server=server,
-            payload={
-                "jsonrpc": "2.0",
-                "method": "notifications/initialized",
-            },
-            timeout_seconds=timeout_seconds,
-            session_id=session_id,
-            expect_response=False,
-        )
+        session_id = self._streamable_http_sessions.get(server.name)
+        if server.name not in self._streamable_http_sessions:
+            session_id = self._open_streamable_http_session(server=server, timeout_seconds=timeout_seconds)
+            self._streamable_http_sessions[server.name] = session_id
         call_response = self._post_streamable_http(
             server=server,
             payload={
@@ -309,6 +346,22 @@ class McpGateway:
                 details={"server": server.name, "tool_name": tool_name},
             )
         return result
+
+    def _open_streamable_http_session(self, *, server: McpServerSpec, timeout_seconds: float) -> str | None:
+        """打开并初始化一个 Streamable HTTP MCP session。"""
+
+        session_id = self._initialize_streamable_http(server=server, timeout_seconds=timeout_seconds)
+        self._post_streamable_http(
+            server=server,
+            payload={
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+            },
+            timeout_seconds=timeout_seconds,
+            session_id=session_id,
+            expect_response=False,
+        )
+        return session_id
 
     def _initialize_streamable_http(self, *, server: McpServerSpec, timeout_seconds: float) -> str | None:
         response = self._post_streamable_http(

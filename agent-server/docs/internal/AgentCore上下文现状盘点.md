@@ -55,6 +55,13 @@
 | `read_skill` | SDK 内置 | 当前 `skill.enabled=false` 且 Skill policy 会限制工具可见性 | 启用 Skill 并允许工具策略后可见。 |
 | `mcp_call` | SDK 内置 | 当前 `mcp.enabled=false` 或策略限制 | 启用 MCP 后可见。 |
 
+前台 Tool 的统一等待边界由 `tools.default_timeout_seconds` 和
+`tools.max_wait_timeout_seconds` 控制，默认均为 3 秒。单个 Tool 可以在
+`ToolSpec.timeout_seconds` 中声明自己的等待时间，但注册时不能超过
+`tools.max_wait_timeout_seconds`；执行时 ToolGateway 也会用同一上限控制模型等待
+工具结果的时间。MCP Gateway 支持 `mcp.prepare_on_startup=true`，服务启动时先预热
+Streamable HTTP session，避免首次工具调用才执行 MCP initialize。
+
 ## Message 拼接规则
 
 | 链路 | system | active history | 当前输入 | tool message | 记录位置 |

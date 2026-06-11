@@ -167,6 +167,8 @@ class RealtimeAgentConfig:
     tools_discover_fail_fast: bool = True
     tools_allowlist: tuple[str, ...] = ()
     tools_denylist: tuple[str, ...] = ()
+    tools_default_timeout_seconds: float = 3.0
+    tools_max_wait_timeout_seconds: float = 3.0
     tasks_discover_enabled: bool = False
     tasks_discover_packages: tuple[str, ...] = ()
     tasks_discover_recursive: bool = False
@@ -187,7 +189,9 @@ class RealtimeAgentConfig:
     skill_allow_tool_policy: bool = True
     mcp_enabled: bool = False
     mcp_config_path: str = "mcp.json"
-    mcp_default_timeout_seconds: float = 30.0
+    mcp_default_timeout_seconds: float = 3.0
+    mcp_prepare_on_startup: bool = True
+    mcp_prepare_timeout_seconds: float = 3.0
 
     @classmethod
     def from_yaml(cls, path: str | Path) -> "RealtimeAgentConfig":
@@ -323,6 +327,8 @@ class RealtimeAgentConfig:
             tools_discover_fail_fast=loaded.tools.discover.fail_fast,
             tools_allowlist=tuple(loaded.tools.allowlist),
             tools_denylist=tuple(loaded.tools.denylist),
+            tools_default_timeout_seconds=loaded.tools.default_timeout_seconds,
+            tools_max_wait_timeout_seconds=loaded.tools.max_wait_timeout_seconds,
             tasks_discover_enabled=loaded.tasks.discover.enabled,
             tasks_discover_packages=tuple(loaded.tasks.discover.packages),
             tasks_discover_recursive=loaded.tasks.discover.recursive,
@@ -344,6 +350,8 @@ class RealtimeAgentConfig:
             mcp_enabled=loaded.mcp.enabled,
             mcp_config_path=loaded.mcp.config_path,
             mcp_default_timeout_seconds=loaded.mcp.default_timeout_seconds,
+            mcp_prepare_on_startup=loaded.mcp.prepare_on_startup,
+            mcp_prepare_timeout_seconds=loaded.mcp.prepare_timeout_seconds,
         )
 
 
@@ -475,7 +483,12 @@ class RealtimeAgentApp:
             config_path=self.config.mcp_config_path,
             default_timeout_seconds=self.config.mcp_default_timeout_seconds,
         )
-        self.tool_registry = ToolRegistry()
+        if self.config.mcp_enabled and self.config.mcp_prepare_on_startup:
+            self.mcp_gateway.prepare(timeout_seconds=self.config.mcp_prepare_timeout_seconds)
+        self.tool_registry = ToolRegistry(
+            default_timeout_seconds=self.config.tools_default_timeout_seconds,
+            max_wait_timeout_seconds=self.config.tools_max_wait_timeout_seconds,
+        )
         for tool_cls in BUILTIN_TOOLS:
             self.tool_registry.register(tool_cls())
         for tool_cls in EXTENSION_BUILTIN_TOOLS:
@@ -531,6 +544,8 @@ class RealtimeAgentApp:
             ),
             recorder=self.recorder,
             skill_service=self.skill_service,
+            default_timeout_seconds=self.config.tools_default_timeout_seconds,
+            max_wait_timeout_seconds=self.config.tools_max_wait_timeout_seconds,
         )
         omni_config = self._build_omni_provider_config()
         self.agent_core = build_conversation_runtime(
