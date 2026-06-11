@@ -81,6 +81,7 @@ agent:
   omni:
     provider: "qwen"
     model: "qwen3.5-omni-plus-realtime"
+    api_key_env: "DASHSCOPE_API_KEY_OMNI_CAP"
     voice: "Tina"
     # Omni conversation runtime 固定使用 manual turn detection，由 Silero ONNX
     # VAD SpeechInputBoundary 决定 turn_started / turn_ended。

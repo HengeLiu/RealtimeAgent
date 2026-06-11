@@ -188,11 +188,13 @@ class RealtimeProviderConfig:
     """Realtime provider 配置。
 
     主要功能：保存 Omni Realtime 连接需要的最小参数。
-    主要属性：`provider` 标识供应商，`model` 标识模型，`voice` 标识输出音色。
+    主要属性：`provider` 标识供应商，`model` 标识模型，`api_key_env` 标识读取
+    provider key 的环境变量，`voice` 标识输出音色。
     """
 
     provider: str = "qwen"
     model: str = "qwen3.5-omni-plus-realtime"
+    api_key_env: str = "DASHSCOPE_API_KEY_OMNI_CAP"
     allow_mock_fallback: bool = True
     turn_detection: str = "provider"
     turn_detection_threshold: float | None = None
@@ -319,15 +321,16 @@ class QwenOmniRealtimeAdapter:
         16k PCM、输出 24k PCM、audio/text 双模态和 provider turn detection。
         参数：`user_id`、`session_id` 用于日志关联；`callbacks` 用于上报模型事件。
         返回值：无。
-        异常情况：缺少 `DASHSCOPE_API_KEY` 或 SDK 未安装时抛出 `RuntimeError`。
+        异常情况：缺少 `config.api_key_env` 或 SDK 未安装时抛出 `RuntimeError`。
         """
         if self._conversation is not None:
             return
         self._completed_tool_call_ids.clear()
         self._session_updated.clear()
-        api_key = os.getenv("DASHSCOPE_API_KEY")
+        api_key_env = str(self.config.api_key_env or "DASHSCOPE_API_KEY_OMNI_CAP")
+        api_key = os.getenv(api_key_env)
         if not api_key:
-            raise RuntimeError("DASHSCOPE_API_KEY is required for Qwen Omni Realtime")
+            raise RuntimeError(f"{api_key_env} is required for Qwen Omni Realtime")
         try:
             import dashscope
             from dashscope.audio.qwen_omni import (

@@ -156,6 +156,7 @@ agent:
   omni:
     provider: mock
     model: mock-omni
+    api_key_env: DASHSCOPE_API_KEY_OMNI_CAP
     prompt: Omni提示词
     max_concurrent_sessions: 7
 """.lstrip(),
@@ -169,11 +170,13 @@ agent:
     assert loaded.agent.vision.prompt == "视觉提示词"
     assert loaded.agent.omni.provider == "mock"
     assert loaded.agent.omni.prompt == "Omni提示词"
+    assert loaded.agent.omni.api_key_env == "DASHSCOPE_API_KEY_OMNI_CAP"
     assert loaded.agent.omni.max_concurrent_sessions == 7
     assert runtime_config.vision_provider == "mock"
     assert runtime_config.vision_prompt == "视觉提示词"
     assert runtime_config.omni_provider == "mock"
     assert runtime_config.omni_prompt == "Omni提示词"
+    assert runtime_config.omni_api_key_env == "DASHSCOPE_API_KEY_OMNI_CAP"
     assert runtime_config.omni_max_concurrent_sessions == 7
 
 

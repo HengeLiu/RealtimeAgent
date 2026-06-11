@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -116,6 +117,7 @@ def test_preflight_report_contains_developer_experience_diagnostics(tmp_path) ->
             str(report),
         ],
         cwd=AUDIO_ROOT,
+        env={**os.environ, "DASHSCOPE_API_KEY_OMNI_CAP": "test-key"},
         text=True,
         capture_output=True,
         check=False,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -225,6 +226,7 @@ def test_preflight_generates_p0_json_report(tmp_path) -> None:
             str(report),
         ],
         cwd=Path(__file__).resolve().parents[3],
+        env={**os.environ, "DASHSCOPE_API_KEY_OMNI_CAP": "test-key"},
         text=True,
         capture_output=True,
         check=False,

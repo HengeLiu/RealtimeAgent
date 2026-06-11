@@ -71,6 +71,12 @@ uv sync --python 3.11
 uv pip install -e .
 ```
 
+启动 server 前先确认 Omni 全模态模型权限。当前百炼全模态模型中，支持工具调用的主要是 `qwen3.5-omni` 系列，但该能力尚未完全开放；如果要使用 `agent.mode=omni` 链路，开发者需要确认自己的 DashScope / 百炼 API Key 已具备调用 `qwen3.5-omni` 系列模型的权限，并把该 key 配置到 Omni 专用环境变量：
+
+```bash
+export DASHSCOPE_API_KEY_OMNI_CAP="你的 DashScope API Key"
+```
+
 启动示例 Agent server：
 
 ```bash
@@ -93,7 +99,7 @@ curl http://127.0.0.1:8765/api/debug/playback
 
 本地联调按这个顺序启动：
 
-1. 启动 server：
+1. 确认已配置 Omni 专用 key 后启动 server：
 
    ```bash
    uv run realtime-agent.server.run --config examples/simple-agent-server/server.yaml

@@ -2979,7 +2979,7 @@ def test_qwen_omni_manual_turn_detection_disables_provider_vad(monkeypatch) -> N
     monkeypatch.setitem(sys.modules, "dashscope", dashscope_module)
     monkeypatch.setitem(sys.modules, "dashscope.audio", dashscope_audio_module)
     monkeypatch.setitem(sys.modules, "dashscope.audio.qwen_omni", qwen_omni_module)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY_OMNI_CAP", "test-key")
 
     records: list[dict] = []
     callbacks = RealtimeProviderCallbacks(
@@ -3129,7 +3129,7 @@ def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> 
     monkeypatch.setitem(sys.modules, "dashscope", dashscope_module)
     monkeypatch.setitem(sys.modules, "dashscope.audio", dashscope_audio_module)
     monkeypatch.setitem(sys.modules, "dashscope.audio.qwen_omni", qwen_omni_module)
-    monkeypatch.setenv("DASHSCOPE_API_KEY", "test-key")
+    monkeypatch.setenv("DASHSCOPE_API_KEY_OMNI_CAP", "test-key")
 
     records: list[dict] = []
     callbacks = RealtimeProviderCallbacks(

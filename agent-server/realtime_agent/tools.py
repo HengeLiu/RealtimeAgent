@@ -9,10 +9,12 @@ import pkgutil
 import threading
 import time
 from dataclasses import asdict, dataclass, field
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, AsyncIterator, Literal
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -2637,11 +2639,156 @@ def _normalize_bocha_page(page: dict) -> dict:
     }
 
 
+class QuerySystemTimeInput(BaseModel):
+    """系统时间查询 Tool 输入参数。"""
+
+    timezone: str = Field(
+        default="Asia/Shanghai",
+        description="要查询的时区，默认 Asia/Shanghai；也可传 UTC+8、+08:00、America/New_York 等。",
+    )
+
+
+class QuerySystemTimeOutput(BaseModel):
+    """系统时间查询 Tool 输出结构。"""
+
+    timezone: str = Field(description="实际使用的时区名称或固定偏移。")
+    iso_datetime: str = Field(description="带时区偏移的 ISO 8601 时间。")
+    date: str = Field(description="本地日期，YYYY-MM-DD。")
+    time: str = Field(description="本地时间，HH:MM:SS。")
+    weekday: str = Field(description="英文星期名称。")
+    utc_offset: str = Field(description="UTC 偏移，例如 +08:00。")
+    unix_timestamp: int = Field(description="Unix 秒级时间戳。")
+
+
+class QuerySystemTimeTool(BaseTool):
+    """查询当前系统时间的前台 Tool。
+
+    主要功能：读取服务端当前系统时间，并按用户指定时区返回结构化时间。
+    主要方法：`run()` 负责解析时区、格式化当前时间并返回 ToolResult。
+    主要属性：`spec` 定义模型可见的工具名、描述和输入输出结构。
+    """
+
+    spec = ToolSpec(
+        name="query_system_time",
+        description="当用户询问当前时间、日期、星期、某个时区现在几点，或需要时间上下文时调用。默认返回北京时间。",
+        input_model=QuerySystemTimeInput,
+        output_model=QuerySystemTimeOutput,
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """查询指定时区的当前系统时间。
+
+        主要逻辑：解析 `timezone` 参数；支持 IANA 时区名和 UTC 固定偏移；使用
+        `datetime.now()` 读取服务端当前时间并转换到目标时区。
+        参数：`context` 是 SDK 注入上下文；`input_data` 包含可选 `timezone`。
+        返回值：成功时返回日期、时间、ISO 时间、UTC 偏移和时间戳。
+        异常情况：时区无法识别时返回结构化参数错误，不向上抛出异常。
+        """
+
+        del context
+        timezone_text = str(input_data.get("timezone") or "Asia/Shanghai").strip() or "Asia/Shanghai"
+        try:
+            tzinfo, timezone_name = _parse_timezone(timezone_text)
+        except ValueError as exc:
+            return ToolResult.failed(ToolError(str(exc), code=ErrorCode.INVALID_ARGUMENT))
+        now = datetime.now(tzinfo)
+        offset = now.utcoffset() or timedelta(0)
+        data = {
+            "timezone": timezone_name,
+            "iso_datetime": now.isoformat(timespec="seconds"),
+            "date": now.strftime("%Y-%m-%d"),
+            "time": now.strftime("%H:%M:%S"),
+            "weekday": now.strftime("%A"),
+            "utc_offset": _format_utc_offset(offset),
+            "unix_timestamp": int(now.timestamp()),
+        }
+        return ToolResult.success(data=data, message=f"{timezone_name} 当前时间 {data['iso_datetime']}")
+
+
+def _parse_timezone(value: str) -> tuple[timezone | ZoneInfo, str]:
+    """解析时区字符串。
+
+    主要逻辑：先处理北京时间、东八区、UTC/GMT 和固定偏移，再按 IANA 时区名加载。
+    参数：`value` 是模型传入的时区文本。
+    返回值：Python `tzinfo` 对象和规范化后的时区名。
+    异常情况：无法识别时抛出 `ValueError`。
+    """
+
+    normalized = value.strip() or "Asia/Shanghai"
+    alias_map = {
+        "北京时间": "Asia/Shanghai",
+        "北京": "Asia/Shanghai",
+        "东八区": "UTC+08:00",
+        "utc": "UTC",
+        "z": "UTC",
+    }
+    normalized = alias_map.get(normalized.lower()) or alias_map.get(normalized) or normalized
+    upper = normalized.upper()
+    if upper in {"UTC", "GMT"}:
+        return timezone.utc, "UTC"
+    if upper.startswith("UTC") or upper.startswith("GMT") or normalized.startswith(("+", "-")):
+        offset_text = normalized[3:] if upper.startswith(("UTC", "GMT")) else normalized
+        delta = _parse_utc_offset(offset_text)
+        return timezone(delta), f"UTC{_format_utc_offset(delta)}"
+    try:
+        return ZoneInfo(normalized), normalized
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"无法识别时区：{value}。请使用 Asia/Shanghai、UTC+8 或 +08:00 这类格式。") from exc
+
+
+def _parse_utc_offset(value: str) -> timedelta:
+    """解析 UTC 偏移字符串。
+
+    主要逻辑：支持 +8、+08、+08:00、-05:30 等常见写法，并限制在合法 UTC
+    偏移范围内。
+    参数：`value` 是去掉 UTC/GMT 前缀后的偏移文本。
+    返回值：对应的时间偏移。
+    异常情况：格式非法或超出范围时抛出 `ValueError`。
+    """
+
+    text = value.strip()
+    if not text:
+        return timedelta(0)
+    sign_text = text[0]
+    if sign_text not in {"+", "-"}:
+        raise ValueError(f"无法识别 UTC 偏移：{value}")
+    body = text[1:]
+    if ":" in body:
+        hour_text, minute_text = body.split(":", 1)
+    else:
+        hour_text, minute_text = body, "0"
+    if not hour_text.isdigit() or not minute_text.isdigit():
+        raise ValueError(f"无法识别 UTC 偏移：{value}")
+    hours = int(hour_text)
+    minutes = int(minute_text)
+    if hours > 14 or minutes >= 60 or (hours == 14 and minutes != 0):
+        raise ValueError(f"UTC 偏移超出合法范围：{value}")
+    delta = timedelta(hours=hours, minutes=minutes)
+    return delta if sign_text == "+" else -delta
+
+
+def _format_utc_offset(offset: timedelta) -> str:
+    """格式化 UTC 偏移。
+
+    主要逻辑：把 `timedelta` 转成 `+HH:MM` 或 `-HH:MM`。
+    参数：`offset` 是时区偏移。
+    返回值：固定宽度偏移字符串。
+    异常情况：无。
+    """
+
+    total_seconds = int(offset.total_seconds())
+    sign = "+" if total_seconds >= 0 else "-"
+    total_seconds = abs(total_seconds)
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes = remainder // 60
+    return f"{sign}{hours:02d}:{minutes:02d}"
+
+
 class QueryRoutePlanInput(BaseModel):
     """路线规划 Tool 输入参数。"""
 
     destination: str = Field(description="用户想去的目的地名称、地址或经纬度。")
-    origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名或经纬度。")
+    origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名或经纬度。没有真实定位时不要把当前位置当作地址。")
     timeout_seconds: float = Field(default=8, gt=0, description="单次 MCP 调用超时时间，单位秒。")
 
 
@@ -2665,7 +2812,7 @@ class QueryRoutePlanTool(BaseTool):
 
     spec = ToolSpec(
         name="query_route_plan",
-        description="当用户想去某个地点、询问怎么走或需要路线规划时调用。目的地不明确时先向用户确认。",
+        description="当用户想去某个地点、询问怎么走或需要路线规划时调用。目的地不明确时先向用户确认；如果起点只是当前位置且设备没有定位，需要先请用户补充起点。",
         input_model=QueryRoutePlanInput,
         output_model=QueryRoutePlanOutput,
         capability_type="mcp",
@@ -2689,6 +2836,19 @@ class QueryRoutePlanTool(BaseTool):
         timeout_seconds = float(input_data.get("timeout_seconds") or 8)
         if not destination:
             return ToolResult.failed(ToolError("destination is required", code=ErrorCode.INVALID_ARGUMENT))
+        if _is_ambiguous_current_location(origin):
+            return ToolResult.success(
+                data={
+                    "route_ready": False,
+                    "provider": "needs_origin",
+                    "origin": origin,
+                    "destination": destination,
+                    "route": None,
+                    "error": "当前设备没有提供可用于路线规划的实时定位，请用户补充明确起点。",
+                    "needs_origin": True,
+                },
+                message="请先告诉我明确的出发地点。",
+            )
         try:
             mcp = _resolve_amap_mcp_gateway(getattr(context, "mcp", None))
             origin_location, origin_geo = _route_point_for_mcp(mcp, value=origin, label="起点", timeout_seconds=timeout_seconds)
@@ -2703,6 +2863,23 @@ class QueryRoutePlanTool(BaseTool):
                 arguments={"origin": origin_location, "destination": destination_location},
                 timeout_seconds=timeout_seconds,
             )
+            route_error = _mcp_result_error(route)
+            if route_error:
+                return ToolResult.success(
+                    data={
+                        "route_ready": False,
+                        "provider": "amap_mcp",
+                        "origin": origin,
+                        "destination": destination,
+                        "origin_location": origin_location,
+                        "destination_location": destination_location,
+                        "origin_geo": origin_geo,
+                        "destination_geo": destination_geo,
+                        "route": route,
+                        "error": route_error,
+                    },
+                    message="路线规划失败，请补充更明确的起点或换一种出行方式。",
+                )
         except Exception as exc:  # noqa: BLE001
             return ToolResult.success(
                 data={
@@ -2785,6 +2962,20 @@ def _looks_like_lnglat(value: str) -> bool:
     return -180 <= longitude <= 180 and -90 <= latitude <= 90
 
 
+def _is_ambiguous_current_location(value: str) -> bool:
+    """判断起点是否只是无法解析的当前位置占位。
+
+    主要逻辑：当前 SDK 内置路线工具没有接入设备定位，因此“当前位置”等占位词
+    不能被当作真实地址送给 AMap geocode，否则容易被错误解析成同名地点。
+    参数：`value` 为模型传入的起点。
+    返回值：属于当前位置占位时返回 True。
+    异常情况：无。
+    """
+
+    normalized = value.strip().lower()
+    return normalized in {"", "当前位置", "当前地点", "我的位置", "我现在的位置", "current location", "here"}
+
+
 def _route_point_for_mcp(mcp: Any, *, value: str, label: str, timeout_seconds: float) -> tuple[str, dict | None]:
     """把地址、地点名或坐标转换成 AMap 路线规划可用坐标。"""
 
@@ -2810,6 +3001,22 @@ def _extract_geo_location(call_result: dict, label: str) -> tuple[str, dict]:
         if _looks_like_lnglat(location):
             return location, item
     raise ValueError(f"{label}未找到可用坐标")
+
+
+def _mcp_result_error(call_result: dict) -> str:
+    """提取 MCP 调用结果中的错误文本。
+
+    主要逻辑：MCP tool 可能把业务错误放在 `result.isError=true` 和 content 文本中，
+    这种结果不能当成可用路线。
+    参数：`call_result` 是 `McpGateway.call()` 返回值。
+    返回值：有错误时返回文本；没有错误时返回空字符串。
+    异常情况：无。
+    """
+
+    result = dict(call_result.get("result") or call_result)
+    if not result.get("isError"):
+        return ""
+    return _mcp_first_text(result) or "mcp tool returned error"
 
 
 def _mcp_text_json(call_result: dict) -> dict:
@@ -3134,6 +3341,7 @@ BUILTIN_TOOLS = (
     TaskRuntimeManagerTool,
     CloseAudioSessionTool,
     SearchWebTool,
+    QuerySystemTimeTool,
     QueryRoutePlanTool,
     MemorySearchTool,
     ManageMemoryTool,

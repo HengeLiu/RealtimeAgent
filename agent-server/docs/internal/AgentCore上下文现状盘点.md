@@ -29,7 +29,7 @@
 
 ## 当前默认模型可见工具
 
-通过当前 `server.yaml` 构造 `RealtimeAgentApp` 后，`ToolGateway.provider_schemas()` 实际暴露 9 个工具。
+通过当前 `server.yaml` 构造 `RealtimeAgentApp` 后，`ToolGateway.provider_schemas()` 实际暴露 10 个工具。
 
 | 工具名 | 来源 | 模型可见说明摘要 | 模型可见字段 | 备注 |
 | --- | --- | --- | --- | --- |
@@ -37,6 +37,7 @@
 | `task_runtime_manager` | SDK 内置 | 查询、取消、列出 Task；启动任务必须调用具体 `start_*` Tool | `action`, `task_id`, `include_terminal` | 和 TaskStartTool 配套。 |
 | `close_audio_session` | SDK 内置 | 用户明确要求结束语音会话时关闭当前连续对话 | `reason`, `user_close_phrase` | 必须提供用户原话中的明确关闭短语。 |
 | `search_web` | SDK 内置 | 使用 Bocha 查询公开网页资料 | `query`, `limit`, `freshness`, `summary`, `timeout_seconds` | 依赖 `BOCHA_SEARCH_API_KEY`，未配置时返回 fallback。 |
+| `query_system_time` | SDK 内置 | 查询当前系统时间、日期、星期或指定时区时间 | `timezone` | 默认北京时间；支持 `Asia/Shanghai`、`UTC+8`、`+08:00` 等格式。 |
 | `query_route_plan` | SDK 内置 | 通过 AMap MCP 查询路线，目的地不明确先确认 | `destination`, `origin`, `timeout_seconds` | 优先使用应用 MCP；未配置时读取 `AMAP_MCP_*` 环境变量。 |
 | `memory_search` | SDK 内置 | 读取已保存长期记忆详情；不用于维护记忆 | `topic`, `topics` | `memory.enabled=false` 时可见但返回权限错误。 |
 | `manage_memory` | SDK 内置 | 用户要求记住、更新、忘记、删除，或自然提供值得保存的信息时调用 | `memory_context` | `memory.enabled=true` 时会触发记忆管理子 Agent。 |

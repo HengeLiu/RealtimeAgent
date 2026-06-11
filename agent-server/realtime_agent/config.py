@@ -157,8 +157,16 @@ class AgentVisionMultimodalConfig:
 
 @dataclass(frozen=True)
 class AgentOmniConfig:
+    """Omni Realtime 主链路配置。
+
+    主要功能：描述原生 Omni provider、模型、密钥环境变量和 turn detection 行为。
+    主要属性：`api_key_env` 指向 Omni 专用密钥环境变量，避免和 ASR/TTS/Vision
+    共用同一个 DashScope key 配置入口。
+    """
+
     provider: str = "qwen"
     model: str = "qwen3.5-omni-plus-realtime"
+    api_key_env: str = "DASHSCOPE_API_KEY_OMNI_CAP"
     turn_detection: str = "provider"
     turn_detection_threshold: float | None = None
     turn_detection_silence_duration_ms: int | None = None
@@ -606,6 +614,7 @@ def _apply_env_overrides(data: dict[str, Any]) -> dict[str, Any]:
         "REALTIME_AGENT_AGENT_MODE": ("agent", "mode"),
         "REALTIME_AGENT_OMNI_PROVIDER": ("agent", "omni", "provider"),
         "REALTIME_AGENT_OMNI_MODEL": ("agent", "omni", "model"),
+        "REALTIME_AGENT_OMNI_API_KEY_ENV": ("agent", "omni", "api_key_env"),
         "REALTIME_AGENT_OMNI_VOICE": ("agent", "omni", "voice"),
         "REALTIME_AGENT_OMNI_PROMPT": ("agent", "omni", "prompt"),
         "REALTIME_AGENT_OMNI_TURN_DETECTION": ("agent", "omni", "turn_detection"),

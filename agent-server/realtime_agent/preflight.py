@@ -241,7 +241,7 @@ def _provider_key_check(config: RealtimeAgentYamlConfig) -> dict:
     if vision.provider == "openai-compatible":
         required.append("OPENAI_API_KEY")
     if config.agent.mode == "omni" and config.agent.omni.provider in {"qwen", "dashscope"}:
-        required.append("DASHSCOPE_API_KEY")
+        required.append(config.agent.omni.api_key_env or "DASHSCOPE_API_KEY_OMNI_CAP")
     required = sorted(set(required))
     missing = [env_name for env_name in required if not os.getenv(env_name)]
     allow_fallback = bool(vision.allow_mock_fallback)
@@ -699,7 +699,8 @@ def _live_check_next_actions(checks: list[dict]) -> list[str]:
         if action:
             actions.append(str(action))
         if check["name"] == "provider_keys" and check.get("missing_env") and check.get("allow_mock_fallback"):
-            actions.append("当前缺 provider key 但 mock fallback 已启用；真实 provider 验收前补齐 DASHSCOPE_API_KEY")
+            missing_env = ", ".join(str(item) for item in check.get("missing_env") or [])
+            actions.append(f"当前缺 provider key 但 mock fallback 已启用；真实 provider 验收前补齐 {missing_env}")
     return actions
 
 

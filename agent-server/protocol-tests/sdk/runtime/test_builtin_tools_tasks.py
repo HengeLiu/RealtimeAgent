@@ -21,6 +21,7 @@ def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> Non
         "search_web",
         "query_device_state",
         "query_route_plan",
+        "query_system_time",
         "memory_search",
         "manage_memory",
         "search_conversation_history",
@@ -100,6 +101,64 @@ def test_search_web_calls_bocha_api_and_normalizes_items(tmp_path, monkeypatch) 
     assert captured["body"]["query"] == "盲人导航"
     assert captured["body"]["count"] == 1
     assert captured["body"]["freshness"] == "oneWeek"
+
+
+def test_query_system_time_defaults_to_beijing_and_accepts_timezone(tmp_path) -> None:
+    """测试目标：验证系统时间 Tool 默认返回北京时间，并支持传入 UTC 偏移时区。
+
+    测试方法：通过 ToolGateway 分别调用空参数和 timezone=UTC-05:30。
+    预期结果：默认结果使用 Asia/Shanghai 和 +08:00；指定偏移结果使用 UTC-05:30。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    default_result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_system_time",
+            user_id="user-time",
+            session_id="session-time",
+            input_data={},
+        )
+    )
+    offset_result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_system_time",
+            user_id="user-time",
+            session_id="session-time",
+            input_data={"timezone": "UTC-05:30"},
+        )
+    )
+
+    assert default_result.ok is True
+    assert default_result.data["timezone"] == "Asia/Shanghai"
+    assert default_result.data["utc_offset"] == "+08:00"
+    assert "T" in default_result.data["iso_datetime"]
+    assert offset_result.ok is True
+    assert offset_result.data["timezone"] == "UTC-05:30"
+    assert offset_result.data["utc_offset"] == "-05:30"
+
+
+def test_query_system_time_rejects_invalid_timezone(tmp_path) -> None:
+    """测试目标：验证系统时间 Tool 对无法识别的时区返回结构化错误。
+
+    测试方法：通过 ToolGateway 传入不存在的时区名称。
+    预期结果：ToolResult 为失败状态，错误码是 invalid_argument。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_system_time",
+            user_id="user-time",
+            session_id="session-time",
+            input_data={"timezone": "Mars/Base"},
+        )
+    )
+
+    assert result.ok is False
+    assert result.error is not None
+    assert result.error["code"] == "invalid_argument"
 
 
 def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> None:
@@ -183,6 +242,73 @@ def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> No
         "maps_geo",
         "maps_direction_walking",
     ]
+
+
+def test_query_route_plan_requires_explicit_origin_for_current_location(tmp_path) -> None:
+    """测试目标：验证路线规划 Tool 不会把“当前位置”错误地当作地址解析。
+
+    测试方法：不传 origin，通过 ToolGateway 直接调用路线规划。
+    预期结果：Tool 立即返回 route_ready=False 和 needs_origin=True，不访问外部 MCP。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_route_plan",
+            user_id="user-route",
+            session_id="session-route",
+            input_data={"destination": "虹漕路地铁站"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["route_ready"] is False
+    assert result.data["provider"] == "needs_origin"
+    assert result.data["needs_origin"] is True
+    assert "出发地点" in result.message
+
+
+def test_query_route_plan_marks_mcp_business_error_not_ready(tmp_path, monkeypatch) -> None:
+    """测试目标：验证 AMap MCP 返回业务错误时路线不会被标记为已准备。
+
+    测试方法：替换 AMap MCP Gateway，让 geocode 成功但 route_plan 返回 isError。
+    预期结果：ToolResult 仍可回到模型，但 data.route_ready=False，error 包含 MCP 错误文本。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    class FakeMcp:
+        def call(self, tool_name, arguments, timeout_seconds=None):
+            if tool_name == "amap.geo":
+                return {
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps({"return": [{"location": "121.410553,31.164033"}]}, ensure_ascii=False),
+                            }
+                        ]
+                    }
+                }
+            return {"result": {"isError": True, "content": [{"type": "text", "text": "Direction Walking failed: OVER_DIRECTION_RANGE"}]}}
+
+    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: FakeMcp())
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_route_plan",
+            user_id="user-route",
+            session_id="session-route",
+            input_data={"origin": "青岛市平度市", "destination": "虹漕路地铁站"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["route_ready"] is False
+    assert result.data["provider"] == "amap_mcp"
+    assert "OVER_DIRECTION_RANGE" in result.data["error"]
+    assert "失败" in result.message
 
 
 def test_search_conversation_history_reads_runs_messages(tmp_path) -> None:
