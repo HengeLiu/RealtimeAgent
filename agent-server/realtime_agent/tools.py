@@ -2705,6 +2705,227 @@ class QuerySystemTimeTool(BaseTool):
         return ToolResult.success(data=data, message=f"{timezone_name} 当前时间 {data['iso_datetime']}")
 
 
+class QueryCurrentLocationInput(BaseModel):
+    """当前位置查询 Tool 输入参数。"""
+
+    timeout_seconds: float = Field(default=6, gt=0, le=30, description="等待端侧 GPS/定位回报的最长时间，单位秒。")
+    high_accuracy: bool = Field(default=True, description="是否请求端侧尽量使用高精度定位。")
+
+
+class QueryCurrentLocationOutput(BaseModel):
+    """当前位置查询 Tool 输出结构。"""
+
+    location_ready: bool = Field(description="是否拿到可用于导航的当前位置。")
+    provider: str = Field(description="定位来源，例如 device_gps、no_capable_device、timeout。")
+    latitude: float | None = Field(default=None, description="纬度。")
+    longitude: float | None = Field(default=None, description="经度。")
+    accuracy_meters: float | None = Field(default=None, description="定位精度，单位米。")
+    error: str | None = Field(default=None, description="失败或不可用原因。")
+
+
+class QueryCurrentLocationTool(BaseTool):
+    """请求端侧当前位置的前台 Tool。
+
+    主要功能：向已声明定位能力的端侧发送一次定位命令，并等待 GPS/浏览器定位回报。
+    主要方法：`run()` 先检查是否有端侧可消费定位命令，再调用 `commands.call()`。
+    主要属性：`spec` 定义模型可见工具名、说明和输入输出结构。
+    """
+
+    spec = ToolSpec(
+        name="query_current_location",
+        description="仅当用户主动询问“我在哪里”或当前位置时调用。路线规划从当前位置出发时，优先直接调用 query_route_plan 并把 origin 设为“当前位置”。",
+        input_model=QueryCurrentLocationInput,
+        output_model=QueryCurrentLocationOutput,
+        capability_type="tool",
+        tags=["location", "gps", "navigation"],
+        progress_message=("我先获取一下当前位置。", "稍等，我请求一下设备定位。"),
+    )
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """请求端侧当前位置。
+
+        主要逻辑：先根据设备注册 properties 判断是否有端侧声明可消费定位命令；
+        没有则立即返回提醒；有则发送 `device.location.get_current` 标准命令并等待终态。
+        参数：`context` 为 SDK 注入上下文；`input_data` 包含超时和高精度偏好。
+        返回值：成功时返回经纬度和精度；失败、未授权、无人消费或超时时返回结构化原因。
+        异常情况：设备选择或命令等待异常会转成 ToolResult 成功态下的不可用数据，
+        便于模型继续追问用户。
+        """
+
+        timeout_seconds = float(input_data.get("timeout_seconds") or 6)
+        high_accuracy = bool(input_data.get("high_accuracy", True))
+        return await _request_device_location(context, timeout_seconds=timeout_seconds, high_accuracy=high_accuracy)
+
+
+async def _request_device_location(context: ToolContext, *, timeout_seconds: float, high_accuracy: bool) -> ToolResult:
+    """请求端侧返回一次当前位置。
+
+    主要逻辑：先检查当前用户是否有在线设备以及设备是否声明定位能力；没有可消费端
+    侧时立即返回，不等待命令超时。有可消费端侧时发送标准定位命令并解析经纬度。
+    参数：`context` 是 Tool 上下文；`timeout_seconds` 是等待端侧回报的最长时间；
+    `high_accuracy` 表示是否请求端侧尽量使用高精度定位。
+    返回值：ToolResult 成功态，data.location_ready 表示定位是否可用。
+    异常情况：命令派发、超时、授权失败和结果格式异常都会转成可读 message。
+    """
+
+    devices = list(context.devices._get_devices())
+    capable_devices = [device for device in devices if _device_supports_location(device)]
+    if not devices:
+        return ToolResult.success(
+            data={
+                "location_ready": False,
+                "provider": "no_active_device",
+                "latitude": None,
+                "longitude": None,
+                "accuracy_meters": None,
+                "error": "当前用户没有在线设备，无法请求 GPS 定位。",
+            },
+            message="当前没有在线设备，无法获取当前位置。请告诉我出发地点。",
+        )
+    if not capable_devices:
+        return ToolResult.success(
+            data={
+                "location_ready": False,
+                "provider": "no_capable_device",
+                "latitude": None,
+                "longitude": None,
+                "accuracy_meters": None,
+                "error": "在线设备没有声明可消费定位请求。",
+            },
+            message="当前设备没有声明定位能力，请在端侧开启定位能力，或直接告诉我出发地点。",
+        )
+    selector = {"realtime_agent.location": True}
+    try:
+        result = await context.devices.commands.call(
+            name="device.location.get_current",
+            selector=selector,
+            params={"high_accuracy": high_accuracy},
+            timeout_seconds=timeout_seconds,
+            require_single=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return ToolResult.success(
+            data={
+                "location_ready": False,
+                "provider": "command_error",
+                "latitude": None,
+                "longitude": None,
+                "accuracy_meters": None,
+                "error": str(exc),
+            },
+            message="请求当前位置失败，请告诉我明确的出发地点。",
+        )
+    if not result.ok:
+        reason = _location_command_error_message(result) or "定位请求未完成。"
+        return ToolResult.success(
+            data={
+                "location_ready": False,
+                "provider": "device_location_failed",
+                "latitude": None,
+                "longitude": None,
+                "accuracy_meters": None,
+                "command_id": result.command_id,
+                "errors": result.errors,
+                "error": reason,
+            },
+            message=f"没有获取到当前位置：{reason} 请告诉我明确的出发地点。",
+        )
+    location = _extract_location_from_command_result(result)
+    if location is None:
+        return ToolResult.success(
+            data={
+                "location_ready": False,
+                "provider": "invalid_device_location",
+                "latitude": None,
+                "longitude": None,
+                "accuracy_meters": None,
+                "command_id": result.command_id,
+                "error": "端侧定位结果缺少可用经纬度。",
+            },
+            message="端侧返回的定位结果不完整，请告诉我明确的出发地点。",
+        )
+    return ToolResult.success(
+        data={
+            "location_ready": True,
+            "provider": "device_gps",
+            "latitude": location["latitude"],
+            "longitude": location["longitude"],
+            "accuracy_meters": location.get("accuracy_meters"),
+            "timestamp_ms": location.get("timestamp_ms"),
+            "command_id": result.command_id,
+            "raw": location.get("raw") or {},
+            "error": None,
+        },
+        message=f"已获取当前位置：{location['longitude']},{location['latitude']}",
+    )
+
+
+def _device_supports_location(device: DeviceSnapshot) -> bool:
+    """判断设备是否声明可消费当前位置请求。"""
+
+    props = dict(device.properties or {})
+    commands = props.get("realtime_agent.location_commands") or []
+    if isinstance(commands, str):
+        commands = [commands]
+    return bool(props.get("realtime_agent.location")) or "device.location.get_current" in {str(item) for item in commands}
+
+
+def _location_command_error_message(result: CommandResult) -> str:
+    """从定位命令失败结果中提取用户可理解的原因。"""
+
+    messages: list[str] = []
+    for error in result.errors:
+        data = dict(error.get("data") or {})
+        nested_error = data.get("error") if isinstance(data.get("error"), dict) else {}
+        message = (
+            str(nested_error.get("message") or "")
+            or str(data.get("message") or "")
+            or str(error.get("message") or "")
+        ).strip()
+        if message:
+            messages.append(message)
+    return "；".join(messages)
+
+
+def _extract_location_from_command_result(result: CommandResult) -> dict | None:
+    """从 `CommandResult` 中提取端侧定位数据。
+
+    主要逻辑：读取最后一个 completed 事件，兼容端侧把经纬度放在顶层、`location`
+    或 `coords` 字段中的写法。
+    参数：`result` 是 `commands.call()` 返回的聚合结果。
+    返回值：包含 latitude、longitude、accuracy_meters 的字典；无法解析时返回 None。
+    异常情况：无。
+    """
+
+    completed = [event for event in result.data.get("events") or [] if event.get("state") == "completed"]
+    if not completed:
+        return None
+    data = dict(completed[-1].get("data") or {})
+    payload = data.get("location") if isinstance(data.get("location"), dict) else data
+    coords = payload.get("coords") if isinstance(payload.get("coords"), dict) else payload
+    latitude = coords.get("latitude") or coords.get("lat")
+    longitude = coords.get("longitude") or coords.get("lng") or coords.get("lon")
+    try:
+        lat = float(latitude)
+        lng = float(longitude)
+    except (TypeError, ValueError):
+        return None
+    if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+        return None
+    accuracy = coords.get("accuracy") or coords.get("accuracy_meters") or coords.get("accuracyMeters")
+    try:
+        accuracy_meters = float(accuracy) if accuracy is not None else None
+    except (TypeError, ValueError):
+        accuracy_meters = None
+    return {
+        "latitude": lat,
+        "longitude": lng,
+        "accuracy_meters": accuracy_meters,
+        "timestamp_ms": data.get("timestamp_ms") or payload.get("timestamp_ms") or payload.get("timestamp"),
+        "raw": data,
+    }
+
+
 def _parse_timezone(value: str) -> tuple[timezone | ZoneInfo, str]:
     """解析时区字符串。
 
@@ -2788,8 +3009,8 @@ class QueryRoutePlanInput(BaseModel):
     """路线规划 Tool 输入参数。"""
 
     destination: str = Field(description="用户想去的目的地名称、地址或经纬度。")
-    origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名或经纬度。没有真实定位时不要把当前位置当作地址。")
-    timeout_seconds: float = Field(default=8, gt=0, description="单次 MCP 调用超时时间，单位秒。")
+    origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名、经纬度或“当前位置”。传入“当前位置”时会先请求端侧定位。")
+    timeout_seconds: float = Field(default=8, gt=0, description="路线规划整体最大等待时间，单位秒。")
 
 
 class QueryRoutePlanOutput(BaseModel):
@@ -2812,7 +3033,7 @@ class QueryRoutePlanTool(BaseTool):
 
     spec = ToolSpec(
         name="query_route_plan",
-        description="当用户想去某个地点、询问怎么走或需要路线规划时调用。目的地不明确时先向用户确认；如果起点只是当前位置且设备没有定位，需要先请用户补充起点。",
+        description="当用户想去某个地点、询问怎么走或需要路线规划时调用。可以把 origin 设为“当前位置”，工具会先请求端侧定位；定位失败时会返回原因并提示模型向用户确认起点。",
         input_model=QueryRoutePlanInput,
         output_model=QueryRoutePlanOutput,
         capability_type="mcp",
@@ -2834,34 +3055,54 @@ class QueryRoutePlanTool(BaseTool):
         destination = str(input_data.get("destination") or "").strip()
         origin = str(input_data.get("origin") or "当前位置").strip() or "当前位置"
         timeout_seconds = float(input_data.get("timeout_seconds") or 8)
+        deadline = time.monotonic() + timeout_seconds
         if not destination:
             return ToolResult.failed(ToolError("destination is required", code=ErrorCode.INVALID_ARGUMENT))
+        origin_location_source: str | None = None
+        origin_location_accuracy: float | None = None
         if _is_ambiguous_current_location(origin):
-            return ToolResult.success(
-                data={
-                    "route_ready": False,
-                    "provider": "needs_origin",
-                    "origin": origin,
-                    "destination": destination,
-                    "route": None,
-                    "error": "当前设备没有提供可用于路线规划的实时定位，请用户补充明确起点。",
-                    "needs_origin": True,
-                },
-                message="请先告诉我明确的出发地点。",
+            location_timeout = min(3.0, _remaining_seconds(deadline))
+            location_result = await _request_device_location(
+                context,
+                timeout_seconds=location_timeout,
+                high_accuracy=True,
             )
+            if not location_result.data.get("location_ready"):
+                return ToolResult.success(
+                    data={
+                        "route_ready": False,
+                        "provider": "needs_origin",
+                        "origin": origin,
+                        "destination": destination,
+                        "route": None,
+                        "location": location_result.data,
+                        "error": location_result.data.get("error") or location_result.message,
+                        "needs_origin": True,
+                    },
+                    message=f"{location_result.message} 你可以询问用户明确的出发地点后再规划路线。",
+                )
+            origin = f"{location_result.data['longitude']},{location_result.data['latitude']}"
+            origin_location_source = str(location_result.data.get("provider") or "device_gps")
+            origin_location_accuracy = location_result.data.get("accuracy_meters")
         try:
             mcp = _resolve_amap_mcp_gateway(getattr(context, "mcp", None))
-            origin_location, origin_geo = _route_point_for_mcp(mcp, value=origin, label="起点", timeout_seconds=timeout_seconds)
-            destination_location, destination_geo = _route_point_for_mcp(
+            origin_location, origin_geo = await _route_point_for_mcp(
+                mcp,
+                value=origin,
+                label="起点",
+                deadline=deadline,
+            )
+            destination_location, destination_geo = await _route_point_for_mcp(
                 mcp,
                 value=destination,
                 label="终点",
-                timeout_seconds=timeout_seconds,
+                deadline=deadline,
             )
-            route = mcp.call(
+            route = await _call_mcp_with_deadline(
+                mcp,
                 tool_name=AMAP_MCP_ROUTE_TOOL,
                 arguments={"origin": origin_location, "destination": destination_location},
-                timeout_seconds=timeout_seconds,
+                deadline=deadline,
             )
             route_error = _mcp_result_error(route)
             if route_error:
@@ -2873,6 +3114,8 @@ class QueryRoutePlanTool(BaseTool):
                         "destination": destination,
                         "origin_location": origin_location,
                         "destination_location": destination_location,
+                        "origin_location_source": origin_location_source,
+                        "origin_location_accuracy_meters": origin_location_accuracy,
                         "origin_geo": origin_geo,
                         "destination_geo": destination_geo,
                         "route": route,
@@ -2880,6 +3123,18 @@ class QueryRoutePlanTool(BaseTool):
                     },
                     message="路线规划失败，请补充更明确的起点或换一种出行方式。",
                 )
+        except (RoutePlanTimeoutError, TimeoutError, asyncio.TimeoutError) as exc:
+            return ToolResult.success(
+                data={
+                    "route_ready": False,
+                    "provider": "timeout",
+                    "origin": origin,
+                    "destination": destination,
+                    "route": None,
+                    "error": str(exc) or "路线规划超过等待时间。",
+                },
+                message="路线规划超时，请稍后重试，或告诉我更精确的起点和目的地。",
+            )
         except Exception as exc:  # noqa: BLE001
             return ToolResult.success(
                 data={
@@ -2900,6 +3155,8 @@ class QueryRoutePlanTool(BaseTool):
                 "destination": destination,
                 "origin_location": origin_location,
                 "destination_location": destination_location,
+                "origin_location_source": origin_location_source,
+                "origin_location_accuracy_meters": origin_location_accuracy,
                 "origin_geo": origin_geo,
                 "destination_geo": destination_geo,
                 "route": route,
@@ -2976,12 +3233,68 @@ def _is_ambiguous_current_location(value: str) -> bool:
     return normalized in {"", "当前位置", "当前地点", "我的位置", "我现在的位置", "current location", "here"}
 
 
-def _route_point_for_mcp(mcp: Any, *, value: str, label: str, timeout_seconds: float) -> tuple[str, dict | None]:
+def _remaining_seconds(deadline: float) -> float:
+    """读取距离整体超时截止点还剩多少秒。"""
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise RoutePlanTimeoutError("路线规划超过整体等待时间。")
+    return remaining
+
+
+class RoutePlanTimeoutError(Exception):
+    """路线规划整体或外部服务超时。"""
+
+
+def _invoke_mcp_call(mcp: Any, *, tool_name: str, arguments: dict, timeout_seconds: float) -> dict:
+    """在线程中调用 MCP，并把底层 TimeoutError 转成路线规划专用异常。"""
+
+    try:
+        return mcp.call(tool_name=tool_name, arguments=arguments, timeout_seconds=timeout_seconds)
+    except TimeoutError as exc:
+        raise RoutePlanTimeoutError(str(exc)) from exc
+
+
+async def _call_mcp_with_deadline(mcp: Any, *, tool_name: str, arguments: dict, deadline: float) -> dict:
+    """按整体截止时间调用一次 MCP tool。
+
+    主要逻辑：MCP Streamable HTTP 调用内部包含 initialize、initialized 和
+    tools/call 多次 HTTP 请求。这里把每次 HTTP 请求的 timeout 压低，并在外层
+    使用整体 deadline 限制前台 Tool 的等待时间。
+    参数：`mcp` 为 MCP Gateway；`tool_name/arguments` 为工具调用；`deadline`
+    为路线规划整体截止时间。
+    返回值：MCP 调用结果。
+    异常情况：剩余时间不足或外层等待超时时抛出 TimeoutError。
+    """
+
+    remaining = _remaining_seconds(deadline)
+    per_http_timeout = max(0.2, min(1.5, remaining))
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(
+                _invoke_mcp_call,
+                mcp,
+                tool_name=tool_name,
+                arguments=arguments,
+                timeout_seconds=per_http_timeout,
+            ),
+            timeout=remaining,
+        )
+    except asyncio.TimeoutError as exc:
+        raise RoutePlanTimeoutError("路线规划超过整体等待时间。") from exc
+
+
+async def _route_point_for_mcp(mcp: Any, *, value: str, label: str, deadline: float) -> tuple[str, dict | None]:
     """把地址、地点名或坐标转换成 AMap 路线规划可用坐标。"""
 
     if _looks_like_lnglat(value):
         return value, None
-    geo_result = mcp.call(tool_name=AMAP_MCP_GEO_TOOL, arguments={"address": value}, timeout_seconds=timeout_seconds)
+    geo_result = await _call_mcp_with_deadline(
+        mcp,
+        tool_name=AMAP_MCP_GEO_TOOL,
+        arguments={"address": value},
+        deadline=deadline,
+    )
     return _extract_geo_location(geo_result, label)
 
 
@@ -3342,6 +3655,7 @@ BUILTIN_TOOLS = (
     CloseAudioSessionTool,
     SearchWebTool,
     QuerySystemTimeTool,
+    QueryCurrentLocationTool,
     QueryRoutePlanTool,
     MemorySearchTool,
     ManageMemoryTool,

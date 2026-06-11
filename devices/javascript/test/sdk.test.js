@@ -309,6 +309,60 @@ test("custom command 会调用 App handler 并通过 context 发送 custom 结�
   assert.equal(sentEvents(transport)[0].payload.ok, true);
 });
 
+test("标准定位命令会调用浏览器 geolocation 并返回 command.completed", async () => {
+  const transport = new MockTransport();
+  const originalNavigator = globalThis.navigator;
+  Object.defineProperty(globalThis, "navigator", {
+    configurable: true,
+    value: {
+      geolocation: {
+        getCurrentPosition(resolve) {
+          resolve({
+            coords: {
+              latitude: 31.164033,
+              longitude: 121.410553,
+              accuracy: 12,
+              altitude: null,
+              altitudeAccuracy: null,
+              heading: null,
+              speed: null,
+            },
+            timestamp: 1781135800,
+          });
+        },
+      },
+    },
+  });
+  try {
+    const client = new DeviceClient({
+      serverUrl: "http://127.0.0.1:8765",
+      deviceId: "dev-web-001",
+      userId: "user-001",
+      name: "Web Chat",
+      transport,
+    });
+
+    await client.dispatchEvent(createEvent({
+      eventName: "command.requested",
+      userId: "user-001",
+      producerId: "server-main",
+      payload: {
+        command_id: "cmd-location-001",
+        command: "device.location.get_current",
+        params: {high_accuracy: true},
+      },
+    }));
+
+    assert.equal(sentEvents(transport)[0].event_name, "command.completed");
+    assert.equal(sentEvents(transport)[0].payload.command_id, "cmd-location-001");
+    assert.equal(sentEvents(transport)[0].payload.location.latitude, 31.164033);
+    assert.equal(sentEvents(transport)[0].payload.location.longitude, 121.410553);
+    assert.equal(sentEvents(transport)[0].payload.location.accuracy, 12);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", {configurable: true, value: originalNavigator});
+  }
+});
+
 test("标准事件不会触发 onEvent handler", async () => {
   const transport = new MockTransport();
   const client = new DeviceClient({

@@ -5,6 +5,55 @@ import json
 import time
 
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
+from realtime_agent.protocol import Event
+
+
+class RecordingEndpoint:
+    """记录测试端侧收到的控制事件。
+
+    主要功能：模拟一台可以注册到 ControlService 的端侧设备。
+    主要属性：`events` 保存 server 下发到端侧的控制事件。
+    """
+
+    def __init__(self, *, user_id: str, device_id: str) -> None:
+        self.user_id = user_id
+        self.device_id = device_id
+        self.events: list[Event] = []
+
+    def push_event(self, event: Event) -> None:
+        """记录 server 下发事件。"""
+
+        self.events.append(event)
+
+
+def register_endpoint(app: RealtimeAgentApp, endpoint: RecordingEndpoint, *, properties: dict | None = None) -> None:
+    """注册一台测试端侧设备。
+
+    主要逻辑：使用真实 `register_device()` 路径注册设备，保证 properties 会参与
+    系统路由编译。
+    参数：`app` 为测试应用，`endpoint` 为记录端侧，`properties` 为设备属性。
+    返回值：无。
+    异常情况：注册失败时断言失败。
+    """
+
+    response = app.register_device(
+        Event(
+            event_name="control.device.register.requested",
+            user_id=endpoint.user_id,
+            producer_id=endpoint.device_id,
+            payload={
+                "device_id": endpoint.device_id,
+                "device_name": endpoint.device_id,
+                "client_type": "builtin-tool-test",
+                "sdk_version": "realtime-agent-test",
+                "auth": {"mode": "disabled"},
+                "supports": {},
+                "properties": dict(properties or {}),
+            },
+        ),
+        endpoint,
+    )
+    assert response.event_name == "control.device.registered"
 
 
 def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> None:
@@ -22,6 +71,7 @@ def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> Non
         "query_device_state",
         "query_route_plan",
         "query_system_time",
+        "query_current_location",
         "memory_search",
         "manage_memory",
         "search_conversation_history",
@@ -161,6 +211,98 @@ def test_query_system_time_rejects_invalid_timezone(tmp_path) -> None:
     assert result.error["code"] == "invalid_argument"
 
 
+def test_query_current_location_returns_message_without_capable_device(tmp_path) -> None:
+    """测试目标：验证定位 Tool 在没有可消费端侧时立即返回提醒。
+
+    测试方法：分别在无设备和设备未声明定位能力时调用 `query_current_location`。
+    预期结果：Tool 不等待超时，返回 location_ready=False 和明确 provider。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    no_device = asyncio.run(
+        app.tool_gateway.call(
+            name="query_current_location",
+            user_id="user-location",
+            session_id="session-location",
+            input_data={},
+        )
+    )
+    endpoint = RecordingEndpoint(user_id="user-location", device_id="dev-location-basic")
+    register_endpoint(app, endpoint, properties={"demo.name": "basic"})
+    no_capability = asyncio.run(
+        app.tool_gateway.call(
+            name="query_current_location",
+            user_id="user-location",
+            session_id="session-location",
+            input_data={},
+        )
+    )
+
+    assert no_device.ok is True
+    assert no_device.data["provider"] == "no_active_device"
+    assert no_device.data["location_ready"] is False
+    assert no_capability.ok is True
+    assert no_capability.data["provider"] == "no_capable_device"
+    assert no_capability.data["location_ready"] is False
+    assert endpoint.events == []
+
+
+def test_query_current_location_sends_command_and_reads_device_result(tmp_path) -> None:
+    """测试目标：验证定位 Tool 会向声明定位能力的端侧发命令并读取回报。
+
+    测试方法：注册带 `realtime_agent.location=true` 的设备，异步调用 Tool 后手工
+    回发 `command.completed`。
+    预期结果：Tool 返回 location_ready=True，包含端侧经纬度和精度。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    user_id = "user-location-ok"
+    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-location")
+    register_endpoint(
+        app,
+        endpoint,
+        properties={"realtime_agent.location": True, "realtime_agent.location_commands": ["device.location.get_current"]},
+    )
+
+    async def _run():
+        task = asyncio.create_task(
+            app.tool_gateway.call(
+                name="query_current_location",
+                user_id=user_id,
+                session_id="session-location",
+                input_data={"timeout_seconds": 1},
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        command = endpoint.events[-1]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-location",
+                payload={
+                    "command_id": command.payload["command_id"],
+                    "command": "device.location.get_current",
+                    "location": {"latitude": 31.164033, "longitude": 121.410553, "accuracy": 18.5},
+                },
+            )
+        )
+        return await asyncio.wait_for(task, timeout=1)
+
+    result = asyncio.run(_run())
+
+    assert endpoint.events[-1].payload["command"] == "device.location.get_current"
+    assert result.ok is True
+    assert result.data["location_ready"] is True
+    assert result.data["provider"] == "device_gps"
+    assert result.data["latitude"] == 31.164033
+    assert result.data["longitude"] == 121.410553
+    assert result.data["accuracy_meters"] == 18.5
+
+
 def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> None:
     """测试目标：验证路线规划 Tool 可直接使用 AMAP_MCP 环境变量调用 MCP。
 
@@ -244,11 +386,11 @@ def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> No
     ]
 
 
-def test_query_route_plan_requires_explicit_origin_for_current_location(tmp_path) -> None:
-    """测试目标：验证路线规划 Tool 不会把“当前位置”错误地当作地址解析。
+def test_query_route_plan_current_location_falls_back_to_origin_prompt(tmp_path) -> None:
+    """测试目标：验证路线规划 Tool 在无法定位当前位置时提示模型追问起点。
 
-    测试方法：不传 origin，通过 ToolGateway 直接调用路线规划。
-    预期结果：Tool 立即返回 route_ready=False 和 needs_origin=True，不访问外部 MCP。
+    测试方法：不传 origin，且不注册端侧设备，通过 ToolGateway 调用路线规划。
+    预期结果：Tool 不把“当前位置”当地址解析，返回 route_ready=False 和 needs_origin=True。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
@@ -267,6 +409,84 @@ def test_query_route_plan_requires_explicit_origin_for_current_location(tmp_path
     assert result.data["provider"] == "needs_origin"
     assert result.data["needs_origin"] is True
     assert "出发地点" in result.message
+
+
+def test_query_route_plan_resolves_current_location_with_device_gps(tmp_path, monkeypatch) -> None:
+    """测试目标：验证路线规划 Tool 会在 origin=当前位置时先请求端侧 GPS。
+
+    测试方法：注册声明定位能力的端侧，异步调用路线规划后回发定位结果，并替换
+    AMap MCP Gateway 记录 geocode 和 route 调用。
+    预期结果：路线规划使用端侧经纬度作为 origin，且不把“当前位置”送去 geocode。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    user_id = "user-route-gps"
+    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-route-gps")
+    register_endpoint(
+        app,
+        endpoint,
+        properties={"realtime_agent.location": True, "realtime_agent.location_commands": ["device.location.get_current"]},
+    )
+
+    class FakeMcp:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def call(self, tool_name, arguments, timeout_seconds=None):
+            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments), "timeout_seconds": timeout_seconds})
+            if tool_name == "amap.geo":
+                return {
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps({"return": [{"location": "121.410553,31.164033"}]}, ensure_ascii=False),
+                            }
+                        ]
+                    }
+                }
+            return {"result": {"distance": 120, "duration": 90}}
+
+    fake_mcp = FakeMcp()
+    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: fake_mcp)
+
+    async def _run():
+        task = asyncio.create_task(
+            app.tool_gateway.call(
+                name="query_route_plan",
+                user_id=user_id,
+                session_id="session-route",
+                input_data={"origin": "当前位置", "destination": "虹漕路地铁站", "timeout_seconds": 3},
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        command = endpoint.events[-1]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-route-gps",
+                payload={
+                    "command_id": command.payload["command_id"],
+                    "command": "device.location.get_current",
+                    "location": {"latitude": 31.230525, "longitude": 121.473667, "accuracy": 21.0},
+                },
+            )
+        )
+        return await asyncio.wait_for(task, timeout=3)
+
+    result = asyncio.run(_run())
+
+    assert result.ok is True
+    assert result.data["route_ready"] is True
+    assert result.data["origin_location"] == "121.473667,31.230525"
+    assert result.data["origin_location_source"] == "device_gps"
+    assert result.data["origin_location_accuracy_meters"] == 21.0
+    assert [call["tool_name"] for call in fake_mcp.calls] == ["amap.geo", "amap.route_plan"]
+    assert fake_mcp.calls[-1]["arguments"]["origin"] == "121.473667,31.230525"
 
 
 def test_query_route_plan_marks_mcp_business_error_not_ready(tmp_path, monkeypatch) -> None:
@@ -309,6 +529,48 @@ def test_query_route_plan_marks_mcp_business_error_not_ready(tmp_path, monkeypat
     assert result.data["provider"] == "amap_mcp"
     assert "OVER_DIRECTION_RANGE" in result.data["error"]
     assert "失败" in result.message
+
+
+def test_query_route_plan_reports_timeout_to_model(tmp_path, monkeypatch) -> None:
+    """测试目标：验证路线规划 MCP 超时时 Tool 会返回可读失败原因。
+
+    测试方法：替换 AMap MCP Gateway，让路线调用抛出 TimeoutError。
+    预期结果：ToolResult 仍能回到模型，route_ready=False，provider=timeout。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+
+    class FakeMcp:
+        def call(self, tool_name, arguments, timeout_seconds=None):
+            if tool_name == "amap.geo":
+                return {
+                    "result": {
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": json.dumps({"return": [{"location": "121.410553,31.164033"}]}, ensure_ascii=False),
+                            }
+                        ]
+                    }
+                }
+            raise TimeoutError("simulated route timeout")
+
+    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: FakeMcp())
+
+    result = asyncio.run(
+        app.tool_gateway.call(
+            name="query_route_plan",
+            user_id="user-route",
+            session_id="session-route",
+            input_data={"origin": "上海市", "destination": "虹漕路地铁站"},
+        )
+    )
+
+    assert result.ok is True
+    assert result.data["route_ready"] is False
+    assert result.data["provider"] == "timeout"
+    assert "timeout" in result.data["error"]
+    assert "超时" in result.message
 
 
 def test_search_conversation_history_reads_runs_messages(tmp_path) -> None:

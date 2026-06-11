@@ -231,7 +231,7 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
     """按端侧声明的系统级属性编译内部路由。
 
     主要逻辑：`supports` 只表达端侧可被调用的业务传感器/执行器；麦克风、扬声器、
-    显示窗口和 peer video 命令端点属于系统链路，由 properties 声明后补齐内部订阅。
+    显示窗口、定位和 peer video 命令端点属于系统链路，由 properties 声明后补齐内部订阅。
     显示窗口消费已经进入 server 的 `sensor.rgb` 输入流，因此订阅的是
     `stream.input.*`，不是 `stream.control.*`。App 通过端侧 SDK 语法糖注册的自定义
     回调会被 SDK 写入 properties，server 再编译成 `custom.*` 路由。
@@ -251,6 +251,8 @@ def compile_system_routes_from_properties(properties: dict[str, Any] | None) -> 
         routes.append({"event": "command.*"})
     if _truthy_property(data.get("actuator.display.rgb")) or _truthy_property(data.get("endpoint.role.visual_display")):
         routes.append({"event": "stream.input.*", "filter": {"stream_type": "sensor.rgb"}})
+    if _truthy_property(data.get("realtime_agent.location")):
+        routes.append({"event": "command.*", "filter": {"payload.command": "device.location.get_current"}})
     if _truthy_property(data.get("peer.video.receiver")) or _truthy_property(data.get("peer.video.sender")):
         routes.append({"event": "command.*"})
     if _truthy_property(data.get("realtime_agent.custom_command_consumer")):

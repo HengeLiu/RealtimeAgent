@@ -279,11 +279,7 @@ export class DeviceClient {
       case "custom.command.requested":
         return this.dispatchCustomEvent(event);
       case "command.requested":
-        await this.sendEvent("command.failed", {
-          command_id: eventPayload(event).command_id,
-          error: {code: "unhandled_command", message: "standard command is not handled by JavaScript demo SDK"},
-        }, {sessionId: eventSessionId(event)});
-        return true;
+        return this.dispatchStandardCommand(event);
       case "stream.control.open.requested":
         await this.handleStreamOpen(event);
         return true;
@@ -560,6 +556,68 @@ export class DeviceClient {
     if (!handler) return false;
     await handler(event);
     return true;
+  }
+
+  async dispatchStandardCommand(event) {
+    const payload = eventPayload(event);
+    const command = payload.command;
+    if (command === "device.location.get_current") {
+      await this.handleLocationCommand(event);
+      return true;
+    }
+    await this.sendEvent("command.failed", {
+      command_id: payload.command_id,
+      command,
+      error: {code: "unhandled_command", message: "standard command is not handled by JavaScript demo SDK"},
+    }, {sessionId: eventSessionId(event)});
+    return true;
+  }
+
+  async handleLocationCommand(event) {
+    const payload = eventPayload(event);
+    const commandId = payload.command_id;
+    const params = payload.params ?? {};
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      await this.sendEvent("command.failed", {
+        command_id: commandId,
+        command: payload.command,
+        error: {code: "geolocation_unavailable", message: "browser geolocation is unavailable"},
+      }, {sessionId: eventSessionId(event)});
+      return;
+    }
+    try {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: params.high_accuracy !== false,
+          timeout: Number(params.timeout_ms ?? 5000),
+          maximumAge: Number(params.maximum_age_ms ?? 0),
+        });
+      });
+      await this.sendEvent("command.completed", {
+        command_id: commandId,
+        command: payload.command,
+        location: {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          altitude: position.coords.altitude,
+          altitude_accuracy: position.coords.altitudeAccuracy,
+          heading: position.coords.heading,
+          speed: position.coords.speed,
+          timestamp_ms: position.timestamp,
+          source: "browser_geolocation",
+        },
+      }, {sessionId: eventSessionId(event)});
+    } catch (error) {
+      await this.sendEvent("command.failed", {
+        command_id: commandId,
+        command: payload.command,
+        error: {
+          code: error?.code ? `geolocation_${error.code}` : "geolocation_failed",
+          message: error?.message ?? "browser geolocation failed",
+        },
+      }, {sessionId: eventSessionId(event)});
+    }
   }
 
   async ensureConfiguredStreams() {

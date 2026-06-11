@@ -88,6 +88,8 @@ class WebChatRuntime {
       properties: {
         "demo.name": "device_app_demo",
         "demo.interaction": "audio_video_conversation",
+        "realtime_agent.location": true,
+        "realtime_agent.location_commands": ["device.location.get_current"],
       },
       logLevel: "debug",
     });
