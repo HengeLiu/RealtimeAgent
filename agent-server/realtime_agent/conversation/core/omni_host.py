@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from realtime_agent.conversation.context import ContextCompileRequest, ContextCompiler, PromptRegistry, record_context_events
+from realtime_agent.conversation.context.models import normalize_history_message
 from realtime_agent.conversation.core.base import AgentCoreEvent, AgentEventBuffer
 from realtime_agent.conversation.core.recovery import DEFAULT_RECOVERABLE_ERROR_MESSAGE, record_agent_recovery_error
 from realtime_agent.conversation.input.visual_appender import OmniVisualAppender, VisualAppendContext
@@ -153,18 +154,6 @@ REALTIME_TOOL_CALL_PROMPT_RULE = _registered_prompt_text(
     ),
 )
 
-
-def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
-    """把落盘消息转换为 Realtime 可注入的历史上下文。"""
-
-    role = str(record.get("role") or "").strip()
-    if role not in {"user", "assistant"}:
-        return None
-    content = record.get("content")
-    text = " ".join(content.strip().split()) if isinstance(content, str) else ""
-    if not text:
-        return None
-    return {"role": role, "content": text}
 
 
 def _provider_tool_schema_name(schema: dict[str, Any]) -> str:
