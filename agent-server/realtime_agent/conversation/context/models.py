@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -122,9 +123,12 @@ class ModelContext:
 
 
 def estimate_tokens(value: Any) -> int:
-    """用轻量字符数估算 token 数。
+    """用加权字符数估算 token 数。
 
-    主要逻辑：第一版不引入 provider tokenizer，按中英文混合场景用字符数近似估算。
+    主要逻辑：不引入 provider tokenizer，按字符类型加权估算。
+    - ASCII 字符（英文、数字、标点）：约 4 字符/token
+    - CJK 统一汉字：约 1.5 字符/token（常见中文字符在 cl100k_base 下约 1 token/字）
+    - 其他字符（拉丁扩展、Emoji 等）：约 2 字符/token
     参数：`value` 是任意上下文内容。
     返回值：至少为 1 的估算 token 数。
     异常情况：无。
@@ -133,7 +137,32 @@ def estimate_tokens(value: Any) -> int:
     text = _stringify(value)
     if not text:
         return 0
-    return max(1, (len(text) + 3) // 4)
+    ascii_count = 0
+    cjk_count = 0
+    other_count = 0
+    for ch in text:
+        code = ord(ch)
+        if code < 0x80:
+            ascii_count += 1
+        elif _is_cjk(code):
+            cjk_count += 1
+        else:
+            other_count += 1
+    return max(1, ascii_count // 4 + (cjk_count * 3 + 1) // 2 + other_count // 2)
+
+
+def _is_cjk(code: int) -> bool:
+    """判断 Unicode 码点是否属于 CJK 统一汉字范围。"""
+
+    return (
+        0x4E00 <= code <= 0x9FFF       # CJK Unified Ideographs
+        or 0x3400 <= code <= 0x4DBF    # CJK Extension A
+        or 0xF900 <= code <= 0xFAFF    # CJK Compatibility Ideographs
+        or 0x20000 <= code <= 0x2A6DF  # CJK Extension B
+        or 0x2A700 <= code <= 0x2CEAF  # CJK Extensions C-F
+        or 0x3000 <= code <= 0x303F    # CJK Symbols and Punctuation
+        or 0xFF00 <= code <= 0xFFEF    # Fullwidth Forms
+    )
 
 
 def _preview(value: Any, *, limit: int = 240) -> str:
@@ -147,8 +176,71 @@ def _stringify(value: Any) -> str:
     if isinstance(value, str):
         return value
     try:
-        import json
-
         return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
     except Exception:
         return str(value)
+
+
+def normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
+    """把落盘消息转换为模型可消费的历史上下文。
+
+    主要逻辑：回灌 user/assistant 文本，并保留成对工具历史中的 assistant
+    tool_calls 与 tool result，避免后续轮次只看到普通助手文本。
+    参数：`record` 为 messages.jsonl 中的一行。
+    返回值：模型消息或 None。
+    异常情况：字段缺失或内容为空时返回 None。
+    """
+
+    role = str(record.get("role") or "").strip()
+    if role == "assistant" and isinstance(record.get("tool_calls"), list):
+        tool_calls = [normalize_tool_call(item) for item in record.get("tool_calls") or [] if isinstance(item, dict)]
+        tool_calls = [item for item in tool_calls if item is not None]
+        if tool_calls:
+            content = record.get("content") if isinstance(record.get("content"), str) else ""
+            return {"role": "assistant", "content": content, "tool_calls": tool_calls}
+    if role == "tool":
+        tool_call_id = str(record.get("tool_call_id") or "").strip()
+        if not tool_call_id:
+            return None
+        content = record.get("content")
+        if not isinstance(content, str):
+            content = json.dumps(content, ensure_ascii=False, default=str)
+        return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
+    if role not in {"user", "assistant"}:
+        return None
+    content = record.get("content")
+    text = " ".join(content.strip().split()) if isinstance(content, str) else ""
+    if not text:
+        return None
+    return {"role": role, "content": text}
+
+
+def normalize_tool_call(item: dict[str, Any]) -> dict[str, Any] | None:
+    """把落盘的 tool_call 记录转换为 OpenAI-compatible 格式。
+
+    主要逻辑：兼容 id/tool_call_id、name/function.name、arguments 为 str 或 dict
+    等多种落盘格式，输出统一的 function 调用结构。
+    参数：`item` 为 tool_calls 列表中的一个元素。
+    返回值：标准化的 tool_call 字典或 None。
+    异常情况：缺少 id 或 name 时返回 None。
+    """
+
+    call_id = str(item.get("id") or item.get("tool_call_id") or "").strip()
+    name = str(item.get("name") or "").strip()
+    arguments = item.get("arguments") or {}
+    function = item.get("function") if isinstance(item.get("function"), dict) else None
+    if function is not None:
+        name = name or str(function.get("name") or "").strip()
+        arguments = arguments or function.get("arguments") or {}
+    if not call_id or not name:
+        return None
+    if not isinstance(arguments, str):
+        try:
+            arguments = json.dumps(arguments, ensure_ascii=False, default=str)
+        except TypeError:
+            arguments = json.dumps({"_raw_arguments": str(arguments)}, ensure_ascii=False)
+    return {
+        "id": call_id,
+        "type": "function",
+        "function": {"name": name, "arguments": arguments},
+    }

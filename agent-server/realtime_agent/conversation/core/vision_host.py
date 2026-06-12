@@ -11,6 +11,7 @@ from realtime_agent.observability import RunRecorder
 from realtime_agent.output import AssistantTextDelta, OutputService
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, new_id
 from realtime_agent.conversation.context import ContextCompileRequest, ContextCompiler, record_context_events
+from realtime_agent.conversation.context.models import normalize_history_message
 from realtime_agent.conversation.core.base import AgentCoreEvent, AgentEventBuffer
 from realtime_agent.conversation.multimodal import ModelMessageManager, MultimodalMessagePolicy
 from realtime_agent.conversation.providers.model_adapters import (
@@ -27,57 +28,6 @@ from realtime_agent.asset import AssetService
 from realtime_agent.errors import ErrorCode
 from realtime_agent.tools import ToolError, ToolGateway, ToolResult
 
-
-def _normalize_history_message(record: dict[str, Any]) -> dict[str, Any] | None:
-    """把落盘消息转换为模型可消费的历史上下文。
-
-    主要逻辑：回灌 `user/assistant` 文本，并保留成对工具历史中的 assistant
-    `tool_calls` 与 `tool` result，避免后续轮次只看到普通助手文本。
-    参数：`record` 为 `messages.jsonl` 中的一行。
-    返回值：模型消息或 None。
-    异常情况：字段缺失或内容为空时返回 None。
-    """
-
-    role = str(record.get("role") or "").strip()
-    if role == "assistant" and isinstance(record.get("tool_calls"), list):
-        tool_calls = []
-        for item in record.get("tool_calls") or []:
-            if not isinstance(item, dict):
-                continue
-            call_id = str(item.get("id") or item.get("tool_call_id") or "").strip()
-            name = str(item.get("name") or "").strip()
-            arguments = item.get("arguments") or {}
-            if not call_id or not name:
-                continue
-            if not isinstance(arguments, str):
-                arguments = json.dumps(arguments, ensure_ascii=False, default=str)
-            tool_calls.append(
-                {
-                    "id": call_id,
-                    "type": "function",
-                    "function": {"name": name, "arguments": arguments},
-                }
-            )
-        if tool_calls:
-            return {"role": "assistant", "content": "", "tool_calls": tool_calls}
-    if role == "tool":
-        tool_call_id = str(record.get("tool_call_id") or "").strip()
-        if not tool_call_id:
-            return None
-        content = record.get("content")
-        if not isinstance(content, str):
-            content = json.dumps(content, ensure_ascii=False, default=str)
-        return {"role": "tool", "tool_call_id": tool_call_id, "content": content}
-    if role not in {"user", "assistant"}:
-        return None
-    content = record.get("content")
-    if isinstance(content, str):
-        text = " ".join(content.strip().split())
-    else:
-        text = ""
-    if not text:
-        return None
-    return {"role": role, "content": text}
 
 
 def _provider_tool_call_message(tool_calls: list[dict[str, Any]]) -> dict[str, Any]:

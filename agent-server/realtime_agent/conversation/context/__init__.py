@@ -7,7 +7,7 @@
 """
 
 from realtime_agent.conversation.context.compiler import ContextCompileRequest, ContextCompiler, record_context_events
-from realtime_agent.conversation.context.models import ContextSource, ModelContext, PromptAsset
+from realtime_agent.conversation.context.models import ContextSource, ModelContext, PromptAsset, normalize_history_message, normalize_tool_call
 from realtime_agent.conversation.context.policy import ContextPolicy
 from realtime_agent.conversation.context.registry import PromptRegistry
 
