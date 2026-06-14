@@ -287,36 +287,6 @@ def test_high_frequency_frame_progress_only_writes_artifacts(tmp_path, caplog) -
     assert (tmp_path / "runs" / "control-routes.jsonl").exists()
 
 
-def test_process_dispatch_task_signal_only_writes_artifacts(tmp_path, caplog) -> None:
-    """测试目标：普通 process dispatch 任务信号不应刷终端日志。
-
-    测试方法：记录一条 `task.event.dispatch.accepted` 且 `task_event_type=process` 的信号。
-    预期结果：信号写入 task-signals.jsonl，但终端不输出 `任务信号 ...`。
-    """
-
-    recorder = RunRecorder(tmp_path / "runs")
-    record = {
-        "signal_name": "task.event.dispatch.accepted",
-        "task_id": "task-log",
-        "task_type": "find_object_task",
-        "session_id": "sess-log",
-        "user_id": "user-log",
-        "payload": {
-            "event_name": "task.event.process",
-            "event_id": "evt-log",
-            "task_event_type": "process",
-        },
-        "allow_direct_notify": False,
-        "requires_agent_decision": False,
-    }
-
-    with caplog.at_level(logging.DEBUG, logger="realtime_agent.runs"):
-        recorder.record_task_signal("sess-log", record)
-
-    assert not any(record.getMessage() == "任务信号 task.event.dispatch.accepted" for record in caplog.records)
-    assert (tmp_path / "runs" / "user-log" / "sess-log" / "task-signals.jsonl").exists()
-
-
 def test_realtime_provider_error_terminal_log_keeps_actionable_message(tmp_path, caplog) -> None:
     """测试目标：Realtime provider 错误日志不能截断关键错误信息。
 

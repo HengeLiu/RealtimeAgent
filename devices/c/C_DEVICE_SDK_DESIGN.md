@@ -22,7 +22,7 @@ C Device SDK 的目标是提供一套可移植的端侧协议核心：
 - 不内置 ESP32-S3 引脚表。
 - 不直接初始化 I2S、PDM、camera、功放、WakeNet 或 AEC。
 - 不绑定 ESP-IDF、POSIX、libwebsockets 或某个 JSON 库。
-- 不实现业务 Tool / Task。
+- 不实现业务 Tool。
 - 不让 App 手写标准协议事件状态机。
 
 ## 2. 分层边界

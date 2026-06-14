@@ -16,7 +16,7 @@ def test_tool_result_public_contract_fields() -> None:
     """测试目标：冻结 ToolResult 的 P0 公开字段和成功/失败工厂。
 
     测试方法：分别构造成功和失败结果，检查字段名、默认值和结构化错误。
-    预期结果：Agent Core 和业务 Tool 可以稳定读取 ok/data/message/assets/artifacts/tasks/meta/error。
+    预期结果：Agent Core 和业务 Tool 可以稳定读取 ok/data/message/assets/artifacts/meta/error/status。
     """
 
     success = ToolResult.success(data={"answer": 1}, message="done", meta={"trace_id": "trace-1"})
@@ -34,7 +34,7 @@ def test_tool_result_public_contract_fields() -> None:
     assert success.message == "done"
     assert success.assets == []
     assert success.artifacts == []
-    assert success.tasks == []
+    assert success.status == "completed"
     assert success.meta == {"trace_id": "trace-1"}
     assert success.error is None
     assert success.content == success.data

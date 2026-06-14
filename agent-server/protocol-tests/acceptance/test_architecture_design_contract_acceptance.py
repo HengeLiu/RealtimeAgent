@@ -118,7 +118,6 @@ def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
         "record_model_request",
         "record_agent_event",
         "record_tool_trace",
-        "record_task_signal",
         "record_output_stream",
         "write_result",
     ]:

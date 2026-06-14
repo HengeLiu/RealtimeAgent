@@ -6,9 +6,9 @@
 
 核心边界：
 
-- Server SDK 负责设备注册、控制事件、数据流生命周期、Agent Core、工具 / 任务调度、输出播放仲裁和运行产物记录。
+- Server SDK 负责设备注册、控制事件、数据流生命周期、Agent Core、工具调度、输出播放仲裁和运行产物记录。
 - Device SDK / 端侧负责录音、播放、相机、传感器、震动、视频显示、硬件驱动和控制信令处理。
-- 业务能力通过应用目录下的 Tool / Task 暴露给 Agent，不写进 SDK 核心包。
+- 业务能力通过应用目录下的 Tool 暴露给 Agent，不写进 SDK 核心包。
 - `dev-support/` 是开发和测试支持组件，不是正式产品形态。
 - `legacy/` 只作为迁移参考，除非任务明确要求，不要从 `legacy/` 开始改主线功能。
 
@@ -19,7 +19,7 @@
 - [README.md](README.md)：项目入口、快速开始、本地多设备启动顺序。
 - [docs/README.md](docs/README.md)：社区向文档导航。
 - [docs/tutorials/developer-overview.md](docs/tutorials/developer-overview.md)：开发者总体导览。
-- [docs/tutorials/build-first-capability.md](docs/tutorials/build-first-capability.md)：第一个 Tool / Task。
+- [docs/tutorials/build-first-capability.md](docs/tutorials/build-first-capability.md)：第一个能力工具。
 - [docs/internal/cli.md](docs/internal/cli.md)：CLI 命令参考。
 - [docs/testing.md](docs/testing.md)：测试分层、测试命令和验收边界。
 - [agent-server/README.md](agent-server/README.md)：Server SDK 目录和职责。
@@ -58,21 +58,22 @@ legacy/                           # 旧实现和迁移参考
 ## 架构边界
 
 - SDK 核心包 `realtime_agent` 提供通用能力，不放具体业务逻辑。
-- 应用业务 Tool / Task 放在 `examples/<app>/agent-server/capabilities/` 或外部应用自己的 app-root。
-- Tool / Task 只能通过 `ToolContext` / `TaskContext` 访问设备、资产、输出和上下文能力，不直接操作 WebSocket、内部服务对象或硬编码 `device_id`。
-- 麦克风和扬声器属于系统音频主链路，不作为普通设备 `supports` capability 暴露给业务 Tool / Task。
+- 应用业务 Tool 放在 `examples/<app>/agent-server/capabilities/` 或外部应用自己的 app-root。
+- Tool 只能通过 `ToolContext` 访问设备、资产、输出和上下文能力，不直接操作 WebSocket、内部服务对象或硬编码 `device_id`。
+- 麦克风和扬声器属于系统音频主链路，不作为普通设备 `supports` capability 暴露给业务 Tool。
 - 图片、音频、视频、深度图等大字节数据必须走数据流或资产服务，不放进控制信令 JSON。
 - 设备开发者只需要实现注册、能力声明、控制事件处理和数据流读写，不应该理解或依赖 Agent Core 内部实现。
 - `legacy/` 中的旧路径、旧协议和旧配置名不能直接复制到主线代码；借鉴旧逻辑前先确认当前公开 API 和文档。
 
-## Tool / Task 规则
+## Tool 规则
 
-一次性、短生命周期动作写 Tool；持续运行、订阅数据流、维护状态或后台流程写 Task。
+所有业务能力统一写成 Tool。短动作默认前台执行；耗时不稳定或持续运行的能力声明
+`late_result_policy="background"`，由统一的 Tool Run 机制后台执行并把结果回流模型。
 
 公开导入优先使用：
 
 ```python
-from realtime_agent import BaseTask, BaseTool, TaskContext, ToolContext, ToolResult
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 ```
 
 常用能力：
@@ -83,7 +84,7 @@ from realtime_agent import BaseTask, BaseTool, TaskContext, ToolContext, ToolRes
 - `context.output.say()`：生成用户可听输出。
 - `context.assets.get()`：读取资产。
 
-新增能力时先判断 Tool 还是 Task，再写清端侧能力需求，确认设备能力文件，补测试或可复现联调流程，并检查 `runs/` 产物。
+新增能力时先判断是前台短动作还是后台能力（background），再写清端侧能力需求，确认设备能力文件，补测试或可复现联调流程，并检查 `runs/` 产物。
 
 ## 协议规则
 

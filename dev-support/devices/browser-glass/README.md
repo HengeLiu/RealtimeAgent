@@ -66,7 +66,7 @@ SDK，不需要复用这个浏览器页面结构。
 
 ## peer video sender
 
-业务 Task 可以先启动 Python phone receiver，再向 browser-glass 下发：
+后台 Tool 可以先启动 Python phone receiver，再向 browser-glass 下发：
 
 ```text
 command.requested command=peer.video.sender.start
@@ -102,11 +102,11 @@ command.requested command=peer.video.sender.start
 2. 启动 `python-phone` 手机视频/视觉模拟组件。
 3. 打开 `browser-glass` 页面并连接注册。
 4. 在“带图输入”区域选择图片或视频。
-5. 通过语音触发找物 / 红绿灯 Task，例如“帮我找一下凳子在哪里”或“帮我留意前面的红绿灯”。
+5. 通过语音触发找物 / 红绿灯后台 Tool，例如“帮我找一下凳子在哪里”或“帮我留意前面的红绿灯”。
 
 普通 realtime 视觉采样会在说话期间向 browser-glass 请求带 `request_id` 的
 `sensor.rgb` 单资产帧；这类帧只进入模型/资产链路，不会转发给 Python phone。
-模型明确调用 `start_find_object_task` 或 `start_traffic_light_task` 后，server 才会
+模型明确调用 `find_object 工具` 或 `traffic_light 工具` 后，server 才会
 先启动 Python phone receiver，再向 browser-glass 下发 `peer.video.sender.start`。
 视频不会一次性上传文件本身，而是在浏览器按采集频率抽取当前播放帧，作为 JPEG 帧走
 peer video WebSocket。采集请求不会控制视频进度，只有切换资源、停止 peer sender、

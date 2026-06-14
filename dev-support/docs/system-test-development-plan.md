@@ -11,7 +11,7 @@
 1. 支持从 `browser-glass` 手动测试结果生成 Case YAML 草稿。
 2. 支持 `python-playback-glass` 从 Case YAML 自动回放 `testdata/audio-sample` 和 `testdata/image-sample`。
 3. 回放设备通过 `/ws/control` 和 `/ws/stream` 与 server 对话。
-4. 支持检查事件、stream、Tool、Task、资产、输出和系统错误。
+4. 支持检查事件、stream、Tool、资产、输出和系统错误。
 5. 支持输出结构化 `report.json`。
 6. 支持被 pytest 或本地命令调用，但 pytest 不直接操作 server 内部对象。
 
@@ -32,7 +32,7 @@
 1. 不新增 `agent-server/realtime_agent/system_test/`。
 2. 不新增 `realtime-agent.system-test.run` 或 `realtime-agent.system-test.record`。
 3. 不在回放设备里实例化 `RealtimeAgentApp` 或 `RealtimeAgentConfig`。
-4. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
+4. 不直接调用 `ToolGateway`、`Tool Run 运行时`、`OutputService`、`AssetService`。
 5. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
 6. 不把 in-process playback 作为系统测试主路径。
 
@@ -127,7 +127,7 @@ uv run python -m realtime_agent_python_playback_glass run \
 
 1. server `/api/debug/devices` 能看到 `python-playback-glass`。
 2. runs 中出现设备注册事件。
-3. 代码搜索确认没有 `RealtimeAgentApp`、`ToolGateway`、`TaskEngine` 等内部依赖。
+3. 代码搜索确认没有 `RealtimeAgentApp`、`ToolGateway`、`Tool Run 运行时` 等内部依赖。
 
 ### 阶段 2：Case Schema 和最小回放 Case
 
@@ -209,7 +209,7 @@ uv run python -m realtime_agent_python_playback_glass run \
 1. `python-playback-glass record` 从 runs 产物生成 Case 草稿。
 2. 支持 `--runs-root --user-id --device-id --session-id`。
 3. 支持 `--audio` 和 `--image stream_type=path`。
-4. 读取 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`task-signals.jsonl`、`assets.jsonl`、`model-request.json`。
+4. 读取 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`tool-runs.jsonl`、`assets.jsonl`、`model-request.json`。
 5. 过滤动态字段。
 6. `browser-glass` 页面增加录制状态区，并生成 `python-playback-glass record` 命令。
 
@@ -309,7 +309,7 @@ uv run python -m pytest dev-support/unit-tests/python_playback_glass -q
 1. browser-glass 页面可以辅助录制 Case。
 2. smoke suite 可以通过 pytest 一条命令运行。
 3. 多设备 Case 能验证 RGB 从眼镜端转发到 phone preview。
-4. Task Case 能验证 `task-signals.jsonl`。
+4. Tool Run Case 能验证 `tool-runs.jsonl`。
 5. 文档、CLI、示例 Case 和测试结果一致。
 
 ## 8. 实施记录
@@ -363,7 +363,7 @@ uv run python -m pytest dev-support/unit-tests/python_playback_glass -q
 
 - 状态：已完成。
 - 目标：降低手写 Case 成本。
-- 实现：新增 `record` 子命令，从 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`task-signals.jsonl`、`assets.jsonl`、`model-request.json` 生成 Case 草稿；过滤动态字段；在 `browser-glass` 页面新增录制命令生成区。
+- 实现：新增 `record` 子命令，从 `events.jsonl`、`stream-events.jsonl`、`tool-events.jsonl`、`tool-runs.jsonl`、`assets.jsonl`、`model-request.json` 生成 Case 草稿；过滤动态字段；在 `browser-glass` 页面新增录制命令生成区。
 - 文件：`recorder.py`、`browser-glass/index.html`、`README.md`。
 - 验证：`test_recorder_generates_stable_case_without_dynamic_ids` 通过；`node` 检查 browser-glass 内联脚本语法通过。
 - 待验收：用一次真实 browser-glass 手测 runs 产物生成草稿，并人工确认断言严格度。

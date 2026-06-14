@@ -46,4 +46,4 @@ uv run python -m pytest -m device_sdk -q
 4. runs artifact 是否写出关键字段。
 5. 异常路径是否有明确错误和恢复行为。
 
-不要在 Server SDK L1 测试里硬编码具体应用业务 Task；应用能力放到 `examples/<app>/app-tests/` 或 `replay-tests/`。
+不要在 Server SDK L1 测试里硬编码具体应用后台 Tool；应用能力放到 `examples/<app>/app-tests/` 或 `replay-tests/`。

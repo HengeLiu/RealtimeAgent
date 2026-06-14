@@ -28,7 +28,7 @@
 它不承担：
 
 1. server SDK 内部功能。
-2. Agent Core、Tool、Task 的业务逻辑。
+2. Agent Core、Tool 的业务逻辑。
 3. 自动化批量回放和 CI 主入口。
 4. 直接生成最终系统测试 Case。
 
@@ -182,16 +182,16 @@ peer video 任务流，才会进入端侧显示 / 处理设备。
 
 ## 6.1 peer video 任务发送
 
-找物和红绿灯 Task 不通过 `sensor.rgb` 单资产流把视频转发给手机。当前流程是：
+找物和红绿灯后台 Tool 不通过 `sensor.rgb` 单资产流把视频转发给手机。当前流程是：
 
-1. 模型明确调用 `start_find_object_task` 或 `start_traffic_light_task`。
+1. 模型明确调用 `find_object 工具` 或 `traffic_light 工具`。
 2. server 先向 Python phone 下发 `peer.video.receiver.start`。
 3. phone 回报 `peer.receiver.ready`，并提供 receiver WebSocket URL。
 4. server 再向 browser-glass 下发 `peer.video.sender.start`。
 5. browser-glass 连接 phone receiver，按 fps 抽取图片、视频或摄像头当前帧，发送 JPEG。
 6. 收到 `peer.video.sender.start.stop`、控制连接关闭、页面关闭或 WebSocket 异常时停止发送。
 
-这个顺序保证 Task 之前眼镜不会把视频帧发送到手机；说话期间的 realtime visual sampler
+这个顺序保证 后台 Tool 之前眼镜不会把视频帧发送到手机；说话期间的 realtime visual sampler
 只服务模型视觉输入，不建立眼镜到手机的直连。
 
 ## 7. 输出和执行器

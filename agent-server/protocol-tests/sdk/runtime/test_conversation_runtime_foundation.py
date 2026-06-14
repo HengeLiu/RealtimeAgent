@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 import realtime_agent.conversation.input.asr_session as asr_session_module
 from realtime_agent.asset import AssetStoreABC
-from realtime_agent.capability import McpGatewayABC, SkillGatewayABC, TaskEngineABC, ToolGatewayABC
+from realtime_agent.capability import McpGatewayABC, SkillGatewayABC, ToolGatewayABC
 from realtime_agent.conversation import (
     AgentCoreABC,
     AgentOutputDelta,
@@ -213,18 +213,15 @@ def test_asset_store_abc_is_importable_design_contract() -> None:
 def test_capability_gateway_abcs_are_importable_design_contracts() -> None:
     """测试目标：验证 Capability Layer gateway 抽象已落成代码契约。
 
-    测试方法：导入 Tool、Task、Skill、MCP 四类 gateway ABC。
+    测试方法：导入 Tool、Skill、MCP 三类 gateway ABC。
     预期结果：Agent 层后续可通过这些抽象访问能力层，而不是直接依赖业务实现。
     """
 
     assert ToolGatewayABC is not None
-    assert TaskEngineABC is not None
     assert SkillGatewayABC is not None
     assert McpGatewayABC is not None
     for method_name in ("tool_schemas", "provider_schemas", "call_tool"):
         assert hasattr(ToolGatewayABC, method_name)
-    for method_name in ("start_task", "cancel_task", "query_task", "handle_command_result", "emit_signal"):
-        assert hasattr(TaskEngineABC, method_name)
 
 
 def test_speaker_sink_abc_is_importable_design_contract() -> None:
@@ -594,10 +591,9 @@ def test_conversation_output_controller_routes_agent_output_delta() -> None:
     """测试目标：验证输出适配层使用 AgentOutputRouter。
 
     测试方法：构造假的 OutputService 和 recorder，分别发送旧 kind 和设计文档中的
-    `text/audio/control/task_signal` 输出增量。
+    `text/audio/control` 输出增量。
     预期结果：文本进入 `submit_text`，音频进入 `submit_audio`，取消进入
-    `interrupt_user`，TaskSignal 可按策略转文本输出，且每个 delta 都会记录
-    conversation event。
+    `interrupt_user`，且每个 delta 都会记录 conversation event。
     """
 
     class FakeOutputService:
@@ -666,24 +662,15 @@ def test_conversation_output_controller_routes_agent_output_delta() -> None:
             metadata={"user_id": "user-a"},
         )
     )
-    controller.emit(
-        AgentOutputDelta(
-            kind="task_signal",
-            session_id="session-a",
-            payload={"message": "后台任务完成"},
-            metadata={"user_id": "user-a"},
-        )
-    )
 
-    assert [name for name, _payload in output_service.calls] == ["text", "audio", "cancel", "text", "audio", "cancel", "text"]
+    assert [name for name, _payload in output_service.calls] == ["text", "audio", "cancel", "text", "audio", "cancel"]
     assert output_service.calls[0][1]["text"] == "你好"
     assert output_service.calls[1][1]["format"].sample_rate == 24000
     assert output_service.calls[2][1]["reason"] == "test_cancel"
     assert output_service.calls[3][1]["text"] == "继续说"
     assert output_service.calls[4][1]["format"].sample_rate == 16000
     assert output_service.calls[5][1]["reason"] == "control_cancel"
-    assert output_service.calls[6][1]["text"] == "后台任务完成"
-    assert [record[1]["event"] for record in recorder.records] == ["conversation.output_delta"] * 7
+    assert [record[1]["event"] for record in recorder.records] == ["conversation.output_delta"] * 6
 
 
 def test_conversation_output_delta_bridge_records_output_service_events() -> None:

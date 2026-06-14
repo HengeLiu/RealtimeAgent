@@ -1,8 +1,8 @@
 # agent-server
 
-`agent-server` 是 `realtime-agent` 的 Python Server SDK 和服务端运行时目录。它负责设备注册、控制事件、stream 生命周期、Agent Core、Tool / Task、模型 provider、输出播放仲裁和运行产物记录。
+`agent-server` 是 `realtime-agent` 的 Python Server SDK 和服务端运行时目录。它负责设备注册、控制事件、stream 生命周期、Agent Core、Tool、模型 provider、输出播放仲裁和运行产物记录。
 
-应用开发者通常不需要直接修改这里的核心代码。新的业务能力优先放在应用自己的 `agent-server/capabilities/` 包中，通过 `BaseTool`、`BaseTask`、`ToolContext` 和 `TaskContext` 接入。
+应用开发者通常不需要直接修改这里的核心代码。新的业务能力优先放在应用自己的 `agent-server/capabilities/` 包中，通过 `BaseTool` 和 `ToolContext` 接入。
 
 ## 目录结构
 
@@ -20,10 +20,9 @@ agent-server/
     prompts/               # 内置模型提示词
     spec/                  # 随包协议 schema、AsyncAPI 和错误码
     stream/                # stream 生命周期和 chunk 处理
-    task_store/            # Task 状态存储
-    context.py             # ToolContext / TaskContext
+    context.py             # ToolContext
     tools.py               # BaseTool / ToolResult / ToolSpec
-    tasks.py               # BaseTask / Task runtime 类型
+    tool_run.py            # Tool Run 状态机、存储与后台执行器
   config/                  # server 配置样例
   docs/                    # Server SDK 设计、运行产物和 Context API 文档
   unit-tests/              # Server SDK 单元测试

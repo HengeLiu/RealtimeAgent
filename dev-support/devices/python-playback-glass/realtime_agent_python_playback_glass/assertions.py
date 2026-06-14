@@ -74,7 +74,6 @@ def assert_case(case: PlaybackCase, *, runs_root: str | Path | None, stats: Play
     _assert_includes(failures, "streams.includes", (expect.get("streams") or {}).get("includes") or [], _stream_types(artifacts, stats))
     _assert_includes(failures, "tools.called", (expect.get("tools") or {}).get("called") or [], _tool_names(artifacts))
     _assert_includes(failures, "tools.succeeded", (expect.get("tools") or {}).get("succeeded") or [], _successful_tool_names(artifacts))
-    _assert_includes(failures, "tasks.signals.includes", ((expect.get("tasks") or {}).get("signals") or {}).get("includes") or [], _task_signals(artifacts))
     for stream_type, config in (expect.get("assets") or {}).items():
         actual = sum(1 for item in artifacts["assets"] if item.get("stream_type") == stream_type)
         minimum = int((config or {}).get("min_count") or 0)
@@ -103,13 +102,12 @@ def _load_artifacts(runs_dir: Path | None) -> dict[str, Any]:
     """读取断言需要的 runs 产物。"""
 
     if runs_dir is None:
-        return {"events": [], "stream_events": [], "tool_events": [], "task_signals": [], "assets": [], "system_events": [], "model_request": {}}
+        return {"events": [], "stream_events": [], "tool_events": [], "assets": [], "system_events": [], "model_request": {}}
     root = runs_dir.parents[1] if runs_dir.parent.name == "sessions" else runs_dir.parent
     return {
         "events": read_jsonl(runs_dir / "events.jsonl"),
         "stream_events": read_jsonl(runs_dir / "stream-events.jsonl"),
         "tool_events": read_jsonl(runs_dir / "tool-events.jsonl"),
-        "task_signals": read_jsonl(runs_dir / "task-signals.jsonl"),
         "assets": read_jsonl(runs_dir / "assets.jsonl"),
         "system_events": read_jsonl(root / "system-events.jsonl"),
         "model_request": load_model_request(runs_dir / "model-request.json"),
@@ -146,12 +144,6 @@ def _successful_tool_names(artifacts: dict[str, Any]) -> set[str]:
         for item in artifacts["tool_events"]
         if item.get("ok") is True and (item.get("tool_name") or item.get("name") or item.get("function_name"))
     }
-
-
-def _task_signals(artifacts: dict[str, Any]) -> set[str]:
-    """从 task-signals.jsonl 中提取任务信号名。"""
-
-    return {str(item.get("signal") or item.get("event_name") or item.get("task_type")) for item in artifacts["task_signals"] if item}
 
 
 def _model_tool_names(artifacts: dict[str, Any]) -> set[str]:

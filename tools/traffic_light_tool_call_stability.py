@@ -22,7 +22,7 @@ def main() -> int:
     """运行红绿灯任务工具调用稳定性诊断。
 
     功能：直接调用 OpenAI-compatible Chat Completions API，重复发送同一条用户文本，
-    统计模型是否返回 `start_traffic_light_task` 工具调用。
+    统计模型是否返回 `watch_traffic_light` 工具调用。
     主要逻辑：从最近一次 `model-request.json` 复用生产 system prompt、模型名、工具
     schema 和 provider 参数；分别测试干净上下文与回放上下文。
     参数：通过命令行传入迭代次数、请求快照路径、输出路径和模型文本。
@@ -92,7 +92,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--request", default=DEFAULT_REQUEST, help="生产 model-request.json 快照路径。")
     parser.add_argument("--text", default=DEFAULT_TEXT, help="重复发送给模型的用户文本。")
     parser.add_argument("--iterations", type=int, default=20, help="每个场景重复次数。")
-    parser.add_argument("--target-tool", default="start_traffic_light_task", help="目标工具名。")
+    parser.add_argument("--target-tool", default="watch_traffic_light", help="目标工具名。")
     parser.add_argument("--model", default="", help="覆盖请求快照中的模型名。")
     parser.add_argument("--base-url", default="", help="覆盖请求快照中的 OpenAI-compatible base_url。")
     parser.add_argument("--api-key-env", default="DASHSCOPE_API_KEY", help="API Key 环境变量名。")

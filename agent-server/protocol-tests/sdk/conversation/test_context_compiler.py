@@ -135,8 +135,8 @@ def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
                     {
                         "type": "function",
                         "function": {
-                            "name": "task_runtime_manager",
-                            "description": "管理任务",
+                            "name": "tool_run_manager",
+                            "description": "管理后台运行",
                             "parameters": {"type": "object", "properties": {}},
                         },
                     },
@@ -146,7 +146,7 @@ def test_realtime_context_compiler_filters_inline_vision_tools() -> None:
     )
 
     assert "不要先向用户播报" in context.instructions
-    assert [tool["name"] for tool in context.tools] == ["task_runtime_manager"]
+    assert [tool["name"] for tool in context.tools] == ["tool_run_manager"]
     assert context.modal_inputs[0]["type"] == "input_audio_stream"
     assert any(source.source_name == "omni_tool_call_rules" for source in context.context_sources)
 

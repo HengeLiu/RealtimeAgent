@@ -21,13 +21,12 @@ def test_examples_and_migration_templates_use_realtime_agent_top_level_api() -> 
     """测试目标：冻结示例和迁移样板只能依赖 `realtime_agent` 顶层开发者 API。
 
     测试方法：AST 扫描 dev-support 的示例能力包 Python 文件。
-    预期结果：不出现 `realtime_agent.tools`、`realtime_agent.tasks`、`realtime_agent.control`、
+    预期结果：不出现 `realtime_agent.tools`、`realtime_agent.control`、
     `realtime_agent.stream`、`realtime_agent.asset`、`realtime_agent.output` 等内部模块导入。
     """
 
     forbidden_prefixes = (
         "realtime_agent.tools",
-        "realtime_agent.tasks",
         "realtime_agent.control",
         "realtime_agent.stream",
         "realtime_agent.asset",

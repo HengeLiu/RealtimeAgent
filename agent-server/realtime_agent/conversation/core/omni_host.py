@@ -1199,11 +1199,6 @@ def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str
         return base
     error = result.get("error") if isinstance(result.get("error"), dict) else {}
     message = str(result.get("message") or error.get("message") or "工具调用失败").strip()
-    name = str(result.get("name") or "工具").strip()
-    operation = str((result.get("meta") or {}).get("operation") or "").strip()
-    task_rule = ""
-    if operation == "task_start" or name == "task_runtime_manager":
-        task_rule = "如果这是后台任务或计时器启动失败，必须明确告诉用户任务没有启动、不会按时提醒。"
     rule = _registered_prompt_text(
         "tool_result_failure_followup",
         (
@@ -1211,11 +1206,10 @@ def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str
             "失败原因：{message}。"
             "本次回答必须把失败事实直接告知用户，不能声称操作已经执行成功。"
             "不要向用户复述工具名、函数名、参数或调用过程。"
-            "{task_rule}"
             "请用简短口语中文说明，并在合适时建议用户重试。"
         ),
     )
-    rendered_rule = rule.replace("{message}", message).replace("{task_rule}", task_rule)
+    rendered_rule = rule.replace("{message}", message)
     return f"{base}\n\n{rendered_rule}"
 
 def _append_realtime_tool_call_prompt_rule(prompt: str) -> str:

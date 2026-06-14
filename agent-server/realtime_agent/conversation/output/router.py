@@ -59,12 +59,6 @@ class AgentOutputRouter:
                 reason=str(control.get("reason") or delta.metadata.get("reason") or "agent_output_cancel_requested"),
             )
             return
-        if delta.kind == "task_signal":
-            signal = delta.payload if isinstance(delta.payload, dict) else dict(delta.metadata)
-            text = signal.get("text") or signal.get("message") or signal.get("spoken_text")
-            if isinstance(text, str) and text.strip():
-                self.output_service.submit_text(user_id=user_id, session_id=delta.session_id, text=text)
-            return
         if delta.kind == "output_cancel_requested":
             self.output_service.interrupt_user(
                 user_id,

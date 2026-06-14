@@ -53,7 +53,7 @@ L3 应用层测试
 skinparam componentStyle rectangle
 
 package "L3 应用层测试" {
-  [external-business-app Tool/Task]
+  [external-business-app Tool]
   [browser-glass]
   [python-phone]
   [iOS/ESP32 参考端]
@@ -70,7 +70,7 @@ package "L1 事件行为一致性测试" {
   [Server SDK]
   [Device SDK]
   [Context API]
-  [Tool/Task Runtime]
+  [Tool/Tool Run 运行时]
   [Fake Transport/Provider]
 }
 
@@ -81,7 +81,7 @@ package "P0 协议资产检查" {
   [事件处理规范]
 }
 
-[external-business-app Tool/Task] --> [Server SDK]
+[external-business-app Tool] --> [Server SDK]
 [browser-glass] --> [Device SDK]
 [python-phone] --> [Device SDK]
 [iOS/ESP32 参考端] --> [Device SDK]
@@ -257,7 +257,7 @@ Server SDK 的典型测试输出包括：
 1. 返回的注册事件或错误事件。
 2. 下发给 device 的控制事件。
 3. 发起的 stream open / close / output 流程。
-4. Tool / Task / Context API 被触发后的处理过程。
+4. Tool / Context API 被触发后的处理过程。
 5. `messages.jsonl`、`model-request.json`、`tool-events.jsonl`、`stream-events.jsonl`、`output-decisions.jsonl` 等 runs 产物。
 
 Device SDK 的典型测试输入包括：
@@ -282,9 +282,9 @@ Device SDK 的典型测试输出包括：
 | --- | --- |
 | control | 输入注册、心跳和设备状态事件，断言返回事件、在线状态、能力索引和路由投递。 |
 | stream | 输入 stream 控制事件和 chunk，断言 stream 打开、chunk 组装、超时、失败和关闭事件。 |
-| context | 用 Tool / Task 触发 `rgb.one()`、`rgb.stream()`、`commands.call()`、`output.say()`，断言下发协议事件和等待结果。 |
+| context | 用 Tool 触发 `rgb.one()`、`rgb.stream()`、`commands.call()`、`output.say()`，断言下发协议事件和等待结果。 |
 | tools | 通过模型 tool call 或 ToolGateway 触发 Tool，断言 ToolResult、工具事件、资产引用和消息回填。 |
-| tasks | 通过 task start / signal 事件触发 Task，断言启动、取消、信号、持久化和持续 stream 行为。 |
+| tasks | 通过后台 Tool 调用触发，断言启动、取消、运行状态和持续 stream 行为。 |
 | output | 输入 assistant text delta 或 notification，断言 TTS、播放仲裁、输出 stream、打断、队列和播放回执。 |
 | agent_core | 输入 ASR final、模型 delta、tool call 和打断事件，断言 agent loop、上下文编排、恢复和输出流程。 |
 | runs | 通过完整流程断言 `messages.jsonl`、`model-request.json`、`tool-events.jsonl`、`agent-events.jsonl` 等产物。 |
@@ -307,7 +307,7 @@ Server SDK 的 L1 测试形式：
 - `agent-server/protocol-tests/sdk/runtime/test_typed_device_context_api.py`
 - `agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py`
 - `agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py`
-- `agent-server/protocol-tests/sdk/runtime/test_task_engine_scheduler.py`
+- `agent-server/protocol-tests/sdk/runtime/test_tool_run_scheduler.py`
 - `agent-server/protocol-tests/sdk/runtime/test_task_manage_tool.py`
 - `agent-server/protocol-tests/sdk/runtime/test_stream_and_audio_pipeline.py`
 - `agent-server/protocol-tests/sdk/runtime/test_streaming_tts_runtime.py`
@@ -323,7 +323,7 @@ Server SDK 的 L1 测试形式：
 | stream codec | 输入 `stream.control.open.requested`，断言 SDK 上传 stream chunk 并发送 opened / closed。 |
 | output stream | 输入 server 输出事件和输出 chunk，断言端侧播放 handler 和 finished / failed 回执。 |
 | diagnostics | 通过完整交互断言连接状态、最近错误、注册结果和 stream 摘要。 |
-| static boundary | 验证 Device SDK 不依赖 server 内部实现，不暴露业务 Tool / Task。 |
+| static boundary | 验证 Device SDK 不依赖 server 内部实现，不暴露业务 Tool。 |
 
 Device SDK 的 L1 测试形式：
 
@@ -435,8 +435,8 @@ uv run realtime-agent.test.sdk.interop
 SDK 层回归测试必须覆盖：
 
 1. Server SDK 收到注册、命令回执、stream 生命周期事件后，响应事件和状态变化稳定。
-2. Context API 被 Tool / Task 触发后，会下发符合协议的事件并等待端侧结果。
-3. Tool / Task 自动发现和执行能通过协议输入触发，并写入 runs 产物。
+2. Context API 被 Tool 触发后，会下发符合协议的事件并等待端侧结果。
+3. Tool 自动发现和执行能通过协议输入触发，并写入 runs 产物。
 4. Agent Core 能用 fake provider 跑通普通回复、tool call、异常恢复和打断，且输出事件和产物稳定。
 5. Device SDK 能通过协议输入触发 handler，并发送注册、回执、stream chunk 和 diagnostics。
 6. loopback WebSocket 能完成 server-device 最小闭环。
@@ -574,7 +574,7 @@ uv run realtime-agent.test.model.latency
 
 | 类型 | 测试内容 |
 | --- | --- |
-| 服务器应用功能 | app 配置、capabilities 自动发现、业务 Tool、业务 Task。 |
+| 服务器应用功能 | app 配置、capabilities 自动发现、业务 Tool、后台 Tool。 |
 | 端侧应用功能 | browser-glass、python-phone、python-glass、iOS、ESP32。 |
 | 业务场景 | 抓拍问答、找物、红绿灯、视频预览、播放打断。 |
 | 模型链路 | mock 模型回归、真实模型冒烟。 |
@@ -593,7 +593,7 @@ uv run realtime-agent.test.model.latency
 
 ```text
 A. 应用组件集成测试
-通过 fake Context 或 fake device 触发 Tool / Task，验证业务输入输出和 runs 产物。
+通过 fake Context 或 fake device 触发 Tool，验证业务输入输出和 runs 产物。
 
 B. 应用集成测试
 启动 server，使用 mock device / fake provider。
@@ -635,7 +635,7 @@ uv run realtime-agent.test.app.replay
 应用层回归测试必须覆盖：
 
 1. 示例 app 能启动。
-2. 核心 Tool / Task 能被发现。
+2. 核心 Tool 能被发现。
 3. mock 语音回放能触发 Tool。
 4. browser-glass / python-phone / python-glass 能注册或通过 contract。
 5. 关键场景能生成可复查 runs 产物。
@@ -644,7 +644,7 @@ uv run realtime-agent.test.app.replay
 
 新增应用功能时必须补：
 
-1. Tool / Task 组件集成测试。
+1. Tool 组件集成测试。
 2. app 配置测试。
 3. fake Context 或 fake device 驱动测试。
 4. 场景回放测试。
@@ -660,7 +660,7 @@ uv run realtime-agent.test.app.replay
 | 修改 Agent Core | L1 Agent mock + 必要 L2 provider smoke。 |
 | 修改 provider adapter | L1 provider contract + L2 对应真实 provider。 |
 | 修改 ASR / TTS / Realtime | L2 对应 provider smoke + L3 关键应用场景。 |
-| 修改 Tool / Task 基础类型 | L1 Tool/Task 协议驱动 runtime + L3 app capabilities。 |
+| 修改 Tool 基础类型 | L1 Tool 协议驱动 runtime + L3 app capabilities。 |
 | 修改 external-business-app 业务能力 | L3 app 组件集成 + L3 replay。 |
 | 修改 browser / phone / iOS / ESP32 端侧参考工程 | P0 相关 fixture 检查 + L1 device contract + L3 端侧联调。 |
 | 修改 runs 产物 | L1 runs contract + L3 场景产物验收。 |
@@ -965,7 +965,7 @@ uv run python -m pytest -m protocol -q
 1. Python / TypeScript / Swift / Kotlin / C Device SDK 逐步消费同一批 `protocol/data/fixtures`。
 2. 每种语言至少覆盖一条“协议输入 -> SDK 行为 -> 协议输出或 handler 调用”的 contract。
 3. Python Device SDK 保持真实 aiohttp WebSocket contract。
-4. 补齐静态边界测试，确保 Device SDK 不依赖 Server SDK 内部实现，也不暴露业务 Tool / Task。
+4. 补齐静态边界测试，确保 Device SDK 不依赖 Server SDK 内部实现，也不暴露业务 Tool。
 
 主要产物：
 
@@ -1005,7 +1005,7 @@ Swift / Kotlin 在对应测试工程补齐后加入验收命令。
 1. 标准化 Server SDK 测试替身，减少测试文件内联 fake provider。
 2. 抽出 `ScriptedVisionModel`、`ScriptedAsrProvider`、`ScriptedTtsProvider`、`ScriptedRealtimeProvider`。
 3. 给 fake provider 写 contract 测试，确保 fake 与真实 provider adapter 形状一致。
-4. 补齐以协议事件、stream chunk、模型 delta 为输入的 Context API、Tool runtime、Task runtime、OutputService、runs artifact 集成测试。
+4. 补齐以协议事件、stream chunk、模型 delta 为输入的 Context API、Tool runtime、Tool Run 运行时、OutputService、runs artifact 集成测试。
 
 主要产物：
 
@@ -1147,8 +1147,8 @@ uv run python -m pytest -m replay -q
 完成标准：
 
 1. 示例 app 能启动。
-2. 核心 Tool / Task 能被发现，并能被 fake Context、fake device 或协议事件驱动执行。
-3. 语音回放能触发关键 Tool / Task。
+2. 核心 Tool 能被发现，并能被 fake Context、fake device 或协议事件驱动执行。
+3. 语音回放能触发关键 Tool。
 4. 关键端侧参考工程有 contract 或构建级验证。
 5. 真机联调有固定 checklist，不把契约测试通过写成真机已验证。
 6. L3 报告记录场景名称、使用的样例数据、端侧组件、runs 目录和人工验收缺口。
@@ -1414,12 +1414,12 @@ uv run python -m pytest -m replay -q
   - 将 Python glass 网络端点从“只注册”扩展为可通过 `/ws/control` 和 `/ws/stream` 上传真实 WAV PCM chunk，等待 server 写出 `model-request.json`。
   - 修复 Python glass 网络回放端点的多设备路由表达：默认端点声明 `realtime_agent.audio_input/output`，但显式 `camera.role` 设备不再被默认标记为 speaker，避免 RGB-only 设备收到 `actuator.speaker` chunk。
   - 修复网络回放中的跨 WebSocket 发送节奏：音频 chunk 发送过程中让出事件循环，并在发送 `stream.input.closed` 前给 stream 通道短暂 drain 窗口，避免 control close 先被 server 处理导致 mic chunk 被误判为 late chunk。
-  - 将 browser-glass 静态测试对齐当前设计：页面只选择音频 / 图片 / 视频采样资源，不再断言旧的手动 `uploadImageNow` 按钮；RGB 上传必须由 server 请求、CLI 或业务 Task 触发。
+  - 将 browser-glass 静态测试对齐当前设计：页面只选择音频 / 图片 / 视频采样资源，不再断言旧的手动 `uploadImageNow` 按钮；RGB 上传必须由 server 请求、CLI 或后台 Tool 触发。
   - 将 Python phone mock 旧视觉任务测试对齐当前边界：默认不内置 `find_object_phone_task` / `traffic_light_phone_task` 业务 handler；旧 `phone.task.start` 在未显式注册 handler 时必须通过 `command.failed` 暴露，而不是在参考端里伪造业务能力。
   - 收敛 external-business-app acceptance：旧 `find_object_phone_task` / `traffic_light_phone_task` 断言改为验证这些旧任务未注册，主线任务为 `find_object_task` / `traffic_light_task`。
   - 补齐 Python playback 参考端的 `register()` 测试夹具入口和 `sensor_profiles` 回放能力；这是测试端点兼容，不是把业务逻辑塞回 SDK。
   - 修复 external-business-app 测试夹具中未 await 的 `context.output.say()`，让 Output Service 真实写出播放产物。
-  - 将 config sync / iOS / ESP32 静态契约测试对齐结构化 `supports` 和 `properties`，不再断言旧 `routes` 字段或旧 Swift `FindObjectPhoneTaskHandler` token。
+  - 将 config sync / iOS / ESP32 静态契约测试对齐结构化 `supports` 和 `properties`，不再断言旧 `routes` 字段或旧 Swift `FindObjectPhoneHandler` token。
   - 修复 ESP32-S3 网络 smoke：注册 payload 声明 `realtime_agent.audio_input/output`，网络端点等待 server 的 audio session open 后再上传 `sensor.mic`，并在播放完成后上报 session closed。
   - L3 报告输入摘要增加 external-business-app 根目录、真实音频 / 图片 / 视频样例目录、端侧参考工程清单和人工验收缺口。
   - 将 replay / hardware 报告从 `l3-app-report.json` 拆成 `l3-replay-report.json`、`l3-hardware-report.json`，避免不同 L3 子层互相覆盖。

@@ -291,7 +291,6 @@ class RunRecorder:
                         "tool-events.jsonl": "工具调用参数、结果、耗时和错误",
                         "stream-events.jsonl": "数据流打开、关闭、失败和分片摘要",
                         "assets.jsonl": "图片等资产写入和请求记录",
-                        "task-signals.jsonl": "Task Engine 信号记录",
                         "output-decisions.jsonl": "服务端输出仲裁决策",
                         "playback-decisions.jsonl": "端侧播放仲裁决策",
                         "actuators.jsonl": "端侧执行器播放和回执记录",
@@ -717,28 +716,6 @@ class RunRecorder:
                     "error": record.get("error"),
                     "detail_path": str(self.session_file(session_id, "tool-events.jsonl")),
                 },
-            ),
-        )
-
-    def record_task_signal(self, session_id: str, record: dict[str, Any]) -> None:
-        """记录 TaskSignal。
-
-        主要逻辑：写入 `task-signals.jsonl`。
-        参数：`session_id` 为会话或任务标识，`record` 为任务信号结构。
-        返回值：无。
-        异常情况：文件写入失败时抛出 IO 异常。
-        """
-        self._bind_from_record(session_id, record)
-        self._append_jsonl(self.session_dir(session_id) / "task-signals.jsonl", record)
-        if _is_quiet_task_signal(record):
-            return
-        log_info(
-            self.logger,
-            f"任务信号 {record.get('signal_name')}",
-            LogContext(
-                session_id=session_id,
-                event=record.get("signal_name"),
-                fields={**record, "detail_path": str(self.session_file(session_id, "task-signals.jsonl"))},
             ),
         )
 
@@ -1377,15 +1354,6 @@ def _control_event_error_message(event: Event, payload: dict[str, Any], error_fi
     return None
 
 
-def _is_quiet_task_signal(record: dict[str, Any]) -> bool:
-    """判断任务信号是否只适合落盘、不适合刷终端。"""
-
-    if record.get("signal_name") != "task.event.dispatch.accepted":
-        return False
-    payload = record.get("payload") if isinstance(record.get("payload"), dict) else {}
-    return payload.get("task_event_type") == "process" and not record.get("requires_agent_decision") and not record.get("allow_direct_notify")
-
-
 def _is_quiet_agent_turn_state(record: dict[str, Any]) -> bool:
     """判断 Agent turn 状态事件是否属于热路径噪音。
 
@@ -1502,7 +1470,7 @@ class TurnRecorder:
     """单轮交互记录器。
 
     主要功能：吸收 RunRecorder 的写入能力，为回放提供输入流、转写、模型请求、
-    Tool trace、TaskSignal、输出流和 result 的稳定入口。
+    Tool trace、输出流和 result 的稳定入口。
     """
 
     def __init__(self, runs_root: str | Path = "runs/default-app") -> None:
@@ -1522,9 +1490,6 @@ class TurnRecorder:
 
     def record_tool_trace(self, session_id: str, record: dict[str, Any]) -> None:
         self.recorder.record_tool_trace(session_id, record)
-
-    def record_task_signal(self, session_id: str, record: dict[str, Any]) -> None:
-        self.recorder.record_task_signal(session_id, record)
 
     def record_output_stream(self, session_id: str, record: dict[str, Any]) -> None:
         self.recorder.record_stream_event(session_id, {"direction": "output", **record})

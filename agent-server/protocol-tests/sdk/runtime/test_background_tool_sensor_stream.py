@@ -5,10 +5,8 @@
 通讯不引入 device_id 点对点 RPC（mode=continuous）；取消后台运行时通过事件请求端侧
 停止采集（stream.control.close.requested, mode=stop）。
 
-这是被删除的 acceptance/test_task_device_stream_contract.py 的 background-tool 版本：
-原文件基于已删除的 BaseTask/TaskContext/TaskEngine，Task 概念并入 Tool 后，被验证的能力
-本身（BackgroundDeviceFacade 的 allow_stream sensor stream）保留在 tools.py 中，只是改由
-background 工具承载。
+被验证的能力由 BackgroundDeviceFacade 的 allow_stream sensor stream 提供（tools.py），
+统一由 background 工具承载。
 
 cross-loop 说明：`stream()` 的异步生成器跑在 ToolRunRunner 的后台事件循环上，而端侧帧由
 测试主线程通过 `app.write_input_chunk` 上传。二者跨事件循环仍能联通，因为

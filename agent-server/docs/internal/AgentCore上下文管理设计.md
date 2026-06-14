@@ -8,7 +8,7 @@
 - `app.py` 在启用 Memory 时追加长期记忆使用规则。
 - `VisionRealtimeAgentCore` 自行拼接 Vision prompt、长期记忆、历史摘要、active messages 和 tools。
 - `OmniRealtimeAgentCore` 自行拼接 Omni prompt、工具调用语音规则、长期记忆、历史摘要、等价 messages 和 Omni Realtime tools。
-- `tools.py` / `tasks.py` 通过 `ToolSpec.description`、Pydantic `Field(description=...)`、`TaskStartTool` 自动生成工具 schema。
+- `tools.py` / `tool_run.py` 通过 `ToolSpec.description`、Pydantic `Field(description=...)`、`后台 Tool 启动入口` 自动生成工具 schema。
 - `memory/__init__.py`、`conversation.py`、业务视觉 Tool 内部还各自维护子 Agent 提示词。
 
 这些内容都可能影响模型行为，但目前没有统一的命名、版本、来源记录、预算控制和最终上下文快照。后续如果继续在各处直接改字符串，会导致以下问题：
@@ -42,10 +42,10 @@
 1. 不引入 LangChain / LlamaIndex 作为 Agent 运行时。
 2. 不接入 Langfuse / LangSmith 等外部 prompt 管理平台。
 3. 不重写所有提示词文案。
-4. 不改变端侧协议、Tool API、Task API 或 Output Service 语义。
-5. 不把业务 Task 兜底逻辑写进 SDK core。
+4. 不改变端侧协议、Tool API 或 Output Service 语义。
+5. 不把后台 Tool 兜底逻辑写进 SDK core。
 6. 不要求 Vision Realtime 和 Omni Realtime 共用同一个 provider turn loop。
-7. 不在第一阶段重写 Tool / Task 的用户通知行为，只先盘点、收敛入口和补可观测记录。
+7. 不在第一阶段重写 Tool 的用户通知行为，只先盘点、收敛入口和补可观测记录。
 
 ## 4. 总体设计
 
@@ -230,7 +230,7 @@ context:
     exclude_tool_history: true
   tools:
     expose_output_schema: false
-    collapse_task_start_common_suffix: true
+    collapse_background_tool_common_suffix: true
   realtime:
     inline_vision_tools:
       - capture_photo
@@ -286,7 +286,7 @@ class ContextCompileRequest:
 不应该常驻：
 
 1. 设备协议细节。
-2. Task 内部状态机。
+2. 后台 Tool 内部状态机。
 3. Tool 执行栈。
 4. MCP server 内部结构。
 5. 大量历史对话原文。
@@ -300,7 +300,7 @@ class ContextCompileRequest:
 2. Skill 说明：通过 `read_skill`。
 3. 外部资料：通过 `search_web` 或 MCP 专用 Tool。
 4. 图片内容：Realtime 视觉帧或视觉 Tool 子 Agent。
-5. Task 运行详情：通过 `task_runtime_manager`。
+5. 后台 Tool 运行详情：通过 `tool_run_manager`。
 
 ### 6.3 历史消息
 
@@ -326,22 +326,22 @@ class ContextCompileRequest:
 3. 过长通用规则重复段。
 4. 不希望模型填写的废弃字段。
 
-### 6.5 Tool / Task 模型可见内容与通知边界
+### 6.5 Tool 模型可见内容与通知边界
 
-Tool / Task 相关内容分成三类管理，不能混成同一种 prompt：
+Tool 相关内容分成三类管理，不能混成同一种 prompt：
 
 | 类别 | 例子 | 是否进入模型上下文 | 管理方式 |
 | --- | --- | --- | --- |
-| 模型决策说明 | `ToolSpec.description`、Pydantic `Field(description=...)`、TaskStartTool description | 是 | 作为 `source_kind="tool"` 的 schema 来源记录 |
-| 工具执行结果 | ToolResult 文本、失败原因、Task 启动返回摘要 | 视链路而定 | 作为 `source_kind="tool"` 的 result 来源记录 |
-| 用户通知 | `context.output.say()`、Task 进度播报、完成 / 失败播报 | 不一定 | 由 Tool / Task notification policy 管理，并记录到 runs |
+| 模型决策说明 | `ToolSpec.description`、Pydantic `Field(description=...)`、后台 Tool 启动入口 description | 是 | 作为 `source_kind="tool"` 的 schema 来源记录 |
+| 工具执行结果 | ToolResult 文本、失败原因、后台 Tool 启动返回摘要 | 视链路而定 | 作为 `source_kind="tool"` 的 result 来源记录 |
+| 用户通知 | `context.output.say()`、后台 Tool 进度播报、完成 / 失败播报 | 不一定 | 由 Tool notification policy 管理，并记录到 runs |
 
 设计原则：
 
 1. 模型可见说明要短，只描述模型做决策需要知道的能力、参数和约束。
 2. 用户通知要面向用户体验，不应该直接复用工具 schema 文案。
-3. 工具执行中的用户播报、Task 进度通知和模型后续总结要分开记录。
-4. Tool result 是否回灌给模型，必须由 ContextPolicy 或 Tool / Task 运行策略显式决定。
+3. 工具执行中的用户播报、后台 Tool 进度通知和模型后续总结要分开记录。
+4. Tool result 是否回灌给模型，必须由 ContextPolicy 或 Tool 运行策略显式决定。
 5. Realtime 模式下要特别记录工具调用前后的音频处理策略，避免工具前预音频和工具结果播报互相覆盖。
 
 ## 7. 运行产物与可观测性
@@ -365,7 +365,7 @@ Tool / Task 相关内容分成三类管理，不能混成同一种 prompt：
     {"source_id": "tool_result:capture_photo", "source_kind": "tool", "source_name": "tool_result:capture_photo", "included": false, "reason": "inline_vision_result_hidden"}
   ],
   "notifications": [
-    {"source_id": "task:start_find_object_task", "channel": "output", "event": "task_started", "model_visible": false}
+    {"source_id": "task:find_object 工具", "channel": "output", "event": "task_started", "model_visible": false}
   ],
   "warnings": [],
   "truncations": []
@@ -381,7 +381,7 @@ Tool / Task 相关内容分成三类管理，不能混成同一种 prompt：
 | `context.source.skipped` | 跳过一段来源 | `source_id/reason` |
 | `context.source.truncated` | 裁剪内容 | `source_id/before_tokens/after_tokens/reason` |
 | `context.compile.completed` | 编译完成 | `source_count/tool_count/warning_count/token_estimate` |
-| `context.notification.recorded` | 记录 Tool / Task 用户通知 | `source_id/channel/event/model_visible` |
+| `context.notification.recorded` | 记录 Tool 用户通知 | `source_id/channel/event/model_visible` |
 
 ## 8. 目录结构
 
@@ -506,14 +506,14 @@ agent-server/docs/internal/
 
 目标：
 
-1. 收敛工具 description、参数 Field 说明和 TaskStartTool 通用说明。
+1. 收敛工具 description、参数 Field 说明和 后台 Tool 启动入口 通用说明。
 2. 去掉工具 schema 中的 mock / 内部实现细节。
 3. 梳理 Tool result 是否回灌给模型的规则。
-4. 梳理 Tool / Task 用户通知策略：
+4. 梳理 Tool 用户通知策略：
    - 工具执行中是否播报。
-   - Task 启动是否播报。
-   - Task 进度是否播报。
-   - Task 完成 / 失败是否播报。
+   - 后台 Tool 启动是否播报。
+   - 后台 Tool 进度是否播报。
+   - 后台 Tool 完成 / 失败是否播报。
    - 哪些通知只写 runs，不进入模型上下文。
 5. 检查不应暴露给模型的字段。
 6. 提供本地 CLI 查看最终上下文。
@@ -528,9 +528,9 @@ uv run realtime-agent.context.inspect --config examples/simple-agent-server/serv
 
 1. 当前默认可见 9 个工具的 schema 有快照测试。
 2. `capture_photo` / `interpret_image` / `interpret_current_view` 默认不可见事实有测试。
-3. Task 工具 description 不再包含误导性 mock 字样。
+3. 后台 Tool description 不再包含误导性 mock 字样。
 4. Tool result 回灌策略有测试覆盖。
-5. Task 启动、进度、完成、失败通知路径有行为测试或可复现联调说明。
+5. 后台 Tool 启动、进度、完成、失败通知路径有行为测试或可复现联调说明。
 6. CLI 能输出最终 instructions、messages、tools 和 source map。
 
 ### Phase 6：预算、裁剪和 diff
@@ -560,7 +560,7 @@ uv run realtime-agent.context.inspect --config examples/simple-agent-server/serv
 | omni context | instructions + tools + input_audio_stream 等价视图正确 |
 | tool policy | denylist / allowlist / Skill policy 生效 |
 | tool result policy | 工具结果按策略进入或不进入下一轮模型上下文 |
-| task notification | Task 启动、进度、完成、失败通知路径符合预期 |
+| 后台 Tool notification | 后台 Tool 启动、进度、完成、失败通知路径符合预期 |
 | memory | 启用时注入规则和片段；禁用时不注入 |
 | history | tool history 不作为孤立 tool message 回灌 |
 | trace | model-request.json 包含 context_sources |
@@ -583,7 +583,7 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 2. `agent-events.jsonl` 是否记录 context compile 事件。
 3. Realtime 工具调用前是否仍有 provider 预音频。
 4. 视觉问题是否仍能通过 Omni Realtime 视觉帧回答。
-5. 找物、红绿灯、计时器是否仍通过 TaskStartTool 启动。
+5. 找物、红绿灯、计时器是否仍通过 后台 Tool 启动入口 启动。
 
 ## 11. 关键设计取舍
 
@@ -592,7 +592,7 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 当前主要问题是代码内上下文来源混乱。外部平台能解决 prompt 存储、版本、回滚和 UI，但不能自动解决：
 
 1. Vision Realtime / Omni Realtime 两条链路的上下文编译差异。
-2. Tool schema 和 TaskStartTool 的模型可见内容。
+2. Tool schema 和 后台 Tool 启动入口 的模型可见内容。
 3. Memory、summary、active messages 的预算和裁剪。
 4. Omni Realtime 音频、视觉帧和 provider 私有事件。
 
@@ -600,7 +600,7 @@ uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_conversatio
 
 ### 11.2 为什么不把所有内容放进 system prompt
 
-system prompt 越长，越难控制冲突，也越浪费 token。长期记忆详情、Skill 文档、Task 运行详情和外部资料应该按需读取。常驻 system prompt 只保留稳定规则。
+system prompt 越长，越难控制冲突，也越浪费 token。长期记忆详情、Skill 文档、后台 Tool 运行详情和外部资料应该按需读取。常驻 system prompt 只保留稳定规则。
 
 ### 11.3 为什么保留 Vision Realtime / Omni Realtime provider 差异
 
@@ -616,8 +616,8 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 4. Token 估算第一版使用近似字符数，还是引入 provider tokenizer？
 5. `context.inspect` CLI 是否需要同时支持读取最近一次 runs 产物做 diff？
 6. Tool result 默认是否进入下一轮模型上下文，是否允许单个 Tool 覆盖？
-7. Task 进度通知默认是否对用户播报，还是只写运行产物？
-8. Tool / Task notification policy 放在 SDK 默认策略中，还是允许示例应用配置覆盖？
+7. 后台 Tool 进度通知默认是否对用户播报，还是只写运行产物？
+8. Tool notification policy 放在 SDK 默认策略中，还是允许示例应用配置覆盖？
 
 ## 13. 设计结论
 
@@ -669,10 +669,10 @@ Omni Realtime 是 session instructions + function tools + audio stream + provide
 ### 阶段 5：清理工具可见内容与上下文检查工具
 
 - 状态：已完成可自动验证部分。
-- 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 Task 直接通知记录 `context.notification.recorded`；清理 external-business-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
-- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tasks.py`、`dev-support/agent-server/capabilities/tasks.py`、`pyproject.toml`。
+- 实现：新增 `realtime-agent.context.inspect` CLI；Tool 前置播报和 后台 Tool 直接通知记录 `context.notification.recorded`；清理 external-business-app 红绿灯任务 description 中的 mock 字样；prompt 子 Agent 文案改为优先从 PromptRegistry 读取。
+- 文件：`agent-server/realtime_agent/cli/context.py`、`agent-server/realtime_agent/tools.py`、`agent-server/realtime_agent/tool_run.py`、`dev-support/agent-server/capabilities/tool_run.py`、`pyproject.toml`。
 - 验证：`uv run realtime-agent.context.inspect --config examples/simple-agent-server/server.yaml --mode omni --user-id inspect-user --session-id inspect-device` 输出 JSON 并通过 `python -m json.tool` 校验。
-- 待验收：Task 进度通知是否默认播报仍需产品体验确认；当前只记录策略和通知事件，不改变默认通知语义。
+- 待验收：后台 Tool 进度通知是否默认播报仍需产品体验确认；当前只记录策略和通知事件，不改变默认通知语义。
 
 ### 阶段 6：预算、裁剪和 diff
 
@@ -692,18 +692,16 @@ uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conver
 uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_omni_agent_core.py -q
 uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_realtime_provider_tool_bridge.py -q
 uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_model_request_logging.py agent-server/protocol-tests/sdk/conversation/test_vision_agent_tool_loop_async.py -q
-uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_memory_service.py agent-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py agent-server/protocol-tests/sdk/runtime/test_task_signal_bridge.py -q
+uv run python -m pytest agent-server/protocol-tests/sdk/runtime/test_memory_service.py agent-server/protocol-tests/sdk/runtime/test_conversation_memory_service.py agent-server/protocol-tests/sdk/runtime/test_tool_spec_schema.py -q
 uv run python -m pytest agent-server/unit-tests/cli/test_package_boundary.py -q
 git diff --check
 ```
 
-已发现但未在本阶段处理的既有失败：
+回归验证：
 
 ```bash
 uv run python -m pytest agent-server/protocol-tests/sdk/conversation/test_conversation_runtime.py -q
 ```
-
-其中 `test_task_engine_create_query_cancel_and_agent_event_bridge` 期望 Task 状态为 `running`，当前实现返回 `started`。
 
 ```bash
 uv run python -m pytest agent-server/unit-tests/cli/test_release_package.py agent-server/unit-tests/cli/test_package_check_release_inputs.py -q

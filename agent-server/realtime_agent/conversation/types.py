@@ -11,7 +11,6 @@ AgentOutputDeltaKind = Literal[
     "text",
     "audio",
     "control",
-    "task_signal",
     "text_delta",
     "text_final",
     "audio_chunk",

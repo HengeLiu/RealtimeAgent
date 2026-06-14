@@ -3,7 +3,7 @@
 
 主要功能：
 1. 直接连接 DashScope Omni Realtime，不经过 realtime-agent server。
-2. 使用同一段用户音频和同一个 `start_find_object_task` 工具 schema 做多轮重复测试。
+2. 使用同一段用户音频和同一个 `find_object` 工具 schema 做多轮重复测试。
 3. 统计每轮是否真正产生 function call、是否先输出普通音频、是否出现“已启动任务”但没有工具调用。
 4. 生成逐轮 JSONL 原始事件和汇总 JSON，便于判断 Omni 工具调用不稳定是否真实存在。
 
@@ -37,7 +37,7 @@ from typing import Any, Iterable
 
 
 START_CLAIM_PATTERN = re.compile(r"(已经|已|帮你|为你).{0,12}(启动|开始).{0,12}(找物|找手机|任务|后台)")
-TOOL_SPEECH_PATTERN = re.compile(r"(start_find_object_task|function|函数|工具|tool|调用)")
+TOOL_SPEECH_PATTERN = re.compile(r"(find_object|function|函数|工具|tool|调用)")
 
 
 def _json_default(value: Any) -> str:
@@ -200,7 +200,7 @@ class RunRecorder:
         output = {
             "ok": True,
             "tool_name": tool_name,
-            "task_id": "probe_task_001",
+            "tool_run_id": "probe_run_001",
             "state": "started",
             "message": "工具结果：找物任务已经启动成功。",
             "probe_note": "稳定性探针自动回填；代表本轮测试中的工具启动成功。",
@@ -382,7 +382,7 @@ def _chunk_bytes(payload: bytes, *, sample_rate: int, chunk_ms: int) -> list[byt
 
 
 def _tool_schema(*, schema: str) -> list[dict[str, Any]]:
-    """构造 `start_find_object_task` 工具 schema。
+    """构造 `find_object` 工具 schema。
 
     参数：
     - `schema=flat`：使用当前 realtime-agent Qwen adapter 传入 Omni 的扁平 function schema。
@@ -390,7 +390,7 @@ def _tool_schema(*, schema: str) -> list[dict[str, Any]]:
     """
 
     function = {
-        "name": "start_find_object_task",
+        "name": "find_object",
         "description": (
             "启动找物后台任务。用户要求寻找手机、眼镜、水杯等物体时必须调用本工具；"
             "在本工具返回前不要声称任务已启动，也不要回答目标位置。"
@@ -417,13 +417,13 @@ def _instructions(mode: str) -> str:
     base = "你是中文语音助手。请简短回答。"
     strict = (
         "当用户要求寻找某个物体，尤其是找手机、找眼镜、找水杯时，必须调用 "
-        "`start_find_object_task` 工具。工具返回前不要说已经启动任务，"
+        "`find_object` 工具。工具返回前不要说已经启动任务，"
         "不要说已经找到，也不要编造位置、距离或方向。"
     )
     pre_notice = (
         "当用户要求寻找某个物体，尤其是找手机、找眼镜、找水杯时，"
         "在调用工具之前请先提示用户要调用工具了，请用户稍等；随后必须调用 "
-        "`start_find_object_task` 工具。工具返回前不要说已经启动任务，"
+        "`find_object` 工具。工具返回前不要说已经启动任务，"
         "不要说已经找到，也不要编造位置、距离或方向。"
     )
     pre_notice_guard = (

@@ -1436,7 +1436,7 @@ class VisionRealtimeAgentCore:
             "assets": [VisionRealtimeAgentCore._jsonable(item) for item in result.assets or []],
             "visual_assets": [VisionRealtimeAgentCore._jsonable(item) for item in result.visual_assets or []],
             "artifacts": [VisionRealtimeAgentCore._jsonable(item) for item in result.artifacts or []],
-            "tasks": [VisionRealtimeAgentCore._jsonable(item) for item in result.tasks or []],
+            "status": getattr(result, "status", "completed"),
             "meta": result.meta or {},
             "error": result.error,
         }

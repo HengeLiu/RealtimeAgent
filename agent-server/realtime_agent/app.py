@@ -775,7 +775,7 @@ class RealtimeAgentApp:
             broker = getattr(self, "_command_result_broker", None)
             if broker is not None:
                 # 端侧命令回报只进 CommandResultBroker；background 工具在自己的协程里通过
-                # CommandHandle.results() 内联消费回报，不再转换成 task.event.* 事件。
+                # CommandHandle.results() 内联消费回报。
                 broker.record(event)
             return
         if event.event_name == "control.audio_session.opened":

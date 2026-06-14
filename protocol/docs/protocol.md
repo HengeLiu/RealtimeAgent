@@ -14,7 +14,7 @@
 
 协议非目标：
 
-1. 不定义业务 Tool / Task 的具体语义。
+1. 不定义业务 Tool 的具体语义。
 2. 不定义端侧摄像头、麦克风、喇叭、蓝牙或硬件驱动实现。
 3. 不把事件作为社区应用开发者的主路径 API。
 4. 不替代 Server SDK 的 Context API 或 Device SDK 的能力 handler API。
@@ -225,7 +225,7 @@ Device --> Server: stream.input.closed
 
 1. `ttl_seconds` 只表示服务端 turn buffer 内的最长自动可消费时间，不表示磁盘 runs 产物保留时间。
 2. `direction` 第一阶段默认 `front`；未来可以由端侧 IMU / 姿态融合解析后写入。
-3. `correlation_id` 可关联用户 turn 或 Task 运行实例。
+3. `correlation_id` 可关联用户 turn 或 Tool Run 运行实例。
 4. 新字段均为可选字段，旧端侧忽略未知字段时不应失败。
 5. 当前阶段 `sensor.rgb` 只使用 `mode=single` 和 `sample_count=1`。server 不应下发频率或重复采集字段；端侧只在请求到达后采集一张图片。
 
@@ -306,7 +306,7 @@ header 字段：
 | 字段 | 必填 | 说明 |
 | --- | --- | --- |
 | `request_id` | 条件 | server 请求采集时必填，用于匹配 pending 请求。 |
-| `correlation_id` | 否 | 用户 turn 或 Task 关联 ID。 |
+| `correlation_id` | 否 | 用户 turn 或 Tool Run 关联 ID。 |
 | `turn_id` | 否 | 当前用户 turn ID；端侧不知道时由 server 写入或补齐。 |
 | `ttl_seconds` | 否 | 上传方请求的 turn buffer 有效期，单位秒。 |
 | `capture_reason` | 否 | `capture_photo`、`realtime_visual_frame`、`task_sampling` 等；当前不使用端侧主动 `device_push`。 |
@@ -355,7 +355,7 @@ agent-server/realtime_agent/spec/realtime-agent-error-codes.yaml
 | Server control | `agent-server/realtime_agent/control/service.py` | 设备注册、连接状态、事件路由。 |
 | Server stream | `agent-server/realtime_agent/stream/service.py` | stream 生命周期、逻辑流登记和 chunk 处理。 |
 | Server output | `agent-server/realtime_agent/output/service.py` | 输出播放仲裁和 speaker 音频下行链路。 |
-| Context API | `agent-server/realtime_agent/context.py` | Tool / Task 调用设备能力的入口。 |
+| Context API | `agent-server/realtime_agent/context.py` | Tool 调用设备能力的入口。 |
 | Python dev-support 兼容层 | `dev-support/python/realtime_agent_device/` | 开发支持组件使用的端侧事件、builder、client、stream codec。 |
 | JavaScript Device SDK | `devices/javascript/src/` | 浏览器 / Node 侧协议模型。 |
 | Swift Device SDK | `devices/swift/` | Swift 协议模型和 stream codec。 |

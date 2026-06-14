@@ -65,7 +65,7 @@ def _find_session_dir(runs_root: Path, session_id: str) -> Path:
 def _load_session_artifacts(session_dir: Path, runs_root: Path) -> dict[str, Any]:
     """读取录制归纳需要的产物。"""
 
-    return {"events": read_jsonl(session_dir / "events.jsonl"), "stream_events": read_jsonl(session_dir / "stream-events.jsonl"), "tool_events": read_jsonl(session_dir / "tool-events.jsonl"), "task_signals": read_jsonl(session_dir / "task-signals.jsonl"), "assets": read_jsonl(session_dir / "assets.jsonl"), "system_events": read_jsonl(runs_root / "system-events.jsonl"), "model_request": load_model_request(session_dir / "model-request.json")}
+    return {"events": read_jsonl(session_dir / "events.jsonl"), "stream_events": read_jsonl(session_dir / "stream-events.jsonl"), "tool_events": read_jsonl(session_dir / "tool-events.jsonl"), "assets": read_jsonl(session_dir / "assets.jsonl"), "system_events": read_jsonl(runs_root / "system-events.jsonl"), "model_request": load_model_request(session_dir / "model-request.json")}
 
 
 def _build_inputs(options: RecordOptions) -> dict[str, Any]:

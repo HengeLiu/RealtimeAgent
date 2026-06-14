@@ -1,8 +1,8 @@
 """late result follow-up 路由。
 
-主要功能：把后台 Tool Run 完成（以及需要 Agent 决策的 TaskSignal）按会话状态裁决
-去向：活跃且空闲则注入并驱动模型回复；正在回答其他问题则进入 pending queue，等当前
-response 完成后 flush；会话已关闭则交给待通知路径（Phase 6）。
+主要功能：把后台 Tool Run 完成结果按会话状态裁决去向：活跃且空闲则注入并驱动模型回复；
+正在回答其他问题则进入 pending queue，等当前 response 完成后 flush；会话已关闭则交给
+待通知路径（Phase 6）。
 
 设计依据：docs/internal/ToolRun统一异步工具调用设计.md 第 7 节。本模块只负责裁决与
 排队；具体注入由各链路的 injector 实现（VL 文本驱动 turn、Omni instructions 注入）。
@@ -23,8 +23,8 @@ class FollowUpCompletion:
     """一次待回流的 late result。
 
     主要属性：`run_id/user_id/session_id/tool_name` 定位来源；`text` 为系统包装后的
-    回流文本；`ok` 表示业务成败；`follow_up_deadline_at` 为时效截止；`source` 区分
-    tool_run 与 task_signal；`payload` 保留结构化数据供 channel 使用。
+    回流文本；`ok` 表示业务成败；`follow_up_deadline_at` 为时效截止；`payload` 保留结构化
+    数据供 channel 使用。
     """
 
     run_id: str
@@ -169,7 +169,7 @@ def default_followup_text(*, tool_name: str, ok: bool, message: str, error_messa
 class FollowUpRouter:
     """late result 回流路由器。
 
-    主要功能：接收后台 Tool Run 完成与 TaskSignal，按会话状态裁决注入、排队或待通知，
+    主要功能：接收后台 Tool Run 完成结果，按会话状态裁决注入、排队或待通知，
     并把决策落盘到 ToolRunStore 与 runs，保证同一运行至多一次模型 follow-up。
     """
 
@@ -239,7 +239,7 @@ class FollowUpRouter:
 
         with self._lock:
             run = self.store.get_optional(completion.run_id)
-            # task_signal 来源可能没有 ToolRun；用 None 表示直接按一次性回流处理。
+            # 没有对应 ToolRun（如一次性回流）时按 run=None 处理，跳过状态守卫。
             if run is not None and run.state != "completed_late":
                 self._record(completion, {"event": "tool_run.follow_up.skipped", "reason": f"state_{run.state}"})
                 return "skipped"

@@ -8,7 +8,7 @@
 
 1. **Server SDK 运行时优化**
 
-   包括 Agent Core 优化、Omni / VL 链路优化、模型 provider 接入、上下文管理、输出播放仲裁、Task / Tool 运行时和运行产物可观测性改进。
+   包括 Agent Core 优化、Omni / VL 链路优化、模型 provider 接入、上下文管理、输出播放仲裁、Tool 运行时和运行产物可观测性改进。
 
 2. **Device SDK 和端侧能力**
 
@@ -18,9 +18,9 @@
 
    包括自动化测试验收、协议一致性检查、数据回放测试平台、运行产物查看工具、联调诊断工具、配置同步、示例工程和开发者文档。
 
-4. **基础通用 Task / Tool**
+4. **基础通用 Tool**
 
-   提交足够基础、通用、可复用的 Task / Tool，例如设备能力演示、计时提醒、基础导航/搜索接入、通用视觉采集、常见传感器读取和标准执行器控制。业务强绑定能力建议放在独立应用仓库中维护。
+   提交足够基础、通用、可复用的 Tool，例如设备能力演示、计时提醒、基础导航/搜索接入、通用视觉采集、常见传感器读取和标准执行器控制。业务强绑定能力建议放在独立应用仓库中维护。
 
 不建议直接提交的方向：
 
@@ -55,8 +55,8 @@ uv run realtime-agent.device.validate dev-support/devices/browser-glass/device.r
 
 1. 使用 Python 3.11+。
 2. 保持已有模块边界。
-3. 业务能力通过 `BaseTool`、`BaseTask` 和 Context API 扩展。
-4. 不在 Tool / Task 中直接操作内部 WebSocket 状态。
+3. 业务能力通过 `BaseTool` 和 Context API 扩展。
+4. 不在 Tool 中直接操作内部 WebSocket 状态。
 5. 新增类、函数和测试说明优先使用中文注释或 docstring。
 6. 排障日志使用 DEBUG 级别，并允许通过配置控制全局日志级别。
 

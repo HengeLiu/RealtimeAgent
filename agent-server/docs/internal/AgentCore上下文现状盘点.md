@@ -19,7 +19,7 @@
 | 当前用户输入 | Vision ASR final_text / Omni PCM stream | Vision 作为最后一条 user message；Omni 在 `model-request.json` 中表达为 `input_audio_stream`，真实 provider 收 PCM | 是 | Vision 看见 ASR 文本；Omni 接收音频流 | Realtime 的 `input_audio_stream` 是排障等价视图，不是实际 Chat Completions payload。 |
 | Tool schema | `ToolGateway.provider_schemas()` | Vision 模型请求 `tools`；Omni `session.update.tools` | 是 | 工具名、description、Pydantic 字段 JSON schema | 只暴露通过 allowlist/denylist/Skill policy 的工具。 |
 | Tool 调用结果回填 | Vision `_provider_tool_result_message()`；Realtime `_submit_tool_result()` | Vision 当前工具循环内作为 `role=tool`；Omni 创建 `function_call_output` | 工具被调用后生效 | 结构化 `ToolResult`：ok/data/message/assets/artifacts/tasks/meta/error | Vision 下一轮模型能直接读到；Realtime 由 provider tool result injection 继续生成。 |
-| Task 启动结果指令 | `TaskRunResult.instructions` | 作为 Task 工具结果的一部分返回给主 Agent | 任务启动后生效 | 例如“请只告诉用户已经开始寻找...不要说已经找到...” | 依赖模型遵守工具结果内容。 |
+| 后台 Tool 启动结果指令 | `ToolResult.instructions` | 作为 后台 Tool 工具结果的一部分返回给主 Agent | 任务启动后生效 | 例如“请只告诉用户已经开始寻找...不要说已经找到...” | 依赖模型遵守工具结果内容。 |
 | Omni tool follow-up instructions | `_tool_result_followup_instructions()` / `_capture_photo_response_instructions()` | Qwen Omni `create_response(instructions=...)` 或图片追加后 provider 自动响应 | 工具结果后生效 | 工具失败事实、禁止声称成功；capture_photo 后只基于新照片回答等 | 这里包含 `capture_photo` 具名特例。 |
 | 视觉解读子 Agent prompt | `_interpret_asset_with_vision_model()` | 图片解读 Tool 内部调用 OpenAI-compatible Chat Completions | 只有 `interpret_image` / `interpret_current_view` 被调用时生效；当前默认 denylist 不暴露给主 Agent | “你是盲人眼镜的视觉解读助手。只基于图片回答...” + 用户问题 + image_url | 这是 Tool 内部子模型上下文，不是主 Agent 上下文。 |
 | 会话摘要子 Agent prompt | `_message_summary_prompt()` | `LlmMessageSummarizer` 调用摘要模型 | 触发历史压缩时生效 | 只输出中文结构化摘要，不输出 JSON，不解释过程；固定标题 | 生成结果未来会进入主 Agent system prompt。 |
@@ -34,7 +34,7 @@
 | 工具名 | 来源 | 模型可见说明摘要 | 模型可见字段 | 备注 |
 | --- | --- | --- | --- | --- |
 | `query_device_state` | SDK 内置 | 查询当前用户在线设备、设备名称、能力、连接状态或播放状态 | `include_properties` | 低风险，偏调试/状态查询。 |
-| `task_runtime_manager` | SDK 内置 | 查询、取消、列出 Task；启动任务必须调用具体 `start_*` Tool | `action`, `task_id`, `include_terminal` | 和 TaskStartTool 配套。 |
+| `tool_run_manager` | SDK 内置 | 查询、取消、列出 后台 Tool；启动能力直接调用对应 Tool | `action`, `tool_run_id`, `include_terminal` | 和 后台 Tool 启动入口 配套。 |
 | `close_audio_session` | SDK 内置 | 用户明确要求结束语音会话时关闭当前连续对话 | `reason`, `user_close_phrase` | 必须提供用户原话中的明确关闭短语。 |
 | `search_web` | SDK 内置 | 使用 Bocha 查询公开网页资料 | `query`, `limit`, `freshness`, `summary`, `timeout_seconds` | 依赖 `BOCHA_SEARCH_API_KEY`，未配置时返回 fallback。 |
 | `query_system_time` | SDK 内置 | 查询当前系统时间、日期、星期或指定时区时间 | `timezone` | 默认北京时间；支持 `Asia/Shanghai`、`UTC+8`、`+08:00` 等格式。 |
@@ -43,7 +43,7 @@
 | `memory_search` | SDK 内置 | 读取已保存长期记忆详情；不用于维护记忆 | `topic`, `topics` | `memory.enabled=false` 时可见但返回权限错误。 |
 | `manage_memory` | SDK 内置 | 用户要求记住、更新、忘记、删除，或自然提供值得保存的信息时调用 | `memory_context` | `memory.enabled=true` 时会触发记忆管理子 Agent。 |
 | `search_conversation_history` | SDK 内置 | 检索 runs 中的历史对话记录 | `query`, `session_id`, `limit` | 只读扫描当前用户 `messages.jsonl`。 |
-| `start_timer_task` | TaskStartTool 自动生成 | 启动计时器后台任务，到点通过 speaker 播报提醒 | `seconds`, `message`, `auto_fire` | `auto_fire` 字段当前模型可见。 |
+| `start_timer 工具` | 后台 Tool 启动入口 自动生成 | 启动计时器后台 Tool，到点通过 speaker 播报提醒 | `seconds`, `message`, `auto_fire` | `auto_fire` 字段当前模型可见。 |
 
 ## 当前存在但默认不可见的工具提示词
 
@@ -79,7 +79,7 @@ Streamable HTTP session，避免首次工具调用才执行 MCP initialize。
 | 主 Agent prompt、Memory 规则、Realtime 工具规则分散拼接 | `app.py`、`vision.py`、`omni.py`、`memory/__init__.py` | 后续优化难以确认最终 system prompt 内容，容易重复或冲突。 |
 | Omni 对工具前音频主要靠 prompt 约束 | `REALTIME_TOOL_CALL_PROMPT_RULE` | provider 仍可能先吐 audio delta；需要服务端确定性 gate 才能稳定验收。 |
 | Omni 中存在具名视觉工具过滤和 `capture_photo` follow-up 特例 | `REALTIME_INLINE_VISION_TOOLS`、`_capture_photo_response_instructions()` | SDK/core 对业务工具名有耦合，后续应改成配置或 hook。 |
-| TaskStartTool description 自动拼接很长 | `_task_start_tool_description()` | 每个 Task 工具都重复一段通用规则，工具 schema 变长且可能挤压关键业务描述。 |
-| 部分 Task description 含实现细节 | `TrafficLightTask.description` | “YOLO mock”等内部实现可能干扰模型理解真实能力。 |
+| 后台 Tool 启动入口 description 自动拼接很长 | `后台 Tool 描述拼接()` | 每个后台 Tool 都重复一段通用规则，工具 schema 变长且可能挤压关键业务描述。 |
+| 部分 后台 Tool description 含实现细节 | `TrafficLightTool.description` | “YOLO mock”等内部实现可能干扰模型理解真实能力。 |
 | 视觉工具代码存在但默认不可见 | `server.yaml` denylist + Omni inline filter | 排查时容易误以为模型能调用图片工具，必须看实际 provider schema。 |
 | Tool progress message 不是 provider schema，但会产生用户可听输出 | `ToolSpec.progress_message` / `emit_progress_once()` | 上下文重构时需要和播放仲裁一起看，避免工具前播报和模型音频冲突。 |

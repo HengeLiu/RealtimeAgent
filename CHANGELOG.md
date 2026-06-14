@@ -10,8 +10,8 @@
 
 ### Context API
 
-- 保持 `ToolContext` / `TaskContext` 作为业务能力访问设备、资产、输出和上下文的边界。
-- conversation 重构不改变业务 Tool / Task 直接使用的 Context API。
+- 保持 `ToolContext` 作为业务能力访问设备、资产、输出和上下文的边界。
+- conversation 重构不改变业务 Tool 直接使用的 Context API。
 
 ### package-check
 

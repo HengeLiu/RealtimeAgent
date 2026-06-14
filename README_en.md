@@ -37,7 +37,7 @@ The project has established a working foundation around Protocol, Server SDK, De
 **Server SDK**
 
 - Omni + VL: supports the Omni / Realtime path today. The VL path already combines ASR, vision models, tool calls, and TTS, and still needs further work on quality, latency, and stability.
-- Tool + Task: supports modeling one-shot business actions as `Tool`s, and long-running, stateful, or stream-consuming workflows as background `Task`s.
+- Tools: model one-shot business actions as foreground `Tool`s, and long-running, stateful, or stream-consuming workflows as background `Tool`s (`late_result_policy="background"`).
 
 **Device SDK**
 
@@ -147,7 +147,7 @@ examples/<your-app>/agent-server/capabilities/
   tasks.py
 ```
 
-Use a `Tool` for a one-shot, short-lived action. Use a `Task` for workflows that run over time, maintain state, consume streams, or emit multiple outputs.
+Use a foreground `Tool` for a one-shot, short-lived action. Use a background `Tool` (`late_result_policy="background"`) for workflows that run over time, maintain state, consume streams, or emit multiple outputs.
 
 Common changes include:
 
@@ -156,7 +156,7 @@ Common changes include:
 - Expose the capability in the application config.
 - Inspect run artifacts under the application's `runs/` directory.
 
-Start with [Build Your First Tool and Task](docs/tutorials/build-first-capability.md).
+Start with [Build Your First Tool](docs/tutorials/build-first-capability.md).
 
 ### Connect a Device
 
@@ -211,7 +211,7 @@ For a fuller explanation of the model paths, see the [Developer Overview](docs/t
 | Device SDK | Endpoint SDKs for connecting real or simulated devices to the server protocol. |
 | Device | A client registered with the server, declaring its input, output, stream, command, or custom hardware capabilities. |
 | Tool | A short-lived action the Agent can call during a conversation. |
-| Task | A long-running workflow the Agent can start, observe, signal, and cancel. |
+| Background Tool | A long-running workflow the Agent can start, observe, and cancel (`late_result_policy="background"`). |
 | Context API | SDK interface used by Tools and Tasks to request device capabilities, assets, outputs, and runtime data. |
 | Model Lane | A model execution path, such as Omni / Realtime or VL. |
 | Run Artifacts | Debug artifacts that record model requests, tool events, stream events, output decisions, and playback decisions. |
@@ -275,7 +275,7 @@ These artifacts are part of the project model: a realtime Agent should not only 
 ## Documentation
 
 - [Developer Overview](docs/tutorials/developer-overview.md)
-- [Build Your First Tool and Task](docs/tutorials/build-first-capability.md)
+- [Build Your First Tool](docs/tutorials/build-first-capability.md)
 - [Server SDK](agent-server/README.md)
 - [Device SDK](devices/README.md)
 - [Device App Integration](devices/docs/device-app-integration.md)

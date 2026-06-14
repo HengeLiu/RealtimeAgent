@@ -33,7 +33,7 @@
 | `stream/service.py` | 上下行二进制 stream 生命周期、seq、finish、cancel、ack。 | 保持不动。 |
 | `asset/service.py`、`asset/turn_buffer.py` | 图片、音频、视频等资产保存和 turn 级视觉 buffer。 | 保持不动，只通过接口调用。 |
 | `tools.py` | Tool 注册、schema、执行、运行上下文、设备和资产 facade。 | 保持不动。 |
-| `tasks.py` | Task 生命周期、信号、定时器、后台任务编排。 | 保持不动。 |
+| `tool_run.py` | 后台 Tool 生命周期、回流与定时编排。 | 保持不动。 |
 | `output/service.py` | 文本转 TTS、Omni 原生音频、播放仲裁、端侧输出事件。 | 第一阶段复用，必要时只包一层适配器。 |
 | `observability.py` | runs 产物、事件记录、调试证据。 | 继续作为观测入口。 |
 
@@ -58,7 +58,7 @@
 5. 不修改控制协议事件名，不修改 stream 二进制帧格式。
 6. 不把大字节媒体放入控制信令 JSON。
 7. 第一阶段不重写 `OutputService`，只通过 adapter 使用。
-8. 第一阶段不重写 Tool / Task / Asset / Stream / Control。
+8. 第一阶段不重写 Tool / Asset / Stream / Control。
 9. 抽象优先使用 Python `Protocol`，除非确实需要共享状态或模板方法，再使用基类。
 10. 每阶段必须保留可运行链路，不允许长时间处于半迁移状态。
 
@@ -132,7 +132,7 @@ package "Existing SDK Services" {
   [StreamService]
   [AssetService]
   [ToolGateway]
-  [TaskEngine]
+  [Tool Run 运行时]
   [OutputService]
   [RunRecorder]
 }
@@ -167,7 +167,7 @@ package "Providers" {
 [VisionConversationCore] --> [ASRProvider]
 [VisionConversationCore] --> [VLMProvider]
 [ConversationAgentCore] --> [ToolGateway]
-[ConversationAgentCore] --> [TaskEngine]
+[ConversationAgentCore] --> [Tool Run 运行时]
 [ConversationAgentCore] --> [ConversationOutputAdapter]
 [ConversationOutputAdapter] --> [OutputService]
 [OutputService] --> [StreamService]
@@ -763,7 +763,7 @@ VL conversation 联调顺序：
 
 1. 不重写设备注册协议。
 2. 不重写 stream lifecycle。
-3. 不重写 Tool / Task 系统。
+3. 不重写 Tool 系统。
 4. 不重写 AssetService。
 5. 不重写 OutputService 播放仲裁。
 6. 不把 Omni 和 VL 强行合成同一个 provider。
@@ -949,7 +949,7 @@ uv run python -m realtime_agent_python_playback_glass conversation-regression
 
 本轮不包含：
 
-1. 大规模重写 Tool / Task / Asset / Stream / Control。
+1. 大规模重写 Tool / Asset / Stream / Control。
 2. 重写所有 provider adapter。
 3. 引入新的业务功能。
 
@@ -1012,7 +1012,7 @@ git diff --check
 14. 系统联调：已用 `python-playback-glass` 通过真实 WebSocket 分别完成 Omni Manual conversation runtime 和 VL conversation runtime 回放；回放包含 `sensor.mic`、`sensor.rgb`、`actuator.speaker`，VL 链路覆盖真实 ASR、VLM 和 TTS，Omni 链路覆盖 manual commit、manual response create 和原生音频输出。
 15. 共享 turn 控制：已新增 `RealtimeTurnController`，Omni Manual 和 VL conversation runtime 均通过该组件处理 `speech_started/speech_stopped` runtime 事件。
 16. 共享打断判断：已新增 `OutputInterruptionController`，Omni Manual 和 VL conversation runtime 均通过该组件判断活跃输出和 `thinking/speaking/tool_running` 状态，不再在各自 `_handle_turn_started` 中复制打断判断。
-17. 抽象接口：已新增 `ControlTransportABC`、`StreamTransportABC`、`DeviceSession`、`AssetStoreABC`、`AgentCoreABC`、`AgentLoopABC`、`AgentMemoryABC`、`AudioInputBoundary`、`SpeechInputBoundary`、`VisualInputBoundary`、`AgentOutputRouter`、`SpeakerSinkABC` 的代码契约；`ToolGatewayABC`、`TaskEngineABC`、`SkillGatewayABC`、`McpGatewayABC` 已作为能力层代码契约落地，方法覆盖 provider schema、任务查询、端侧 command 回执和 TaskSignal 回流；`ConversationContext` 已扩展为可表达 active streams、当前 turn、工具 schema、记忆摘要和 recorder 的 AgentContext；`AgentCoreABC` 已覆盖 `open/consume_input/consume_task_signal/interrupt/close/snapshot`；`VLMProviderABC`、`OmniRealtimeProviderABC`、`ASRProviderABC`、`TTSProviderABC` 已作为 provider adapter 代码契约落地，方法覆盖 streaming、图片 append、close 和流式 TTS；`AssetStoreABC` 已覆盖 read、claim 和 source map；`RuntimeAudioInputBoundary.normalize()` 已满足 `AudioInputBoundary`，`AudioPipeline` 内部正式下游字段已收敛为 `audio_consumer`；`AgentOutputDelta` 已覆盖 `text/audio/control/task_signal`，并保留旧 kind 兼容。其中 `AgentCoreABC.consume_input()` 已进入 Omni/VL conversation runtime，`OmniRealtimeLoop` 和 `VlAgentLoop` 已承接音频 append、ASR delta、turn final、commit/create_response 等 provider loop 入口；conversation 模式下 Omni provider callbacks 已由 `OmniRealtimeLoop` 组装，接管 provider audio/tool/error 事件到输出、工具和观测链路的回调入口；VL final_text 校验、记录、VLM provider streaming、tool_call、tool_result、文本输出释放和响应收尾控制已迁入 `VlAgentLoop`，旧 `VisionRealtimeAgentCore.handle_conversation_final_text()` 适配入口已删除；`ConversationMemoryService` 结构化满足 `AgentMemoryABC`，`TurnVisualInputBoundary` 已持有视觉 turn 生命周期状态并通过 `CallbackVisualInputBoundary` 兼容接入 turn controller，`AgentOutputRouter` 已进入 `ConversationOutputController.emit()` 并支持设计文档中的四类输出；`ConversationOutputDeltaBridge` 已把旧 core host 通过 OutputService 产生的真实 Omni 原生音频和 VL TTS 音频输出桥接记录为 `AgentOutputDelta`。
+17. 抽象接口：已新增 `ControlTransportABC`、`StreamTransportABC`、`DeviceSession`、`AssetStoreABC`、`AgentCoreABC`、`AgentLoopABC`、`AgentMemoryABC`、`AudioInputBoundary`、`SpeechInputBoundary`、`VisualInputBoundary`、`AgentOutputRouter`、`SpeakerSinkABC` 的代码契约；`ToolGatewayABC`、`ToolRunRunner`、`SkillGatewayABC`、`McpGatewayABC` 已作为能力层代码契约落地，方法覆盖 provider schema、工具调用和端侧 command 回执；`ConversationContext` 已扩展为可表达 active streams、当前 turn、工具 schema、记忆摘要和 recorder 的 AgentContext；`AgentCoreABC` 已覆盖 `open/consume_input/interrupt/close/snapshot`；`VLMProviderABC`、`OmniRealtimeProviderABC`、`ASRProviderABC`、`TTSProviderABC` 已作为 provider adapter 代码契约落地，方法覆盖 streaming、图片 append、close 和流式 TTS；`AssetStoreABC` 已覆盖 read、claim 和 source map；`RuntimeAudioInputBoundary.normalize()` 已满足 `AudioInputBoundary`，`AudioPipeline` 内部正式下游字段已收敛为 `audio_consumer`；`AgentOutputDelta` 已覆盖 `text/audio/control`，并保留旧 kind 兼容。其中 `AgentCoreABC.consume_input()` 已进入 Omni/VL conversation runtime，`OmniRealtimeLoop` 和 `VlAgentLoop` 已承接音频 append、ASR delta、turn final、commit/create_response 等 provider loop 入口；conversation 模式下 Omni provider callbacks 已由 `OmniRealtimeLoop` 组装，接管 provider audio/tool/error 事件到输出、工具和观测链路的回调入口；VL final_text 校验、记录、VLM provider streaming、tool_call、tool_result、文本输出释放和响应收尾控制已迁入 `VlAgentLoop`，旧 `VisionRealtimeAgentCore.handle_conversation_final_text()` 适配入口已删除；`ConversationMemoryService` 结构化满足 `AgentMemoryABC`，`TurnVisualInputBoundary` 已持有视觉 turn 生命周期状态并通过 `CallbackVisualInputBoundary` 兼容接入 turn controller，`AgentOutputRouter` 已进入 `ConversationOutputController.emit()` 并支持设计文档中的四类输出；`ConversationOutputDeltaBridge` 已把旧 core host 通过 OutputService 产生的真实 Omni 原生音频和 VL TTS 音频输出桥接记录为 `AgentOutputDelta`。
 18. 运行产物：`ConversationRuntimeEventEmitter` 已通过 `RunRecorder.record_conversation_event()` 写入独立 `conversation-events.jsonl`，同时保留 `agent-events.jsonl` 兼容入口。
 
 ### 17.2 已执行验证

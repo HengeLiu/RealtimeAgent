@@ -38,7 +38,7 @@
 
 - 设备会话运行时：提供设备注册、用户会话、控制 WebSocket、心跳、断联状态、音频 / 视觉 / speaker stream 生命周期管理和 debug API。
 - 智能体运行时：提供 Agent loop、上下文组装、工具调用、后台任务调度、输出播放仲裁、打断和输出恢复边界。
-- 自定义工具扩展：业务侧可以把一次性动作建模为 `Tool`，把持续流程建模为后台 `Task`。
+- 自定义工具扩展：业务侧可以把一次性动作建模为前台 `Tool`，把持续流程建模为后台 `Tool`（`late_result_policy="background"`）。
 - 多模态执行链路：已具备 ASR、视觉模型、工具调用和 TTS 组合能力，并且可按应用需求切换 provider、模型和上下文策略。
 - 可观测性与排障：通过 `runs/` 记录模型请求、Agent 事件、工具事件、stream 事件、输出决策和播放决策，用于复盘真实会话和定位链路问题。
 
@@ -171,7 +171,7 @@ examples/<your-app>/agent-server/capabilities/
   tasks.py
 ```
 
-一次性、短生命周期的动作适合写成 `Tool`。需要持续运行、维护状态、消费 stream 或多次输出的流程适合写成 `Task`。
+一次性、短生命周期的动作写成前台 `Tool`。需要持续运行、维护状态、消费 stream 或多次输出的流程写成后台 `Tool`（声明 `late_result_policy="background"`）。
 
 常见修改包括：
 
@@ -180,7 +180,7 @@ examples/<your-app>/agent-server/capabilities/
 - 在应用配置中暴露新能力。
 - 查看应用 `runs/` 目录里的运行产物。
 
-建议从 [第一个 Tool 和 Task](docs/tutorials/build-first-capability.md) 开始。
+建议从 [第一个能力工具](docs/tutorials/build-first-capability.md) 开始。
 
 ### 接入设备
 
@@ -233,8 +233,8 @@ examples/<your-app>/agent-server/capabilities/
 | Device SDK    | 端侧 SDK，用于把真实设备或模拟设备接入 server 协议。                                    |
 | Device        | 注册到 server 的客户端，声明自己的输入、输出、stream、command 或自定义硬件能力。        |
 | Tool          | Agent 可以在对话中调用的短生命周期动作。                                                |
-| Task          | Agent 可以启动、观测、发送信号和取消的长流程任务。                                      |
-| Context API   | Tool 和 Task 用来请求设备能力、资产、输出和运行时数据的 SDK 接口。                      |
+| 后台 Tool     | Agent 可以启动、观测和取消的后台长流程能力（`late_result_policy="background"`）。      |
+| Context API   | Tool 用来请求设备能力、资产、输出和运行时数据的 SDK 接口。                              |
 | Model Lane    | 模型执行链路，例如 Omni / Realtime 或 VL。                                              |
 | Run Artifacts | 记录模型请求、工具事件、stream 事件、输出决策和播放决策的调试产物。                     |
 
@@ -298,7 +298,7 @@ examples/simple-agent-server/runs
 ## 文档
 
 - [开发者总览](docs/tutorials/developer-overview.md)
-- [第一个 Tool 和 Task](docs/tutorials/build-first-capability.md)
+- [第一个能力工具](docs/tutorials/build-first-capability.md)
 - [Server SDK](agent-server/README.md)
 - [Device SDK](devices/README.md)
 - [端侧 App 接入指南](devices/docs/device-app-integration.md)

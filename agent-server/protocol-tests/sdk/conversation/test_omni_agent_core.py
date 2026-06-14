@@ -3328,7 +3328,7 @@ def test_qwen_omni_realtime_provider_enforces_concurrency_limit(monkeypatch) -> 
 def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> None:
     """测试目标：验证 Realtime 工具失败后 follow-up 明确约束模型承认失败。
 
-    测试方法：模拟 task_runtime_manager 启动任务失败，触发工具结果回填和 response.done。
+    测试方法：模拟一个工具调用失败，触发工具结果回填和 response.done。
     预期结果：创建 follow-up response 的 instructions 包含失败原因，并禁止声称成功。
     """
 
@@ -3360,15 +3360,15 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
     )
 
     provider._submit_tool_result(
-        call_id="call-failed-task",
+        call_id="call-failed-route",
         result={
-            "tool_call_id": "call-failed-task",
-            "name": "task_runtime_manager",
+            "tool_call_id": "call-failed-route",
+            "name": "query_route_plan",
             "ok": False,
             "data": None,
-            "message": "任务启动失败：unknown task: timer",
-            "error": {"code": "not_found", "message": "unknown task: timer", "retryable": False, "details": {}},
-            "meta": {"operation": "task_start", "requested_task_type": "timer", "resolved_task_type": "timer"},
+            "message": "路线规划失败：service unavailable",
+            "error": {"code": "unknown", "message": "service unavailable", "retryable": True, "details": {}},
+            "meta": {},
         },
     )
     provider._handle_provider_event({"type": "response.done", "response": {"status": "completed"}})
@@ -3376,8 +3376,8 @@ def test_qwen_omni_tool_failure_followup_instructions_force_failure_ack() -> Non
     instructions = conversation.responses[0]["instructions"]
     assert "基础指令" in instructions
     assert "操作失败" in instructions
-    assert "unknown task: timer" in instructions
-    assert "任务没有启动" in instructions
+    assert "service unavailable" in instructions
+    assert "不能声称操作已经执行成功" in instructions
     assert "不能声称操作已经执行成功" in instructions
     assert "不要向用户复述工具名" in instructions
 

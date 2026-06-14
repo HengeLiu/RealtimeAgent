@@ -3,7 +3,7 @@
 更新时间：2026-05-15
 
 当前状态：本文最初设计的是“server 转发 RGB stream 到 phone 显示端”。当前实现保留
-普通 RGB stream 显示能力，但找物和红绿灯主链路已经升级为 peer video：server Task
+普通 RGB stream 显示能力，但找物和红绿灯主链路已经升级为 peer video：server 后台 Tool
 先启动 Python phone receiver，再启动 browser-glass sender，JPEG 帧通过 phone 暴露的
 `/peer-video/<peer_session_id>` WebSocket 传输。realtime visual sampler 的单资产
 `sensor.rgb` 请求带 `request_id`，只进入模型/资产链路，不再转发给 phone。
@@ -101,7 +101,7 @@ server 应在注册时补齐内部路由：
 
 截至当前代码状态，视频显示链路已经从早期“单张图片回显”升级为两类入口：
 普通 `sensor.rgb` 输入流仍可经 server 转发到 phone 预览窗口；找物和红绿灯主链路
-使用 peer video，由 Task 明确启动 receiver/sender 后才开始传帧。
+使用 peer video，由后台 Tool 明确启动 receiver/sender 后才开始传帧。
 
 已具备：
 
@@ -120,12 +120,12 @@ server 应在注册时补齐内部路由：
 3. `compile_system_routes_from_properties()` 已支持把 `actuator.display.rgb` 或
    `endpoint.role.visual_display` 编译成 `stream.input.* + sensor.rgb` 内部路由。
 4. browser-glass 和 python-phone 默认使用同一 `user_id`。
-5. browser-glass 已提供“选择图片”和“选择视频”按钮；上传由 server 请求或 peer video Task 触发。
+5. browser-glass 已提供“选择图片”和“选择视频”按钮；上传由 server 请求或 peer video 后台 Tool 触发。
 6. Python phone 已增加 PySide6 GUI 事件桥、状态面板、日志面板和视频面板；OpenCV 保留为解码和保存最近帧。
 
 仍需后续处理：
 
-1. 普通 RGB stream 仍主要用于单帧或开发调试；需要持续业务视频时优先使用 peer video Task。
+1. 普通 RGB stream 仍主要用于单帧或开发调试；需要持续业务视频时优先使用 peer video 后台 Tool。
 2. PySide6 窗口首版只包含视频、状态和日志，工具栏按钮、日志过滤、runs 目录打开等增强项后续补。
 3. 后续如果要正式表达“显示器”能力，仍建议新增 `supports.displays` 或
    `supports.consumers`，本阶段先不扩大公开 schema。
@@ -425,7 +425,7 @@ Phone -> Phone: 保留最后一帧或关闭窗口
 ## 9. browser-glass 图片和任务回显测试链路
 
 普通 RGB stream 测试目标是确认一张或多张浏览器上传图片能够经 server 回显到 Python phone。
-找物和红绿灯任务测试目标是确认 Task 启动后才建立 peer video，Task 前的
+找物和红绿灯任务测试目标是确认 后台 Tool 启动后才建立 peer video，启动前的
 realtime visual sampler 不会把帧发到 phone。
 
 联调顺序：
@@ -563,13 +563,13 @@ uv run realtime-agent.web.open --serve
 2. browser-glass 连接并注册。
 3. 选择一张图片或视频。
 4. 普通 RGB stream 测试：触发一次不带 `request_id` 的 RGB 输入流。
-5. peer video 测试：用语音触发找物或红绿灯 Task，观察 `peer.video.receiver.start` 后才出现回显。
+5. peer video 测试：用语音触发找物或红绿灯后台 Tool，观察 `peer.video.receiver.start` 后才出现回显。
 6. 观察 Python 手机端窗口、`runs/realtime-agent/python-phone/latest-rgb.png` 和
    `runs/realtime-agent/python-phone/latest-yolo.jpg`。
 
 预期结果：
 
-1. Python 手机端窗口只显示普通 RGB stream 或 Task 后 peer video 帧。
+1. Python 手机端窗口只显示普通 RGB stream 或 后台 Tool 启动后 peer video 帧。
 2. 最近帧文件存在并可打开。
 3. `/api/debug/devices` 显示两个设备在线且同属一个 `user_id`。
 4. `control-routes.jsonl` 显示不带 `request_id` 的 `stream.input.opened(sensor.rgb)` 可投递到 phone preview；带 `request_id` 的单资产采样流不应投递到 phone。
@@ -701,9 +701,9 @@ uv run python -m pytest dev-support/unit-tests/python_phone_mock/test_python_pho
 
 备选方案：
 
-1. 保持当前“选择图片 / 选择视频”入口，通过 CLI 或 Task 触发采集。
+1. 保持当前“选择图片 / 选择视频”入口，通过 CLI 或后台 Tool 触发采集。
 2. 按当前协议发送 `stream.input.opened`、chunk、`stream.input.closed`。
-3. 避免重新增加手动上传按钮，防止和 Task 前不应建链的语义混淆。
+3. 避免重新增加手动上传按钮，防止和后台 Tool 启动前不应建链的语义混淆。
 
 取舍：
 
@@ -727,7 +727,7 @@ uv run python -m pytest dev-support/unit-tests/python_phone_mock/test_python_pho
 2. 更新 `docs/getting-started/quickstart.md` 的 RGB 回显步骤。
 3. 更新 `docs/how-to/cross-device-local-debug.md`，增加 browser-glass + python-phone 图片回显流程。
 4. 明确说明 browser-glass 和 phone preview 必须使用同一 `user_id`。
-5. 明确说明“图片选择后不会自动上传，需要触发 RGB 请求或业务 Task”。
+5. 明确说明“图片选择后不会自动上传，需要触发 RGB 请求或后台 Tool”。
 6. 明确运行产物观察点：`control-routes.jsonl`、`stream-events.jsonl`、`latest-rgb.png`。
 
 验收：

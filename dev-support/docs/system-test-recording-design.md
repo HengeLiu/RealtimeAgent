@@ -26,7 +26,7 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 2. 不新增 `realtime-agent.system-test.*` 这类 SDK CLI 入口。
 3. 不在回放端侧中实例化 `RealtimeAgentApp`、`RealtimeAgentConfig`。
 4. 不直接调用 `register_device()`、`publish_control_event()`、`open_input_stream()`、`write_input_chunk()`、`stream_service.close_stream()`。
-5. 不直接调用 `ToolGateway`、`TaskEngine`、`OutputService`、`AssetService` 或 server recorder。
+5. 不直接调用 `ToolGateway`、`Tool Run 运行时`、`OutputService`、`AssetService` 或 server recorder。
 6. 不使用 in-process 模式作为系统测试主路径。
 7. 不把 Case Runner 做成 server 内部调度器。
 
@@ -39,7 +39,7 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 1. `testdata/audio-sample/` 保存可回放的语音样例。
 2. `testdata/image-sample/` 保存可作为 `sensor.rgb` fixture 的图片样例。
 3. `browser-glass` 能完成手动注册、唤醒、语音输入、图片上传和播放验证。
-4. server runs 产物记录事件、stream、Agent、Tool、Task、资产和输出链路。
+4. server runs 产物记录事件、stream、Agent、Tool、资产和输出链路。
 5. `python-glass` 中已有部分网络 WebSocket 端侧逻辑，可以作为参考，但需要独立整理成 `python-playback-glass`。
 
 下一阶段要做的是系统级集成测试。测试 Case 应提前描述用户输入、设备行为和预期系统行为；每次改代码后，可以自动启动 server、启动回放设备、执行 Case，并检查所有预期是否满足。
@@ -51,7 +51,7 @@ server 不能知道它是测试框架。对 server 来说，它和 `browser-glas
 1. 支持从 `browser-glass` 手动测试 runs 产物生成 Case YAML 草稿。
 2. 支持 `python-playback-glass` 按 Case YAML 自动回放音频和图片。
 3. 回放设备只通过真实控制协议和数据流协议与 server 对话。
-4. 支持检查事件、stream、Tool、Task、资产、输出和系统错误。
+4. 支持检查事件、stream、Tool、资产、输出和系统错误。
 5. 支持输出结构化 `report.json`。
 6. 支持 pytest 或本地命令调用，但 pytest 只作为外层启动器，不直接调用 server 内部对象。
 
@@ -134,7 +134,7 @@ server runs 是录制和断言的主要真相来源：
 3. `agent-events.jsonl`：Agent Core 和 provider 关键事件。
 4. `model-request.json`：本轮模型请求、提示词、messages 和 tools。
 5. `tool-events.jsonl`：工具调用参数、结果、耗时和错误。
-6. `task-signals.jsonl`：Task 启动、状态变化和业务信号。
+6. `tool-runs.jsonl`：Tool Run 启动、状态变化和回流。
 7. `assets.jsonl`：图片等传感器资产写入。
 8. `output-decisions.jsonl` / `playback-decisions.jsonl`：输出和播放仲裁。
 9. `system-events.jsonl`：系统错误、降级和恢复事件。
@@ -273,7 +273,7 @@ expect:
 1. 出现过的关键事件名。
 2. 出现过的 stream 类型。
 3. 被调用的 Tool 名称。
-4. 被启动或完成的 Task 类型。
+4. 被启动或完成的后台 Tool 类型。
 5. 资产类型和最小数量。
 6. speaker 输出是否存在。
 7. 是否出现系统错误。
@@ -359,7 +359,7 @@ expect:
 截至 2026-05-12，`python-playback-glass` 已按本文定位落在
 `dev-support/devices/python-playback-glass/`，并保持以下边界：
 
-1. 端侧包不导入 `RealtimeAgentApp`、`RealtimeAgentConfig`、`ToolGateway`、`TaskEngine`、`OutputService`、`AssetService`。
+1. 端侧包不导入 `RealtimeAgentApp`、`RealtimeAgentConfig`、`ToolGateway`、`Tool Run 运行时`、`OutputService`、`AssetService`。
 2. 回放路径通过 `/ws/control` 和 `/ws/stream` 发送事件与二进制 chunk。
 3. recorder 只读取 runs 文件产物，不调用 server 内部对象。
 4. pytest 覆盖端侧 schema、协议编解码、recorder 和静态边界；完整系统回放仍需要外部启动 server 后执行 suite。

@@ -13,4 +13,4 @@
 | `test_no_internal_service_usage_contract.py` | 验证示例应用不直接依赖 SDK 内部服务。 |
 | `test_p0_foundation_contract.py` | 验证 P0 基础能力契约。 |
 | `test_protocol_document_contract.py` | 验证协议文档、代码映射和变更 checklist 完整。 |
-| `test_task_device_stream_contract.py` | 验证 Task 与设备 stream 的边界契约。 |
+| `test_task_device_stream_contract.py` | 验证后台 Tool 与设备 stream 的边界契约。 |

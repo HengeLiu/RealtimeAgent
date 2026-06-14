@@ -1811,8 +1811,8 @@ def test_vision_agent_loads_device_message_history_from_messages_jsonl(tmp_path)
     assert "历史已加载。" in (tmp_path / "runs" / user_id / device_id / "messages.jsonl").read_text(encoding="utf-8")
 
 
-def test_vision_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path) -> None:
-    """测试目标：验证 Text 新一轮请求会把成对工具/任务结果回灌到 provider messages。
+def test_vision_agent_replays_tool_results_from_messages_jsonl(tmp_path) -> None:
+    """测试目标：验证 Text 新一轮请求会把成对工具结果回灌到 provider messages。
 
     测试方法：预置 assistant tool_call 和 tool result 历史，再触发一轮Vision 输入。
     预期结果：模型收到合法的 assistant.tool_calls + tool 消息，而不是只收到普通助手文本。
@@ -1830,27 +1830,27 @@ def test_vision_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path
     messages_path = tmp_path / "runs" / user_id / device_id / "messages.jsonl"
     messages_path.parent.mkdir(parents=True, exist_ok=True)
     history = [
-        {"session_id": device_id, "role": "user", "content": "帮我看看红绿灯。"},
+        {"session_id": device_id, "role": "user", "content": "帮我规划去公园的路线。"},
         {
             "session_id": device_id,
             "role": "assistant",
             "content": "",
             "tool_calls": [
                 {
-                    "id": "call-task-1",
-                    "name": "start_traffic_light_task",
-                    "arguments": {"question": "现在可以过马路了吗"},
+                    "id": "call-route-1",
+                    "name": "query_route_plan",
+                    "arguments": {"destination": "公园"},
                 }
             ],
         },
         {
             "session_id": device_id,
             "role": "tool",
-            "tool_call_id": "call-task-1",
-            "name": "start_traffic_light_task",
-            "content": {"ok": True, "tasks": [{"task_id": "task-1", "state": "running"}]},
+            "tool_call_id": "call-route-1",
+            "name": "query_route_plan",
+            "content": {"ok": True, "status": "running", "data": {"tool_run_id": "tool_run_1"}},
         },
-        {"session_id": device_id, "role": "assistant", "content": "红绿灯任务已启动。"},
+        {"session_id": device_id, "role": "assistant", "content": "正在帮你规划路线。"},
     ]
     messages_path.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in history) + "\n", encoding="utf-8")
     model = CaptureHistoryVisionModel()
@@ -1870,10 +1870,10 @@ def test_vision_agent_replays_tool_and_task_results_from_messages_jsonl(tmp_path
 
     runtime_messages = model.messages[0]
     assert [message["role"] for message in runtime_messages[:4]] == ["user", "assistant", "tool", "assistant"]
-    assert runtime_messages[1]["tool_calls"][0]["function"]["name"] == "start_traffic_light_task"
-    assert json.loads(runtime_messages[1]["tool_calls"][0]["function"]["arguments"]) == {"question": "现在可以过马路了吗"}
-    assert runtime_messages[2]["tool_call_id"] == "call-task-1"
-    assert json.loads(runtime_messages[2]["content"])["tasks"][0]["state"] == "running"
+    assert runtime_messages[1]["tool_calls"][0]["function"]["name"] == "query_route_plan"
+    assert json.loads(runtime_messages[1]["tool_calls"][0]["function"]["arguments"]) == {"destination": "公园"}
+    assert runtime_messages[2]["tool_call_id"] == "call-route-1"
+    assert json.loads(runtime_messages[2]["content"])["status"] == "running"
 
 
 def test_vision_agent_injects_latest_message_summary_without_duplicate_history(tmp_path) -> None:

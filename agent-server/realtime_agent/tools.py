@@ -98,7 +98,6 @@ class ToolResult:
     assets: list[AssetRef] | None = None
     visual_assets: list[VisualAssetRef] | None = None
     artifacts: list[ArtifactRef] | None = None
-    tasks: list[Any] | None = None
     meta: dict | None = None
     error: dict | None = None
     status: Literal["completed", "running"] = "completed"
@@ -131,7 +130,6 @@ class ToolResult:
             assets=[],
             visual_assets=[],
             artifacts=[],
-            tasks=[],
             meta=run_meta,
             error=None,
         )
@@ -145,12 +143,11 @@ class ToolResult:
         assets: list[AssetRef] | None = None,
         visual_assets: list[VisualAssetRef] | None = None,
         artifacts: list[ArtifactRef] | None = None,
-        tasks: list[Any] | None = None,
         meta: dict | None = None,
     ) -> "ToolResult":
         """创建成功结果。
 
-        主要逻辑：把 Tool 的业务数据、资产、产物、任务引用和元数据归一成公开结构。
+        主要逻辑：把 Tool 的业务数据、资产、产物和元数据归一成公开结构。
         参数：`data` 为模型或后续组件可读取的业务数据。
         返回值：`ToolResult`。
         异常情况：无。
@@ -162,7 +159,6 @@ class ToolResult:
             assets=assets or [],
             visual_assets=visual_assets or [],
             artifacts=artifacts or [],
-            tasks=tasks or [],
             meta=meta or {},
             error=None,
         )
@@ -178,7 +174,7 @@ class ToolResult:
         """
         error_dict = error.to_dict()
         message = str(error_dict.get("message") or error)
-        return cls(ok=False, message=message, assets=[], visual_assets=[], artifacts=[], tasks=[], meta={}, error=error_dict)
+        return cls(ok=False, message=message, assets=[], visual_assets=[], artifacts=[], meta={}, error=error_dict)
 
     @property
     def content(self) -> Any:
@@ -256,7 +252,7 @@ class ToolSpec:
     description: str
     input_model: Any = dict
     output_model: Any = None
-    capability_type: Literal["tool", "mcp", "task"] = "tool"
+    capability_type: Literal["tool", "mcp"] = "tool"
     tags: list[str] = field(default_factory=list)
     progress_message: ProgressMessage | None = None
     timeout_seconds: float | None = None
@@ -978,7 +974,6 @@ def _tool_result_from_run_dict(data: dict[str, Any]) -> ToolResult:
         assets=[],
         visual_assets=[],
         artifacts=[],
-        tasks=[],
         meta=dict(data.get("meta") or {}),
         error=data.get("error"),
         status=str(data.get("status") or "completed"),
@@ -2673,8 +2668,8 @@ class TimerTool(BaseTool):
     主要功能：用户要求倒计时、计时、稍后提醒或到点提示时启动；工具在后台等待指定
     秒数后，把到点提醒经 Output Service 直通播报给用户。
 
-    与旧 timer_task 的等价关系：超过等待窗口（默认 3 秒）的计时会立即返回“计时器已开始
-    计时”，到点后通过 late result direct 通道播报；可经 tool_run_manager 取消。
+    运行语义：超过等待窗口（默认 3 秒）的计时会立即返回“计时器已开始计时”，到点后
+    通过 late result direct 通道播报；可经 tool_run_manager 取消。
     """
 
     spec = ToolSpec(

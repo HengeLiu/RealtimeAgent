@@ -6,7 +6,7 @@
 
 1. SDK 应该有哪些稳定的概念层。
 2. 每个概念层应该暴露哪些抽象接口。
-3. `AgentCore`、`AgentLoop`、`AgentContext`、`Provider`、`Tool`、`Task`、`Output` 等核心概念如何区分。
+3. `AgentCore`、`AgentLoop`、`AgentContext`、`Provider`、`Tool`、`后台 Tool`、`Output` 等核心概念如何区分。
 4. Omni、VL 和未来自定义 Agent 如何在同一套抽象下扩展。
 
 具体音视频链路设计见 [音视频对话统一链路设计.md](音视频对话统一链路设计.md)。本文是更高一层的 SDK 抽象设计。
@@ -55,7 +55,7 @@ package "Agent Layer" {
 
 package "Capability Layer" {
   [ToolGateway]
-  [TaskEngine]
+  [Tool Run 运行时]
   [SkillGateway]
   [McpGateway]
 }
@@ -84,7 +84,7 @@ package "Observability & Config" {
 [AgentCoreABC] --> [AgentMemory]
 [AgentLoopABC] --> [Provider Adapters]
 [AgentLoopABC] --> [ToolGateway]
-[ToolGateway] --> [TaskEngine]
+[ToolGateway] --> [Tool Run 运行时]
 [ToolGateway] --> [SkillGateway]
 [ToolGateway] --> [McpGateway]
 [AgentCoreABC] --> [AgentOutputRouter]
@@ -111,7 +111,7 @@ package "Observability & Config" {
 3. `AgentLoop` 是一次或多次模型推理的控制循环，属于 `AgentCore` 内部，不拥有设备连接。
 4. 输入层只产生标准输入事件，不理解模型上下文和工具策略。
 5. 输出层只负责把 Agent 结果变成用户可感知输出，不理解模型推理过程。
-6. Tool / Task / Skill / MCP 都属于能力层，模型只能通过 Agent 暴露的 schema 间接访问。
+6. Tool / Skill / MCP 都属于能力层，模型只能通过 Agent 暴露的 schema 间接访问。
 7. runs 产物和 preflight 是跨层观测能力，但不能反向改变业务逻辑。
 
 ## Transport Layer
@@ -217,7 +217,7 @@ Input Layer 负责把端侧传入的数据转换为 Agent 可消费的标准输�
 
 1. 保存图片、视频、音频片段等大字节资产。
 2. 提供 `AssetRef`、claim、TTL、source map 和读取接口。
-3. 保证 Tool、Task、Agent 都通过稳定引用访问资产。
+3. 保证 Tool、Agent 都通过稳定引用访问资产。
 
 ## Agent Layer
 
@@ -233,7 +233,6 @@ Agent Layer 是 SDK 的模型运行核心。
 class AgentCoreABC:
     def open(self, context: "AgentContext") -> None: ...
     def consume_input(self, delta: "SpeechInputDelta") -> None: ...
-    def consume_task_signal(self, signal: "TaskSignal") -> None: ...
     def interrupt(self, reason: str) -> None: ...
     def close(self, reason: str) -> None: ...
     def snapshot(self) -> "AgentSnapshot": ...
@@ -251,7 +250,7 @@ class AgentCoreABC:
 
 1. 不直接读写 WebSocket。
 2. 不直接操作端侧设备。
-3. 不直接管理长期 Task 生命周期。
+3. 不直接管理后台 Tool 生命周期。
 4. 不直接实现 TTS 播放队列。
 
 ### `AgentContext`
@@ -271,7 +270,7 @@ class AgentCoreABC:
 
 1. 原始 WebSocket 对象。
 2. 业务 Tool 实例。
-3. Task actor 实例。
+3. 后台 Tool 协程 实例。
 4. provider SDK 原始连接对象。
 
 ### `AgentMemory`
@@ -356,16 +355,16 @@ Capability Layer 负责让 Agent 使用外部能力。
 
 Agent 只能通过 `ToolGateway` 访问工具，不能直接 import 业务工具。
 
-### `TaskEngine`
+### `Tool Run 运行时`
 
 职责：
 
-1. 注册和启动长生命周期 Task。
-2. 管理 `TaskRef`、状态、信号和取消。
+1. 注册和启动后台 Tool。
+2. 管理 `ToolRun`、状态、信号和取消。
 3. 接收端侧 command 回报。
-4. 将 `TaskSignal` 回流 Agent 或 Output。
+4. 将 `Tool Run 回流结果` 回流 Agent 或 Output。
 
-Agent 看到 Task 的方式是 ToolResult 中的 `TaskRef`，不是 Task 对象本身。
+Agent 看到 后台 Tool 的方式是 ToolResult 中的 `ToolRun`，不是 后台 Tool 对象本身。
 
 ### `SkillGateway` / `McpGateway`
 
@@ -385,7 +384,7 @@ AgentCore 不应该直接假设输出一定是文本或一定是音频。建议�
 
 ```python
 class AgentOutputDelta:
-    kind: Literal["text", "audio", "control", "task_signal"]
+    kind: Literal["text", "audio", "control", "Tool Run 回流"]
     payload: bytes | str | dict
     priority: str
     metadata: dict
@@ -400,7 +399,7 @@ class AgentOutputDelta:
 3. `text` 进入 TTS。
 4. `audio` 直接进入 speaker stream。
 5. `control` 转交控制层。
-6. `task_signal` 根据策略进入 Agent 或直接播报。
+6. `Tool Run 回流` 根据策略进入 Agent 或直接播报。
 
 ### `OutputService`
 
@@ -450,7 +449,7 @@ class AgentOutputDelta:
 
 1. 都实现 `AgentCoreABC`。
 2. 都消费 `SpeechInputDelta`。
-3. 都使用 `AgentContext`、`AgentMemory`、`ToolGateway`、`TaskEngine` 和 `OutputService`。
+3. 都使用 `AgentContext`、`AgentMemory`、`ToolGateway`、`Tool Run 运行时` 和 `OutputService`。
 4. 都产出 `AgentOutputDelta`。
 5. 都通过 runs 产物记录可复查行为。
 
@@ -494,7 +493,7 @@ realtime_agent/
     vl.py
   capability/
     tools.py
-    tasks.py
+    tool_run.py
     skills.py
     mcp.py
   output/
@@ -522,7 +521,7 @@ realtime_agent/
 ## 非目标
 
 1. 不要求 Omni 和 VL 共用同一个 provider loop。
-2. 不把 Tool、Task、Output 都塞进 AgentCore。
+2. 不把 Tool、Output 都塞进 AgentCore。
 3. 不让 Input Layer 理解 prompt、memory 或工具策略。
 4. 不让 Output Layer 读取模型私有事件。
 5. 不为抽象而抽象；每个 ABC 都必须对应一个可替换实现点。

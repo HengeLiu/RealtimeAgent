@@ -497,12 +497,8 @@ class MockVisionModelAdapter:
             if content.get("ok"):
                 return ("我已经拿到当前照片。",)
             return ("没有拿到当前照片。",)
-        if name == "task_runtime_manager":
-            task_id = data.get("task_id") or "新的计时器"
-            return (f"计时器已创建，任务编号是 {task_id}。",)
-        if name.startswith("start_") and name.endswith("_task"):
-            task_id = data.get("task_id") or "新的任务"
-            return (f"任务已启动，编号是 {task_id}。",)
+        if content.get("status") == "running":
+            return (str(content.get("message") or "正在处理，稍后告诉你结果。"),)
         return (str(content.get("message") or "工具调用完成。"),)
 
 
