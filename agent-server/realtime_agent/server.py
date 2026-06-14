@@ -75,6 +75,7 @@ class NetworkDeviceConnection:
     loop: asyncio.AbstractEventLoop
     event_queue: asyncio.Queue[Event] = field(default_factory=asyncio.Queue)
     connection_id: str | None = None
+    _user_id: str | None = None
     _control_ws: web.WebSocketResponse | None = None
     _stream_websockets: dict[str, web.WebSocketResponse] = field(default_factory=dict)
     _stream_queues: dict[str, asyncio.Queue[QueuedStreamPayload]] = field(default_factory=dict)
@@ -365,6 +366,8 @@ class RealtimeAgentHttpServer:
         app.router.add_get("/ws/stream", self.stream_ws)
         app.on_startup.append(self._on_startup)
         app.on_cleanup.append(self._on_cleanup)
+        for hook in self.audio_app.web_app_hooks:
+            hook(app)
         return app
 
     async def _on_startup(self, app: web.Application) -> None:
@@ -526,6 +529,7 @@ class RealtimeAgentHttpServer:
                         await ws.send_str(json.dumps(registered.to_dict(), ensure_ascii=False))
                         if registered.event_name == "control.device.registered":
                             pending_connection.connection_id = registered.payload.get("connection_id")
+                            pending_connection._user_id = event.user_id
                             self.connections[device_id] = pending_connection
                             connection = pending_connection
                             sender_task = asyncio.create_task(sender(connection))
@@ -542,6 +546,51 @@ class RealtimeAgentHttpServer:
                                     },
                                 ),
                             )
+                            # Broadcast peer notification to other devices of the same user
+                            peer_event = {
+                                "event_name": "control.device.registered",
+                                "user_id": event.user_id,
+                                "producer_id": device_id,
+                                "timestamp_ms": int(time.time() * 1000),
+                                "payload": {
+                                    "device_id": device_id,
+                                    "client_type": event.payload.get("client_type", ""),
+                                    "peer_notification": True,
+                                    "connection_state": "online",
+                                },
+                            }
+                            peer_msg = json.dumps(peer_event, ensure_ascii=False)
+                            for cid, conn in list(self.connections.items()):
+                                if cid != device_id:
+                                    conn_uid = getattr(conn, '_user_id', None)
+                                    if conn_uid == event.user_id:
+                                        try:
+                                            await conn._control_ws.send_str(peer_msg)
+                                            log_info(self.logger, f"peer notification sent to {cid}", LogContext(device_id=device_id))
+                                        except Exception as exc:
+                                            log_error(self.logger, f"peer notification failed for {cid}: {exc}", LogContext(device_id=device_id))
+                            # Send already-connected peers to this newly registered device
+                            for cid, conn in list(self.connections.items()):
+                                if cid != device_id:
+                                    conn_uid = getattr(conn, '_user_id', None)
+                                    if conn_uid == event.user_id:
+                                        existing_peer_event = {
+                                            "event_name": "control.device.registered",
+                                            "user_id": event.user_id,
+                                            "producer_id": cid,
+                                            "timestamp_ms": int(time.time() * 1000),
+                                            "payload": {
+                                                "device_id": cid,
+                                                "client_type": "esp32-glass" if "glass" in cid else "android",
+                                                "peer_notification": True,
+                                                "connection_state": "online",
+                                            },
+                                        }
+                                        try:
+                                            await connection._control_ws.send_str(json.dumps(existing_peer_event, ensure_ascii=False))
+                                            log_info(self.logger, f"existing peer {cid} notified to {device_id}", LogContext(device_id=device_id))
+                                        except Exception as exc:
+                                            log_error(self.logger, f"existing peer notify failed: {exc}", LogContext(device_id=device_id))
                     else:
                         self.audio_app.publish_control_event(event)
                 except Exception as exc:

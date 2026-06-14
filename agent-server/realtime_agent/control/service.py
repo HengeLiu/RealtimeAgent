@@ -233,6 +233,29 @@ class DeviceAuthenticator:
             return self._verify_signed_token(registration, auth)
         return False, "unsupported_auth_mode"
 
+    def verify_token_and_get_user_id(self, registration: Event) -> tuple[bool, str | None, str | None]:
+        """Verify token and return (ok, reason, token_user_id). For signed_token mode, returns the user_id from the token."""
+        auth = registration.payload.get("auth") or {}
+        device_id = registration.payload.get("device_id")
+        if self.mode == "disabled":
+            return True, None, registration.user_id
+        if self.mode == "static_token":
+            if auth.get("mode") != "static_token":
+                return False, "invalid_auth_mode", None
+            if self.device_tokens.get(device_id) != auth.get("token"):
+                return False, "invalid_token", None
+            return True, None, registration.user_id
+        if self.mode == "signed_token":
+            ok, reason = self._verify_signed_token(registration, auth)
+            if ok:
+                # Extract user_id from token
+                token = str(auth.get("token") or "")
+                payload_part = token.split(".", 1)[0]
+                payload = json.loads(_b64url_decode(payload_part).decode("utf-8"))
+                return True, None, str(payload.get("user_id") or registration.user_id)
+            return False, reason, None
+        return False, "unsupported_auth_mode", None
+
     def _verify_signed_token(self, registration: Event, auth: dict[str, Any]) -> tuple[bool, str | None]:
         """校验正式 signed_token。
 
@@ -484,9 +507,14 @@ class ControlService:
             )
             self.validator.validate_payload(registration)
             self.validator.validate_routes([{"event": route.event, "filter": dict(route.filter)} for route in routes])
-            ok, reason = self.authenticator.verify_token(registration)
+            ok, reason, token_user_id = self.authenticator.verify_token_and_get_user_id(registration)
             if not ok:
                 raise PermissionError(reason or "registration_denied")
+            # Use user_id from token if available (for signed_token mode)
+            if token_user_id:
+                user_id = token_user_id
+                from dataclasses import replace
+                registration = replace(registration, user_id=user_id)
             device_id = registration.payload["device_id"]
             bound_user = self._bindings.get(device_id)
             if bound_user is not None and bound_user != registration.user_id:
@@ -1090,7 +1118,11 @@ class ControlService:
         }
 
     def build_devices_snapshot(self) -> dict[str, Any]:
-        return {"devices": [self._device_snapshot(device).to_dict() for device in self._devices.values()]}
+        devices = [self._device_snapshot(device).to_dict() for device in self._devices.values()]
+        # Include inactive devices (recently disconnected)
+        for snapshot in self._inactive_devices.values():
+            devices.append(snapshot.to_dict())
+        return {"devices": devices}
 
     def build_device_snapshot(self, device_id: str) -> dict[str, Any] | None:
         """返回单设备 debug 快照。"""

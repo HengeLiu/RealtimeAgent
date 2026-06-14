@@ -132,11 +132,16 @@ class _SileroStreamState:
 
     主要功能：保存单个 stream 的 Silero iterator 和不足一帧的 PCM 缓存。
     主要属性：`iterator` 持有 Silero streaming 状态；`pending_pcm` 保存未满
-    512 samples 的尾部音频。
+    512 samples 的尾部音频；噪声底跟踪用于能量门控。
     """
 
     iterator: Any
     pending_pcm: bytearray = field(default_factory=bytearray)
+    noise_floor_peak: float = 0.0
+    noise_floor_rms: float = 0.0
+    frame_count: int = 0
+    is_speech: bool = False
+    silence_frames: int = 0  # consecutive frames below noise floor
 
 
 class SileroVoiceActivityBoundary:
@@ -187,9 +192,83 @@ class SileroVoiceActivityBoundary:
         while len(state.pending_pcm) >= frame_bytes:
             frame = bytes(state.pending_pcm[:frame_bytes])
             del state.pending_pcm[:frame_bytes]
-            result = state.iterator(self._pcm16_frame_to_float(frame), return_seconds=False)
+            float_frame = self._pcm16_frame_to_float(frame)
+            # Energy-gated VAD for low-volume microphones (ESP32 PDM mic).
+            # Problem: ESP32 PDM mic has very narrow dynamic range (noise ~0.044,
+            # speech ~0.079). Any gain normalization that makes speech detectable
+            # also amplifies noise above Silero's threshold, preventing speech_stopped.
+            #
+            # Solution: track noise floor, only feed "speech-like" frames (energy
+            # significantly above noise floor) to Silero. Force speech_stopped after
+            # enough consecutive silence frames.
+            import numpy as np
+            peak = float(abs(float_frame.max()))
+            rms = float(np.sqrt(np.mean(float_frame.astype("float64") ** 2)))
+            state.frame_count += 1
+
+            # Update noise floor with slow EMA.
+            # During first 200 frames (~4s): use very slow alpha to establish baseline.
+            # During speech: almost no update (alpha=0.002) to prevent speech contaminating noise floor.
+            # During silence: moderate update (alpha=0.03) to track noise floor changes.
+            if state.frame_count <= 200:
+                alpha = 0.02  # Slow convergence during warmup
+            elif state.is_speech:
+                alpha = 0.002  # Almost no update during speech
+            else:
+                alpha = 0.03  # Moderate update during silence
+            state.noise_floor_peak = (1 - alpha) * state.noise_floor_peak + alpha * peak
+            state.noise_floor_rms = (1 - alpha) * state.noise_floor_rms + alpha * rms
+
+            # Determine if this frame is "speech-like" based on SNR.
+            # ESP32 PDM mic has very narrow dynamic range (noise ~0.044, speech ~0.079),
+            # so SNR threshold must be low. 1.5x RMS = ~3.5 dB SNR.
+            nf_rms = max(state.noise_floor_rms, 0.0001)
+            snr = rms / nf_rms
+            is_speech_like = snr > 1.5  # 1.5x noise floor RMS = ~3.5 dB SNR
+
+            if state.frame_count <= 10 or state.frame_count % 500 == 0:
+                import logging as _logmod2
+                _logmod2.getLogger("silero_vad").info(
+                    "VAD frame #%d: peak=%.4f rms=%.4f nf_peak=%.4f nf_rms=%.4f snr=%.1f speech_like=%s is_speech=%s",
+                    state.frame_count, peak, rms, state.noise_floor_peak,
+                    state.noise_floor_rms, snr, is_speech_like, state.is_speech)
+
+            if not is_speech_like:
+                # Noise frame — don't feed to Silero, but count silence
+                if state.is_speech:
+                    state.silence_frames += 1
+                    # Force speech_stopped after ~1s of silence (50 frames × 20ms)
+                    if state.silence_frames >= 50:
+                        state.is_speech = False
+                        state.silence_frames = 0
+                        import logging as _logmod3
+                        _logmod3.getLogger("silero_vad").info(
+                            "VAD FORCED speech_stopped: peak=%.4f rms=%.4f nf_rms=%.4f snr=%.1f silence_frames=%d",
+                            peak, rms, nf_rms, snr, state.silence_frames)
+                        deltas.append(
+                            SpeechBoundaryDelta(
+                                kind="speech_stopped",
+                                session_id=chunk.session_id,
+                                user_id=chunk.user_id,
+                                stream_id=chunk.stream_id,
+                                metadata={"vad_boundary": "speech_stopped", "reason": "energy_silence", "silence_frames": state.silence_frames},
+                            )
+                        )
+                return deltas  # Skip Silero for noise frames
+
+            # Speech-like frame — apply gain and feed to Silero
+            state.silence_frames = 0
+            gain = min(10.0, 0.6 / max(state.noise_floor_peak, 0.001))
+            float_frame = float_frame * gain
+
+            result = state.iterator(float_frame, return_seconds=False)
             if not result:
                 continue
+            import logging as _logmod
+            _vadlog = _logmod.getLogger("silero_vad")
+            _vadlog.info("VAD RESULT: peak=%.4f rms=%.4f nf_rms=%.4f snr=%.1f gain=%.1f result=%s",
+                         peak, rms, nf_rms, snr,
+                         min(10.0, 0.6 / max(state.noise_floor_peak, 0.001)), result)
             metadata = {
                 "vad_provider": "silero_onnx",
                 "threshold": self.threshold,
@@ -197,6 +276,8 @@ class SileroVoiceActivityBoundary:
                 "speech_pad_ms": self.speech_pad_ms,
             }
             if "start" in result:
+                state.is_speech = True
+                state.silence_frames = 0
                 deltas.append(
                     SpeechBoundaryDelta(
                         kind="speech_started",
@@ -207,6 +288,8 @@ class SileroVoiceActivityBoundary:
                     )
                 )
             if "end" in result:
+                state.is_speech = False
+                state.silence_frames = 0
                 deltas.append(
                     SpeechBoundaryDelta(
                         kind="speech_stopped",
