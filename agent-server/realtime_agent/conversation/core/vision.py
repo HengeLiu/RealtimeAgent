@@ -6,7 +6,8 @@ from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
 from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext
 from realtime_agent.conversation.core.loop import VlAgentLoop
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
-from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
+from realtime_agent.conversation.input import CallbackVisualInputBoundary, SileroSpeechInputBoundary
+from realtime_agent.conversation.input.asr_session import AsrProviderSessionPool
 from realtime_agent.conversation.output.bridge import ConversationOutputDeltaBridge
 from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
 from realtime_agent.conversation.types import SpeechInputDelta
@@ -18,12 +19,13 @@ from realtime_agent.tools import ToolGateway
 class VisionConversationRuntime:
     """VL conversation runtime。
 
-    主要功能：以旧 `AgentCore` 兼容接口接入 `RealtimeAgentApp`，内部使用
-    ASR-backed `SpeechInputDelta` 驱动 Vision/VL core。该 runtime 复用现有
-    `VisionRealtimeAgentCore` 的上下文、工具、视觉资产、VLM 和 TTS 输出逻辑，只替换
-    输入边界和 turn 控制。
-    主要属性：`core` 是现有 Vision core；`speech_boundary` 负责把音频转换为
-    `audio_chunk/asr_text_delta/turn_started/turn_ended`。
+    主要功能：以旧 `AgentCore` 兼容接口接入 `RealtimeAgentApp`，内部与 Omni manual
+    采用完全一致的 turn 边界判定：同样用 `SileroSpeechInputBoundary` 产生
+    `turn_started/turn_ended`，ASR 仅作为按 turn 开闭的转写器交给 `VlAgentLoop`。该
+    runtime 复用现有 `VisionRealtimeAgentCore` 的上下文、工具、视觉资产、VLM 和 TTS
+    输出逻辑，只替换输入边界和 turn 控制。
+    主要属性：`core` 是现有 Vision core；`speech_boundary` 是 Silero 语音边界；
+    `loop` 持有按 turn 开闭的 ASR 转写器。
     """
 
     def __init__(
@@ -31,10 +33,15 @@ class VisionConversationRuntime:
         *,
         core: VisionRealtimeAgentCore,
         recorder: RunRecorder,
-        speech_boundary: AsrSpeechInputBoundary,
+        speech_boundary: SileroSpeechInputBoundary,
+        asr_sessions: AsrProviderSessionPool,
     ) -> None:
         self.core = core
-        self.loop = VlAgentLoop(core=core, stream_id_for_session=lambda session_id: self._upstream_by_session.get(session_id, ""))
+        self.loop = VlAgentLoop(
+            core=core,
+            stream_id_for_session=lambda session_id: self._upstream_by_session.get(session_id, ""),
+            asr_sessions=asr_sessions,
+        )
         self.speech_boundary = speech_boundary
         self.emitter = ConversationRuntimeEventEmitter(recorder=recorder)
         self.output_delta_bridge = ConversationOutputDeltaBridge(output_service=core.output_service, recorder=recorder)
@@ -57,20 +64,20 @@ class VisionConversationRuntime:
 
     @property
     def asr_pipeline(self):
-        """返回正式语音输入边界使用的 ASR pipeline。
+        """返回 VL loop 按 turn 开闭使用的 ASR 转写器。
 
         主要功能：保留旧测试和外部调试代码通过 `app.agent_core.asr_pipeline`
-        注入 ASR provider 的能力，同时确保注入目标是 conversation runtime 当前实际使用
-        的 ASR pipeline。
+        注入 ASR provider 的能力。turn 边界已交给 Silero，ASR 转写器现由 `VlAgentLoop`
+        持有，因此注入目标是 loop 的 ASR 会话池。
         """
 
-        return self.speech_boundary.asr_pipeline
+        return self.loop.asr_sessions
 
     @asr_pipeline.setter
     def asr_pipeline(self, value) -> None:
-        """替换正式语音输入边界使用的 ASR pipeline。"""
+        """替换 VL loop 使用的 ASR 转写器。"""
 
-        self.speech_boundary.asr_pipeline = value
+        self.loop.asr_sessions = value
 
     def __getattr__(self, name: str):
         """兼容旧调用点读取内部 Vision core 属性。
@@ -103,7 +110,7 @@ class VisionConversationRuntime:
             object.__setattr__(self, name, value)
             return
         if name == "asr_pipeline":
-            self.speech_boundary.asr_pipeline = value
+            self.loop.asr_sessions = value
             return
         if hasattr(self.core, name):
             setattr(self.core, name, value)
@@ -224,6 +231,7 @@ class VisionConversationRuntime:
 
         self._upstream_by_session.pop(session_id, None)
         self.speech_boundary.close_provider(stream_id=stream_id)
+        self.loop.asr_sessions.close_provider(stream_id=stream_id)
         self.core.on_audio_input_closed(user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
         self.emitter.emit("upstream_detached", user_id=user_id, session_id=session_id, stream_id=stream_id, reason=reason)
 

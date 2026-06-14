@@ -10,7 +10,8 @@ from realtime_agent.asset import AssetService
 from realtime_agent.control import ControlService
 from realtime_agent.conversation.core.omni import OmniManualConversationRuntime
 from realtime_agent.conversation.core.vision import VisionConversationRuntime
-from realtime_agent.conversation.input import AsrSpeechInputBoundary, SileroSpeechInputBoundary
+from realtime_agent.conversation.input import SileroSpeechInputBoundary
+from realtime_agent.conversation.input.asr_session import AsrProviderSessionPool
 from realtime_agent.conversation.providers import AsrProviderConfig, RealtimeProviderConfig, VisionModelProviderConfig
 from realtime_agent.memory import MemoryService
 from realtime_agent.observability import RunRecorder
@@ -126,7 +127,14 @@ def _build_vision_runtime(
     config: ConversationRuntimeBuildConfig,
     dependencies: ConversationRuntimeDependencies,
 ) -> VisionConversationRuntime:
-    """构建 VL conversation runtime。"""
+    """构建 VL conversation runtime。
+
+    主要逻辑：VL 与 Omni manual 采用完全一致的 turn 边界判定——同样用本地
+    `SileroSpeechInputBoundary` 产生 `turn_started/turn_ended`，并复用与 Omni 相同的
+    VAD 参数（`config.omni_config.turn_detection_*`）。ASR 不再充当 turn 边界来源，而是
+    作为按 turn 开闭的转写器交给 `VlAgentLoop`：`turn_ended` 后对本轮音频做一次
+    ASR commit 得到“仅属于本轮”的 final_text，再请求 VLM。
+    """
 
     return VisionConversationRuntime(
         core=VisionRealtimeAgentCore(
@@ -149,7 +157,12 @@ def _build_vision_runtime(
             visual_direction=config.visual_direction,
         ),
         recorder=dependencies.recorder,
-        speech_boundary=AsrSpeechInputBoundary(config=config.asr_config, recorder=dependencies.recorder),
+        speech_boundary=SileroSpeechInputBoundary(
+            pre_roll_ms=config.omni_config.turn_detection_prefix_padding_ms or 1200,
+            stop_wait_ms=config.omni_config.turn_detection_silence_duration_ms or 200,
+            threshold=config.omni_config.turn_detection_threshold or 0.5,
+        ),
+        asr_sessions=AsrProviderSessionPool(config=config.asr_config, recorder=dependencies.recorder),
     )
 
 

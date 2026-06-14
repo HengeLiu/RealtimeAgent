@@ -13,6 +13,7 @@ from realtime_agent.conversation.core.vision_host import (
     _provider_tool_call_message,
     _provider_tool_result_message,
 )
+from realtime_agent.conversation.input.asr_session import AsrProviderSessionPool
 from realtime_agent.conversation.input.visual_appender import VisualAppendContext
 from realtime_agent.conversation.core.base import ConversationContext
 from realtime_agent.conversation.providers import RealtimeProviderCallbacks, VISION_AGENT_SYSTEM_PROMPT
@@ -125,10 +126,13 @@ class OmniRealtimeLoop:
 class VlAgentLoop:
     """VL AgentLoop 适配器。
 
-    主要功能：把 VL 链路中 ASR 文本增量、final_text 到 VLM/TTS 生成的流程从
-    conversation runtime 中抽出。
+    主要功能：把 VL 链路中“按 turn 转写、turn_ended 后提交 final_text 给 VLM/TTS”的
+    流程从 conversation runtime 中抽出。VL 与 Omni manual 共用同一套 Silero turn 边界：
+    `OmniRealtimeLoop` 在 turn_ended 后执行 `commit_input()`/`create_response()`，
+    `VlAgentLoop` 在 turn_ended 后执行 ASR commit 拿到本轮 final_text 再请求 VLM。
     主要属性：`core` 是当前仍承载消息上下文、工具循环、视觉资产和 TTS 输出的
-    `VisionRealtimeAgentCore`；`stream_id_for_session` 用于补齐 ASR delta 的 stream。
+    `VisionRealtimeAgentCore`；`asr_sessions` 是按 turn 开闭的 ASR 转写器；
+    `stream_id_for_session` 用于补齐 stream。
     """
 
     def __init__(
@@ -136,10 +140,13 @@ class VlAgentLoop:
         *,
         core: VisionRealtimeAgentCore,
         stream_id_for_session: Callable[[str], str],
+        asr_sessions: AsrProviderSessionPool,
     ) -> None:
         self.core = core
         self._stream_id_for_session = stream_id_for_session
+        self.asr_sessions = asr_sessions
         self._latest_audio_by_session: dict[str, StreamChunk] = {}
+        self._fed_audio_sessions: set[str] = set()
 
     def run(self, context: ConversationContext) -> None:
         """执行 VL loop。
@@ -151,8 +158,9 @@ class VlAgentLoop:
     def consume_input(self, delta: SpeechInputDelta) -> None:
         """消费 VL 输入增量。
 
-        主要逻辑：缓存最新音频片用于 final_text 提交；ASR 文本增量同步给旧 core；
-        `turn_ended` 携带 final_text 时触发 VLM + TTS 回复。
+        主要逻辑：与 Omni manual 对齐——`audio_chunk` 仅在 Silero turn 内出现，逐片喂给
+        按 turn 开闭的 ASR 转写器；`turn_ended` 触发本轮 ASR commit 并请求 VLM；
+        `asr_text_delta` 仅在仍由 ASR 边界产生增量时透传给 core 记录。
         参数：`delta` 为标准输入增量。
         返回值：无。
         异常情况：底层 provider/core 异常向上传播。
@@ -161,6 +169,8 @@ class VlAgentLoop:
         if delta.kind == "audio_chunk" and delta.audio is not None:
             self._latest_audio_by_session[delta.session_id] = delta.audio
             self.core._latest_audio_chunk_by_session[delta.session_id] = delta.audio
+            self._fed_audio_sessions.add(delta.session_id)
+            self.asr_sessions.append_audio(delta.audio)
             return
         if delta.kind == "asr_text_delta":
             self.core.on_conversation_asr_text_delta(
@@ -172,25 +182,57 @@ class VlAgentLoop:
             )
             return
         if delta.kind == "turn_ended":
-            self.handle_final_text(delta, reason="conversation_asr_speech_stopped")
+            self.handle_turn_ended(delta, reason="conversation_vad_speech_stopped")
 
-    def handle_final_text(self, delta: SpeechInputDelta, *, reason: str) -> None:
-        """把 ASR final text 交给 VL provider loop 生成回复。
+    def handle_turn_ended(self, delta: SpeechInputDelta, *, reason: str) -> None:
+        """在 Silero `turn_ended` 后提交本轮 ASR 并触发 VL 回复。
 
-        主要逻辑：在 loop 层完成 final_text 空值过滤、echo guard、消息落盘、响应
-        started/completed 控制事件和 provider/tool loop 调用。旧 core 只作为底层
-        provider、工具、视觉资产和输出能力宿主。
+        主要逻辑：与 Omni manual 在 `turn_ended` 后执行 `commit_input()`/
+        `create_response()` 对齐——VL 对“仅属于本轮”的音频做一次 ASR commit 得到
+        final_text，再交给 VLM。ASR 会话按 turn 开闭（commit 即关闭），下一轮首片音频
+        会重建会话，从根本上避免连续会话累积延迟和跨轮串话。
+        提交在后台线程执行，避免阻塞上行音频处理线程。
+        参数：`delta` 为 Silero 产生的 turn_ended；`reason` 标识边界来源。
+        返回值：无。
+        异常情况：ASR commit 异常被转成可观测事件，不向上抛出。
         """
 
-        chunk = self._latest_audio_by_session.get(delta.session_id)
+        session_id = delta.session_id
+        if session_id not in self._fed_audio_sessions:
+            return
+        threading.Thread(
+            target=self._finalize_turn,
+            kwargs={"delta": delta, "reason": reason},
+            name=f"vl-turn-commit-{session_id}",
+            daemon=True,
+        ).start()
+
+    def _finalize_turn(self, *, delta: SpeechInputDelta, reason: str) -> None:
+        """提交本轮 ASR 并把 final_text 交给 VL provider loop 生成回复。"""
+
+        session_id = delta.session_id
+        self._fed_audio_sessions.discard(session_id)
+        chunk = self._latest_audio_by_session.get(session_id)
         if chunk is None:
             return
-        text = (delta.final_text or "").strip()
+        try:
+            final_text = self.asr_sessions.commit_audio(chunk) or ""
+        except Exception as exc:  # noqa: BLE001 - ASR provider SDK 异常按可恢复语义处理
+            self.core._record_event(
+                "vision.conversation_asr_commit.failed",
+                user_id=chunk.user_id,
+                session_id=session_id,
+                stream_id=chunk.stream_id,
+                reason=reason,
+                error=str(exc),
+            )
+            return
+        text = final_text.strip()
         if not text:
             self.core._record_event(
                 "vision.conversation_final_text.empty",
                 user_id=chunk.user_id,
-                session_id=chunk.session_id,
+                session_id=session_id,
                 stream_id=chunk.stream_id,
                 reason=reason,
             )
@@ -198,7 +240,7 @@ class VlAgentLoop:
         self.core._record_event(
             "vision.conversation_final_text.received",
             user_id=chunk.user_id,
-            session_id=chunk.session_id,
+            session_id=session_id,
             stream_id=chunk.stream_id,
             reason=reason,
             text_chars=len(text),
@@ -588,6 +630,7 @@ class VlAgentLoop:
         """清理指定会话的 loop 缓存。"""
 
         self._latest_audio_by_session.pop(session_id, None)
+        self._fed_audio_sessions.discard(session_id)
 
     def interrupt(self, reason: str) -> None:
         """AgentLoopABC 中断入口。
