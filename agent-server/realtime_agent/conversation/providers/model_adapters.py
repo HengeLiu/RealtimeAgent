@@ -582,7 +582,12 @@ class OpenAICompatibleVisionModelAdapter:
             for item in stream:
                 if self._cancelled:
                     return
-                choice = item.choices[0]
+                # DashScope/OpenAI 兼容流会发送 choices 为空的块（仅含 usage 的收尾块、
+                # keep-alive 等），直接取 choices[0] 会抛 IndexError。跳过这类块。
+                choices = getattr(item, "choices", None) or []
+                if not choices:
+                    continue
+                choice = choices[0]
                 delta = choice.delta
                 vision_delta = getattr(delta, "content", None) or ""
                 if vision_delta:
