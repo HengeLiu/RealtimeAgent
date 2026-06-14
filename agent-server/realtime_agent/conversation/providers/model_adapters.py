@@ -455,12 +455,12 @@ class MockVisionModelAdapter:
                 "name": "capture_photo",
                 "arguments": {"timeout_seconds": 5, "freshness_seconds": 0},
             }
-        if "start_timer_task" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
+        if "start_timer" in tool_names and any(keyword in text for keyword in ("计时", "提醒", "分钟", "秒")):
             return {
                 "type": "tool_call",
-                "id": "call_mock_start_timer_task",
-                "name": "start_timer_task",
-                "arguments": {"seconds": self._timer_seconds(text), "auto_fire": False},
+                "id": "call_mock_start_timer",
+                "name": "start_timer",
+                "arguments": {"seconds": self._timer_seconds(text)},
             }
         return None
 

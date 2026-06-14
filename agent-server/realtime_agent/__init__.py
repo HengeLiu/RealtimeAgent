@@ -9,21 +9,7 @@ from realtime_agent.mcp import McpGateway, McpToolSpec
 from realtime_agent.memory import MemoryRecord, MemoryService, MemoryStore
 from realtime_agent.protocol import Event, EventName, EventPattern, StreamChunk, StreamFormat, StreamType
 from realtime_agent.skills import SkillDocument, SkillService
-from realtime_agent.tasks import (
-    BaseTask,
-    JsonlTaskStore,
-    TaskAgentReply,
-    TaskContext,
-    TaskEngine,
-    TaskEventView,
-    TaskRef,
-    TaskRunResult,
-    TaskSignal,
-    TaskSignalBridge,
-    TaskSpec,
-    TaskStore,
-)
-from realtime_agent.context import CapabilityTrace, TaskDeviceFacade, ToolDeviceFacade
+from realtime_agent.context import CapabilityTrace, BackgroundDeviceFacade, ToolDeviceFacade
 from realtime_agent.tools import (
     ActuatorResult,
     ActuatorStreamResult,
@@ -47,7 +33,6 @@ from realtime_agent.tools import (
     ToolGateway,
     ToolResult,
     ToolSpec,
-    TaskStartTool,
     ToolTrace,
     VisualAssetRef,
 )
@@ -58,7 +43,6 @@ __all__ = [
     "RealtimeAgentApp",
     "RealtimeAgentConfig",
     "RealtimeAgentError",
-    "BaseTask",
     "BaseTool",
     "CapabilityTrace",
     "ActuatorResult",
@@ -81,7 +65,6 @@ __all__ = [
     "Event",
     "EventName",
     "EventPattern",
-    "JsonlTaskStore",
     "McpGateway",
     "McpToolSpec",
     "LlmMessageSummarizer",
@@ -97,18 +80,7 @@ __all__ = [
     "StreamFormat",
     "StreamTimeoutError",
     "StreamType",
-    "TaskContext",
-    "TaskDeviceFacade",
-    "TaskEngine",
-    "TaskEventView",
-    "TaskAgentReply",
-    "TaskRef",
-    "TaskRunResult",
-    "TaskSignal",
-    "TaskSignalBridge",
-    "TaskSpec",
-    "TaskStartTool",
-    "TaskStore",
+    "BackgroundDeviceFacade",
     "ToolContext",
     "ToolContextFactory",
     "ToolDeviceFacade",

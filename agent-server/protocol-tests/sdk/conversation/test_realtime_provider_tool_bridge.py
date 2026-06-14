@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
-from realtime_agent.conversation.core.omni_host import RealtimeToolBridge
+from realtime_agent.conversation.core.omni_host import (
+    OmniRealtimeAgentCore,
+    RealtimeProviderConfig,
+    RealtimeToolBridge,
+)
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
@@ -168,13 +172,25 @@ class ToolCallingRealtimeProvider:
 def test_realtime_core_records_tool_result_injection_and_audio_output(tmp_path) -> None:
     """测试目标：验证 OmniRealtimeAgentCore 能记录 provider tool call 结果回填。
 
-    测试方法：注入会触发工具调用的 fake provider，并注册 speaker 端侧消费原生音频。
+    测试方法：把 agent_core 换成直连 provider 的 OmniRealtimeAgentCore（绕过默认
+    OmniManualConversationRuntime 的 Silero VAD 门限，单片非 final mic chunk 即可
+    转发给 provider），注入会触发工具调用的 fake provider，并注册 speaker 端侧消费
+    原生音频。
     预期结果：runs 中出现 `omni.tool_result.ready` 和回填状态，端侧收到音频。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs"), agent_mode="omni", omni_provider="mock"))
     app.tool_registry.register(RealtimeCityTool())
-    app.agent_core.provider_factory = lambda config: ToolCallingRealtimeProvider(config)
+    app.agent_core = OmniRealtimeAgentCore(
+        output_service=app.output_service,
+        recorder=app.recorder,
+        control_service=app.control_service,
+        omni_config=RealtimeProviderConfig(provider="fake", model="fake-omni"),
+        provider_factory=lambda config: ToolCallingRealtimeProvider(config),
+        tool_gateway=app.tool_gateway,
+    )
+    app.vision_agent_core = app.agent_core
+    app.audio_pipeline.agent_core = app.agent_core
     connection = Connection("dev-rt")
     register_speaker(app, connection, user_id="user-rt")
     handle = app.open_input_stream(user_id="user-rt", producer_id="dev-rt")

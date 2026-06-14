@@ -23,7 +23,7 @@ from realtime_agent.tools import (
     PlaybackRejectedError,
     OutputStreamWriter,
     StreamTimeoutError,
-    TaskDeviceFacade,
+    BackgroundDeviceFacade,
     ToolDeviceFacade,
 )
 
@@ -47,6 +47,6 @@ __all__ = [
     "PlaybackRejectedError",
     "OutputStreamWriter",
     "StreamTimeoutError",
-    "TaskDeviceFacade",
+    "BackgroundDeviceFacade",
     "ToolDeviceFacade",
 ]

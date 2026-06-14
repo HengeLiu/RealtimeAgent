@@ -9,7 +9,7 @@ from typing import Any, Callable
 from realtime_agent.control import ControlService
 from realtime_agent.observability import RunRecorder
 from realtime_agent.output import AssistantTextDelta, OutputService
-from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk
+from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, new_id
 from realtime_agent.conversation.context import ContextCompileRequest, ContextCompiler, record_context_events
 from realtime_agent.conversation.core.base import AgentCoreEvent, AgentEventBuffer
 from realtime_agent.conversation.multimodal import ModelMessageManager, MultimodalMessagePolicy
@@ -780,6 +780,23 @@ class VisionRealtimeAgentCore:
             )
         if not interrupted_reason:
             self._extend_assistant_output_guard(chunk.user_id, start_ms=None, tail_ms=1500)
+        self._notify_turn_completed(chunk.user_id, chunk.session_id)
+
+    def bind_follow_up_flush(self, callback: Callable[[str], None]) -> None:
+        """绑定 turn 完成后的 late result flush 回调。"""
+
+        self._follow_up_flush = callback
+
+    def _notify_turn_completed(self, user_id: str, session_id: str) -> None:
+        """turn 完成后触发排队 late result 的 flush。"""
+
+        callback = getattr(self, "_follow_up_flush", None)
+        if callback is None:
+            return
+        try:
+            callback(user_id)
+        except Exception:  # noqa: BLE001 - flush 异常不应影响回复主流程
+            pass
 
     def _should_ignore_transcript_as_echo(self, *, chunk: StreamChunk, transcript: str) -> bool:
         """判断 ASR final 是否落在助手输出保护窗内。
@@ -1993,6 +2010,79 @@ class VisionRealtimeAgentCore:
         if session_id and hasattr(self.output_service, "close_text_session"):
             self.output_service.close_text_session(session_id, reason=reason)
         self._record_event("session.closed", user_id=user_id, session_id=session_id, reason=reason)
+
+    # late result follow-up 视为空闲的 turn 状态：可以安全注入新的回复 turn。
+    _FOLLOW_UP_IDLE_TURN_STATES = {"listening", "completed", "interrupted", "failed"}
+
+    def is_session_active(self, user_id: str, session_id: str) -> bool:
+        """判断某用户的 VL 会话是否仍处于活跃状态。"""
+
+        return self._session_by_user.get(user_id) == session_id
+
+    def is_turn_idle(self, user_id: str, session_id: str) -> bool:
+        """判断当前 turn 是否空闲，可注入 late result follow-up turn。
+
+        主要逻辑：复用 `_set_turn_state` 维护的状态机；thinking/tool_running/
+        speaking/transcribing 视为忙，其余视为空闲。
+        """
+
+        key = user_id or session_id
+        return self._state_by_user.get(key, "listening") in self._FOLLOW_UP_IDLE_TURN_STATES
+
+    def inject_followup_result(self, *, user_id: str, session_id: str, text: str, run_id: str = "") -> bool:
+        """把 late result 作为一次文本驱动的回复 turn 注入 VL 会话。
+
+        主要逻辑：late result 以 `role=user` 文本写入 messages（事件
+        `tool_result.late.done`），再复用现有响应 turn 机制让模型基于结果组织口语回复。
+        参数：`text` 为系统包装后的工具结果文本；`run_id` 用于可观测串联。
+        返回值：成功启动注入 turn 返回 True；会话不活跃返回 False。
+        异常情况：底层 turn 执行异常由 `_run_response_turn` 转为可恢复回复。
+        """
+
+        if not self.is_session_active(user_id, session_id):
+            return False
+        wrapped = str(text or "").strip()
+        if not wrapped:
+            return False
+        self.control_service.append_message(
+            user_id,
+            {
+                "session_id": session_id,
+                "role": "user",
+                "content": wrapped,
+                "event": "tool_result.late.done",
+                "source": "follow_up_router",
+                "tool_run_id": run_id,
+            },
+        )
+        self._record_event(
+            "tool_run.follow_up.injected",
+            user_id=user_id,
+            session_id=session_id,
+            channel="vl_turn",
+            tool_run_id=run_id,
+        )
+        stream_id = self._audio_stream_by_session.get(session_id) or new_id("stream_followup")
+        chunk = StreamChunk(
+            user_id=user_id,
+            session_id=session_id,
+            stream_id=stream_id,
+            stream_type="sensor.mic",
+            seq=0,
+            payload=b"",
+            final=False,
+        )
+        generation = self._next_response_generation(user_id)
+        self._cancelled_users.discard(user_id)
+        self._set_turn_state(user_id, session_id, "thinking", reason="tool_result_late")
+        thread = threading.Thread(
+            target=self._run_response_turn,
+            kwargs={"chunk": chunk, "transcript": wrapped, "generation": generation},
+            name=f"vl-followup-{session_id}",
+            daemon=True,
+        )
+        thread.start()
+        return True
 
     def events(self) -> list[AgentCoreEvent]:
         """返回文本 Agent 统一事件快照。"""

@@ -22,11 +22,8 @@ def test_public_extension_contract_exports_required_developer_api() -> None:
         "ToolContext",
         "ToolResult",
         "ToolError",
-        "BaseTask",
-        "TaskContext",
-        "TaskSignal",
-        "TaskRef",
         "ToolDeviceFacade",
+        "BackgroundDeviceFacade",
         "DeviceSnapshot",
         "AssetRef",
         "ArtifactRef",
@@ -38,15 +35,17 @@ def test_public_extension_contract_exports_required_developer_api() -> None:
     assert missing == []
 
 
-def test_tool_and_task_auto_discovery_contract_exists() -> None:
-    """测试目标：确认 Tool / Task 支持按配置自动发现注册。
+def test_tool_auto_discovery_and_tool_run_contract_exists() -> None:
+    """测试目标：确认 Tool 支持按配置自动发现，并具备统一 Tool Run 后台执行内核。
 
-    测试方法：检查自动发现、注册表、策略、schema 构造、执行器和上下文工厂类是否存在。
-    预期结果：server 启动不依赖业务开发者在 app.py 中手动注册 Tool / Task。
+    测试方法：检查自动发现、注册表、策略、schema 构造、执行器、上下文工厂，以及
+    Tool Run 状态机、存储和后台 runner 类是否存在。
+    预期结果：server 启动不依赖业务开发者在 app.py 中手动注册；长耗时能力由统一 Tool Run
+    机制承载（Task 概念已并入 Tool）。
     """
 
     tools = importlib.import_module("realtime_agent.tools")
-    tasks = importlib.import_module("realtime_agent.tasks")
+    tool_run = importlib.import_module("realtime_agent.tool_run")
 
     for name in [
         "ToolAutoDiscovery",
@@ -56,40 +55,36 @@ def test_tool_and_task_auto_discovery_contract_exists() -> None:
         "ToolGateway",
         "ToolExecutor",
         "ToolContextFactory",
+        "ToolRunManagerTool",
+        "ToolRunAdmin",
     ]:
         assert hasattr(tools, name), name
 
-    for name in [
-        "BaseTask",
-        "TaskAutoDiscovery",
-        "TaskRegistry",
-        "TaskEngine",
-        "TaskStore",
-        "TaskStateMachine",
-        "TaskExecutor",
-        "TaskSignalBridge",
-    ]:
-        assert hasattr(tasks, name), name
+    for name in ["ToolRun", "ToolRunStateMachine", "ToolRunStore", "JsonlToolRunStore", "ToolRunRunner"]:
+        assert hasattr(tool_run, name), name
 
 
-def test_task_engine_state_machine_and_signal_bridge_contract() -> None:
-    """测试目标：确认 Task Engine 按设计文档提供状态机和任务信号回流能力。
+def test_tool_run_state_machine_and_follow_up_router_contract() -> None:
+    """测试目标：确认 Tool Run 提供状态机和 late result 回流能力。
 
-    测试方法：读取 Task 状态常量和允许转移表，并检查 TaskSignalBridge 公开方法。
-    预期结果：长任务状态只能按设计文档声明的路径流转，TaskSignal 可回流消息、通知和 Agent。
+    测试方法：读取 Tool Run 终态、迁移表，并检查 FollowUpRouter 公开方法。
+    预期结果：后台能力状态只能按设计文档声明的路径流转，late result 可注入模型、排队或待通知。
     """
 
-    tasks = importlib.import_module("realtime_agent.tasks")
+    tool_run = importlib.import_module("realtime_agent.tool_run")
+    follow_up = importlib.import_module("realtime_agent.conversation.follow_up")
 
-    assert set(tasks.TASK_STATES) == {"started", "finished", "cancelled", "failed"}
-    assert ("started", "finished") in tasks.TASK_TRANSITIONS
-    assert ("started", "cancelled") in tasks.TASK_TRANSITIONS
-    assert ("started", "failed") in tasks.TASK_TRANSITIONS
-    assert set(tasks.TASK_EVENT_TYPES) == {"start", "process", "status", "finish", "cancel", "error"}
+    assert tool_run.TERMINAL_TOOL_RUN_STATES == {"completed_inline", "followed_up", "failed", "expired", "cancelled"}
+    transitions = tool_run.TOOL_RUN_TRANSITIONS
+    assert "reported_running" in transitions["running"]
+    assert "cancelled" in transitions["running"]
+    assert "completed_late" in transitions["reported_running"]
+    assert "followed_up" in transitions["completed_late"]
 
-    bridge = tasks.TaskSignalBridge
-    assert hasattr(bridge, "handle_signal")
-    assert hasattr(bridge, "convert_signal_to_agent_turn")
+    router = follow_up.FollowUpRouter
+    assert hasattr(router, "submit")
+    assert hasattr(router, "flush")
+    assert hasattr(router, "on_tool_run_complete")
 
 
 def test_output_service_notification_coordinator_contract_exists() -> None:
@@ -133,8 +128,8 @@ def test_turn_recorder_and_run_artifact_contract_exists(tmp_path) -> None:
 def test_yaml_config_matches_design_discovery_and_dev_checks_contract() -> None:
     """测试目标：确认 YAML 配置能表达设计文档中的自动发现和本地验收检查。
 
-    测试方法：读取 examples/simple-agent-server/server.yaml，检查 tools.discover、tasks.discover 和 dev_checks。
-    预期结果：开发者只需把 BaseTool / BaseTask 子类放到配置包下，并运行 dev_checks 完成验收。
+    测试方法：读取 examples/simple-agent-server/server.yaml，检查 tools.discover 和 dev_checks。
+    预期结果：开发者只需把 BaseTool 子类放到配置包下，并运行 dev_checks 完成验收。
     """
 
     config = load_yaml_config("examples/simple-agent-server/server.yaml")
@@ -142,8 +137,7 @@ def test_yaml_config_matches_design_discovery_and_dev_checks_contract() -> None:
     assert hasattr(config, "dev_checks")
     assert config.tools.extra["discover"]["enabled"] is True
     assert isinstance(config.tools.extra["discover"]["packages"], list)
-    assert config.tasks.extra["discover"]["enabled"] is True
-    assert isinstance(config.tasks.extra["discover"]["packages"], list)
+    assert not hasattr(config, "tasks")
     assert config.dev_checks.run_package_check is True
     assert config.dev_checks.run_boundary_check is True
 

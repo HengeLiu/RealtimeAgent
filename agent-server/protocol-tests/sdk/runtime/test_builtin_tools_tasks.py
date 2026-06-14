@@ -58,11 +58,12 @@ def register_endpoint(app: RealtimeAgentApp, endpoint: RecordingEndpoint, *, pro
     assert response.event_name == "control.device.registered"
 
 
-def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> None:
-    """测试目标：验证基础 Tool 和计时器 Task 作为 Server SDK 内置能力注册。
+def test_builtin_tools_are_visible_and_timer_tool_is_registered(tmp_path) -> None:
+    """测试目标：验证基础 Tool 和计时器 Tool 作为 Server SDK 内置能力注册。
 
-    测试方法：创建默认 RealtimeAgentApp，读取 provider schema 和 Task 类型列表。
-    预期结果：模型可见搜索、路线、记忆、历史、设备状态和计时器启动工具。
+    测试方法：创建默认 RealtimeAgentApp，读取 provider schema 列表。
+    预期结果：模型可见搜索、路线、记忆、历史、设备状态、计时器和后台运行管理工具。
+    计时器已并入 Tool（start_timer），不再有内置 Task 类型。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
@@ -77,10 +78,12 @@ def test_builtin_tools_are_visible_and_timer_task_is_registered(tmp_path) -> Non
         "memory_search",
         "manage_memory",
         "search_conversation_history",
-        "start_timer_task",
-        "task_runtime_manager",
+        "start_timer",
+        "tool_run_manager",
     }.issubset(tool_names)
-    assert [item["task_type"] for item in app.task_engine.list_task_types()] == ["timer_task"]
+    assert "start_timer_task" not in tool_names
+    # Task 概念已退役：不再有 task_engine 或内置 Task 类型。
+    assert not hasattr(app, "task_engine")
 
 
 def test_tool_gateway_uses_three_second_default_and_rejects_over_budget_tool(tmp_path) -> None:
@@ -643,18 +646,18 @@ def test_search_conversation_history_reads_runs_messages(tmp_path) -> None:
     assert "虹漕路" in result.data["matches"][0]["text"]
 
 
-def test_start_timer_task_schedules_and_finishes_immediate_timer(tmp_path) -> None:
-    """测试目标：验证内置计时器 Task 可由模型可见 start_timer_task 创建并到点完成。
+def test_start_timer_immediate_completes_inline(tmp_path) -> None:
+    """测试目标：start_timer 工具对 0 秒计时在等待窗口内完成并返回到点文案。
 
-    测试方法：通过 ToolGateway 调用 start_timer_task，seconds=0 触发立即到点。
-    预期结果：TaskRef 进入 finished，任务信号中包含 timer.scheduled 和 timer.due。
+    测试方法：通过 ToolGateway 调用 start_timer，seconds=0。
+    预期结果：返回最终结果（status=completed），消息为到点文案，运行 completed_inline。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
 
     result = asyncio.run(
         app.tool_gateway.call(
-            name="start_timer_task",
+            name="start_timer",
             user_id="user-timer",
             session_id="session-timer",
             input_data={"seconds": 0, "message": "时间到了"},
@@ -662,27 +665,25 @@ def test_start_timer_task_schedules_and_finishes_immediate_timer(tmp_path) -> No
     )
 
     assert result.ok is True
-    task_id = result.data["task_id"]
-    ref = app.task_engine.query(task_id)
-    assert ref.state == "finished"
-    signals = [signal.signal_name for signal in app.task_engine.store.signals_for_task(task_id)]
-    assert "timer.scheduled" in signals
-    assert "timer.due" in signals
-    assert "task.finished" in signals
+    assert result.status == "completed"
+    assert "时间到了" in result.message
+    runs = [run for run in app.tool_gateway.tool_run_store.list_runs() if run.tool_name == "start_timer"]
+    assert runs and runs[-1].state == "completed_inline"
 
 
-def test_start_timer_task_returns_before_timer_due(tmp_path) -> None:
-    """测试目标：验证 Task 启动工具只返回后台任务引用，不等待计时器最终到点。
+def test_start_timer_returns_running_then_fires(tmp_path) -> None:
+    """测试目标：start_timer 工具超窗立即返回“运行中”，到点后后台完成。
 
-    测试方法：通过 ToolGateway 创建 1 秒计时器，立即查询任务状态和调度信号。
-    预期结果：调用返回时任务仍处于 started，已经存在待触发 schedule；等待后才进入 finished。
+    测试方法：把等待窗口压短，启动 1 秒计时器；立即查看返回为 running，等待后台到点。
+    预期结果：调用立即返回 running，运行进入 reported_running；等待后到达终态。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    app.tool_gateway.executor.wait_window_seconds = 0.1
 
     result = asyncio.run(
         app.tool_gateway.call(
-            name="start_timer_task",
+            name="start_timer",
             user_id="user-timer-async",
             session_id="session-timer-async",
             input_data={"seconds": 1, "message": "一秒到了"},
@@ -690,16 +691,14 @@ def test_start_timer_task_returns_before_timer_due(tmp_path) -> None:
     )
 
     assert result.ok is True
-    task_id = result.data["task_id"]
-    assert app.task_engine.query(task_id).state == "started"
-    schedules = app.task_engine.list_scheduled_signals()
-    assert [item["task_id"] for item in schedules] == [task_id]
-    assert schedules[0]["signal_name"] == "timer.due"
+    assert result.status == "running"
+    run_id = result.data["tool_run_id"]
+    assert app.tool_gateway.tool_run_store.get(run_id).state == "reported_running"
 
-    time_limit = time.monotonic() + 2.0
-    while app.task_engine.query(task_id).state == "started":
+    time_limit = time.monotonic() + 3.0
+    while not app.tool_gateway.tool_run_store.get(run_id).is_terminal:
         if time.monotonic() > time_limit:
             break
         time.sleep(0.05)
-
-    assert app.task_engine.query(task_id).state == "finished"
+    # 到点后会话未开启，late result 走待通知，运行进入 followed_up 终态。
+    assert app.tool_gateway.tool_run_store.get(run_id).state == "followed_up"

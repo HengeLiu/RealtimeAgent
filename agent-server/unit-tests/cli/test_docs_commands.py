@@ -183,7 +183,6 @@ def test_developer_context_device_design_doc_covers_target_contracts() -> None:
     required = [
         "设计说明",
         "ToolContext",
-        "TaskContext",
         "context.devices.sensors.rgb.one",
         "context.devices.sensors.rgb.stream",
         "context.devices.commands.call",
@@ -213,7 +212,7 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
     """测试目标：确认当前开发说明覆盖真实可用的设备注册和功能开发入口。
 
     测试方法：读取开发说明，检查当前 supports 列表、typed facade、ToolDeviceFacade
-    API、BaseTool、BaseTask、TaskContext、运行命令和调试产物。
+    API、BaseTool、background 工具、运行命令和调试产物。
     预期结果：开发者有一份能按当前代码直接操作的说明，并能分清已落地 API 和目标设计。
     """
 
@@ -232,8 +231,6 @@ def test_device_capability_development_guide_covers_current_workflow() -> None:
         "context.output.say",
         "context.devices.sensors.rgb.stream",
         "BaseTool",
-        "BaseTask",
-        "TaskContext",
         "realtime-agent.device.validate",
         "realtime-agent.server.run",
         "realtime-agent.web.open",

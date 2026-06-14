@@ -164,17 +164,6 @@ tools:
   max_wait_timeout_seconds: 3
   allow_parallel_calls: true
 
-tasks:
-  enabled: false
-  store:
-    type: "jsonl"
-  discover:
-    enabled: true
-    packages: []
-    recursive: true
-    fail_fast: true
-  max_running_per_user: 16
-
 memory:
   enabled: false
   store_type: "jsonl"

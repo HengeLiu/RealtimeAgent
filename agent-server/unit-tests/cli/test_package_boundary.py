@@ -83,7 +83,7 @@ def test_public_api_imports_from_clean_python_process() -> None:
     预期结果：开发者安装后可直接从 `realtime_agent` 导入扩展 API。
     """
 
-    code = "from realtime_agent import RealtimeAgentApp, BaseTool, BaseTask, ToolResult, TaskSignal"
+    code = "from realtime_agent import RealtimeAgentApp, BaseTool, ToolResult, BackgroundDeviceFacade"
     completed = subprocess.run(
         ["uv", "run", "python", "-c", code],
         cwd=AUDIO_ROOT,

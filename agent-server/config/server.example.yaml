@@ -11,7 +11,7 @@ app-name: "example-app"
 # paths 控制运行产物的基础路径。
 paths:
   # 运行产物根目录。缺省不写时默认使用当前 app 目录下的 runs/。
-  # users、assets、memory、tasks、preflight 报告等默认会从这里派生。
+  # users、assets、memory、preflight 报告等默认会从这里派生。
   runtime_root: "runs/realtime-agent"
 
 # server 控制 HTTP / WebSocket 服务本身。
@@ -26,7 +26,7 @@ server:
   log_level: "DEBUG"
   # 是否开启调试接口，例如 /api/debug/devices、/api/debug/playback。
   debug_api_enabled: true
-  # 优雅关闭等待秒数，用于给 stream、Task、输出队列留出收尾时间。
+  # 优雅关闭等待秒数，用于给 stream、后台 Tool Run、输出队列留出收尾时间。
   shutdown_grace_seconds: 10
 
 # auth 控制端侧注册鉴权。
@@ -259,27 +259,6 @@ tools:
   # 是否允许并行工具调用。
   allow_parallel_calls: true
 
-# tasks 控制 server 侧长任务。
-tasks:
-  # 是否启用 Task 系统。
-  enabled: true
-  # 自动发现业务 Task。
-  discover:
-    # true 表示扫描 packages 中继承 BaseTask 的类。
-    enabled: true
-    # 业务任务包列表；app loader 会按 app-root 自动加入 capabilities 包。
-    packages: []
-    # 是否递归扫描子模块。开发者 app 建议 true。
-    recursive: true
-    # 自动发现失败时是否中止启动。
-    fail_fast: true
-  # 同一 user_id 下最多同时运行的任务数。
-  max_running_per_user: 16
-  # 任务状态存储配置。当前常用 memory；jsonl 可写入 root 指定目录。
-  store:
-    type: "memory"
-    root: "runs/realtime-agent/tasks"
-
 # memory 控制长期记忆和系统级记忆整理。
 memory:
   # 是否启用长期记忆。
@@ -310,7 +289,7 @@ skill:
   # 是否允许 Skill 调整工具可见策略。
   allow_tool_policy: true
 
-# mcp 控制 MCP Gateway。MCP 不能直接拿设备上下文，需要通过 Tool / Task 封装。
+# mcp 控制 MCP Gateway。MCP 不能直接拿设备上下文，需要通过 Tool 封装。
 mcp:
   # 是否启用 MCP Gateway。
   enabled: false

@@ -16,7 +16,7 @@ from urllib import error as urllib_error
 from urllib import request as urllib_request
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from realtime_agent.asset import ArtifactRef, AssetRef
 from realtime_agent.control import PublishResult
@@ -24,6 +24,12 @@ from realtime_agent.errors import RealtimeAgentError, ErrorCode
 from realtime_agent.memory import memory_record_to_public_dict
 from realtime_agent.mcp import McpGateway, McpServerSpec, McpToolSpec
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, EventName, StreamChunk, StreamFormat, StreamType, new_id
+from realtime_agent.tool_run import (
+    TOOL_RUN_BACKGROUND_TIMEOUT_SECONDS,
+    ToolRun,
+    ToolRunRunner,
+    ToolRunStore,
+)
 
 
 class DeviceNotFoundError(RealtimeAgentError):
@@ -95,6 +101,40 @@ class ToolResult:
     tasks: list[Any] | None = None
     meta: dict | None = None
     error: dict | None = None
+    status: Literal["completed", "running"] = "completed"
+
+    @classmethod
+    def running(
+        cls,
+        *,
+        run_id: str,
+        tool_name: str,
+        message: str = "",
+        meta: dict | None = None,
+    ) -> "ToolResult":
+        """创建“工具已启动仍在处理”的结构化结果。
+
+        主要逻辑：等待窗口超时且 Tool 声明 background 时返回该结果，让当前 turn
+        不再阻塞；模型据此告知用户正在处理，最终结果稍后由 follow-up 机制送达。
+        参数：`run_id` 为可追踪 Tool Run 标识；`tool_name` 为工具名。
+        返回值：`ToolResult`，`status="running"`。
+        异常情况：无。
+        """
+
+        run_meta = dict(meta or {})
+        run_meta.setdefault("tool_run_id", run_id)
+        return cls(
+            ok=True,
+            status="running",
+            data={"tool_run_id": run_id, "tool_name": tool_name, "status": "running"},
+            message=message or TOOL_RUNNING_RESULT_MESSAGE,
+            assets=[],
+            visual_assets=[],
+            artifacts=[],
+            tasks=[],
+            meta=run_meta,
+            error=None,
+        )
 
     @classmethod
     def success(
@@ -188,7 +228,18 @@ ProgressMessage = str | tuple[str, ...] | list[str]
 TOOL_DEFAULT_TIMEOUT_SECONDS = 3.0
 TOOL_MAX_WAIT_TIMEOUT_SECONDS = 3.0
 TOOL_MAX_TIMEOUT_SECONDS = TOOL_MAX_WAIT_TIMEOUT_SECONDS
-TASK_START_TOOL_TIMEOUT_SECONDS = 3.0
+
+# late result 等待窗口；background 工具超过该窗口未完成时返回“运行中”结果转后台。
+TOOL_WAIT_WINDOW_SECONDS = TOOL_MAX_WAIT_TIMEOUT_SECONDS
+
+# 这些工具强依赖活跃 session 的同步语义（关闭会话 / 图片回填），禁止声明 background。
+BACKGROUND_FORBIDDEN_TOOL_NAMES = {"close_audio_session", "capture_photo"}
+
+# “运行中”结果默认文案；约束模型告知用户正在处理且不要重复调用、不念内部标识。
+TOOL_RUNNING_RESULT_MESSAGE = (
+    "工具已启动，仍在后台处理，结果稍后送达。请先用一句话告诉用户正在处理，"
+    "不要重复调用该工具，也不要向用户提及任何内部标识。"
+)
 
 
 @dataclass(frozen=True)
@@ -209,6 +260,18 @@ class ToolSpec:
     tags: list[str] = field(default_factory=list)
     progress_message: ProgressMessage | None = None
     timeout_seconds: float | None = None
+    late_result_policy: Literal["background", "fail_fast", "forbidden"] = "fail_fast"
+    background_timeout_seconds: float | None = None
+    follow_up_ttl_seconds: float | None = None
+    allow_concurrent_runs: bool = False
+    # late result 回流通道：model 注入模型组织回复；direct 经 Output Service 直通播报。
+    late_result_notify: Literal["model", "direct"] = "model"
+    # 是否允许取消后台运行；取消能力经 tool_run_manager 暴露给模型。
+    cancel_supported: bool = False
+    # 同会话同名 background 运行的实例上限；None 表示沿用默认去重（至多一个）。
+    max_running_per_user: int | None = None
+    # 超窗返回“运行中”结果时使用的工具自定义文案，替代统一默认文案。
+    running_message: str | None = None
 
 
 @dataclass
@@ -239,12 +302,12 @@ class ToolContext:
 class SystemToolContext(ToolContext):
     """系统内置 Tool 执行上下文。
 
-    主要功能：只给 SDK 自带的运行时 Tool 使用，让 task_runtime_manager、
+    主要功能：只给 SDK 自带的运行时 Tool 使用，让 tool_run_manager、
     memory_search、read_skill、mcp_call 等工具通过可见 Tool 边界访问内部服务。
     普通业务 Tool 不会拿到这些属性，避免在 Tool 内绕过模型可见工具列表。
     """
 
-    tasks: Any = None
+    tool_runs: Any = None
     memory: Any = None
     skills: Any = None
     mcp: Any = None
@@ -545,20 +608,26 @@ class ToolContextFactory:
         self,
         *,
         app,
-        task_engine: Any = None,
         memory_service: Any = None,
         skill_service: Any = None,
         mcp_gateway: Any = None,
     ) -> None:
         self.app = app
-        self.task_engine = task_engine
         self.memory_service = memory_service
         self.skill_service = skill_service
         self.mcp_gateway = mcp_gateway
+        self.tool_run_admin: Any = None
+
+    def bind_tool_run_admin(self, tool_run_admin: Any) -> None:
+        """绑定 Tool Run 管理门面，供 tool_run_manager 工具使用。"""
+
+        self.tool_run_admin = tool_run_admin
 
     def create(self, *, user_id: str, session_id: str, tool_name: str | None = None) -> ToolContext:
         context_cls = SystemToolContext if tool_name in SYSTEM_CONTEXT_TOOL_NAMES else ToolContext
-        internal_devices = DeviceRuntime(user_id=user_id, app=self.app, allow_long_running=False)
+        # background 能力可以发起持续 stream 和长命令；前台短工具维持短生命周期门面。
+        allow_long_running = self._tool_allows_long_running(tool_name)
+        internal_devices = DeviceRuntime(user_id=user_id, app=self.app, allow_long_running=allow_long_running)
         kwargs = {
             "metadata": {
                 "app_name": getattr(getattr(self.app, "config", None), "app_name", ""),
@@ -567,25 +636,42 @@ class ToolContextFactory:
         }
         kwargs.update({"memory": self.memory_service, "skills": self.skill_service, "mcp": self.mcp_gateway})
         if context_cls is SystemToolContext:
-            kwargs.update(
-                {
-                    "tasks": self.task_engine,
-                }
-            )
+            kwargs.update({"tool_runs": self.tool_run_admin})
+        device_facade = BackgroundDeviceFacade(context=internal_devices) if allow_long_running else ToolDeviceFacade(context=internal_devices)
         return context_cls(
             user_id=user_id,
             session_id=session_id,
-            devices=ToolDeviceFacade(context=internal_devices),
+            devices=device_facade,
             output=OutputFacade(user_id=user_id, app=self.app),
             assets=AssetFacade(user_id=user_id, app=self.app),
             **kwargs,
         )
 
+    def _tool_allows_long_running(self, tool_name: str | None) -> bool:
+        """判断工具是否声明了 background 策略，从而需要长命令/持续 stream 能力。"""
+
+        if not tool_name:
+            return False
+        gateway = getattr(self.app, "tool_gateway", None)
+        registry = getattr(gateway, "registry", None)
+        if registry is None:
+            return False
+        try:
+            spec = registry.get(tool_name).resolved_spec()
+        except Exception:  # noqa: BLE001 - 未知工具回退到短生命周期门面
+            return False
+        return spec.late_result_policy == "background"
+
 
 class ToolExecutor:
     """Tool 执行器。
 
-    主要功能：封装 Tool.run 调用和错误转换，后续可接入超时、并发和取消策略。
+    主要功能：把每次工具调用建模成可追踪 Tool Run，在后台 runner 上执行 `tool.run()`，
+    并以等待窗口统一前台短任务和长耗时能力：窗口内完成像现在一样返回最终结果；
+    `background` 工具超窗则返回“运行中”结果转后台，late result 由 follow-up 机制送达。
+
+    主要属性：`store` 持有 Tool Run 状态与 CAS 裁决；`runner` 为后台执行循环；
+    `on_background_complete` 是后台完成回调（Phase 4 由 FollowUpRouter 注入）。
     """
 
     def __init__(
@@ -593,20 +679,35 @@ class ToolExecutor:
         *,
         default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
         max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
+        store: ToolRunStore | None = None,
+        runner: ToolRunRunner | None = None,
+        recorder: Any = None,
+        on_background_complete: Any = None,
     ) -> None:
         self.default_timeout_seconds = float(default_timeout_seconds)
         self.max_wait_timeout_seconds = float(max_wait_timeout_seconds)
+        self.wait_window_seconds = float(max_wait_timeout_seconds)
+        self.store = store or ToolRunStore()
+        self.runner = runner or ToolRunRunner()
+        self.recorder = recorder
+        self.on_background_complete = on_background_complete
 
     async def execute(self, tool: BaseTool, context: ToolContext, input_data: dict) -> ToolResult:
+        """执行一次工具调用并按等待窗口返回结果。
+
+        主要逻辑：
+        1. 校验入参；`background` 工具先做同会话同名运行去重。
+        2. 创建 Tool Run，提交后台 runner，等待窗口内完成则 CAS `completed_inline`。
+        3. 超窗：`fail_fast/forbidden` 取消并失败；`background` CAS `reported_running`
+           返回“运行中”结果，后台完成后由 done 回调 CAS `completed_late/failed`。
+        参数：`tool` 为工具实例；`context` 为执行上下文；`input_data` 为模型入参。
+        返回值：`ToolResult`（可能是最终结果或“运行中”结果）。
+        异常情况：入参校验失败返回结构化失败；其余异常归一为失败结果。
+        """
+
+        spec = tool.resolved_spec()
         try:
             validated_input = self._validate_input(tool, input_data)
-            coroutine = tool.run(context, validated_input)
-            timeout_seconds = _effective_tool_timeout(
-                tool.resolved_spec(),
-                default_timeout_seconds=self.default_timeout_seconds,
-                max_wait_timeout_seconds=self.max_wait_timeout_seconds,
-            )
-            return await asyncio.wait_for(coroutine, timeout=timeout_seconds)
         except ValidationError as exc:
             return ToolResult.failed(
                 ToolError(
@@ -615,12 +716,192 @@ class ToolExecutor:
                     details={"errors": exc.errors()},
                 )
             )
-        except TimeoutError:
+        policy = spec.late_result_policy
+        running_message = spec.running_message or ""
+        if policy == "background" and not spec.allow_concurrent_runs:
+            running_count = self.store.count_active_by_tool(
+                user_id=context.user_id,
+                session_id=context.session_id,
+                tool_name=spec.name,
+            )
+            allowed = spec.max_running_per_user if spec.max_running_per_user and spec.max_running_per_user > 0 else 1
+            if running_count >= allowed:
+                existing = self.store.find_active_by_tool(
+                    user_id=context.user_id,
+                    session_id=context.session_id,
+                    tool_name=spec.name,
+                )
+                if existing is not None:
+                    self._record(context.session_id, {"event": "tool_run.dedupe.reused", "tool_run_id": existing.run_id, "tool_name": spec.name})
+                    return ToolResult.running(run_id=existing.run_id, tool_name=spec.name, message=running_message)
+
+        background_timeout = (
+            _background_timeout_for(tool, spec, wait_window=self.wait_window_seconds, input_data=input_data)
+            if policy == "background"
+            else None
+        )
+        run = ToolRun.create(
+            tool_name=spec.name,
+            user_id=context.user_id,
+            session_id=context.session_id,
+            result_policy=policy,
+            input_data=dict(input_data or {}),
+            background_timeout_seconds=background_timeout,
+            follow_up_ttl_seconds=spec.follow_up_ttl_seconds if policy == "background" else None,
+            metadata={"cancel_supported": bool(spec.cancel_supported), "notify_policy": spec.late_result_notify},
+        )
+        self.store.put(run)
+        self._record(context.session_id, {"event": "tool_run.created", "tool_run_id": run.run_id, "tool_name": spec.name, "result_policy": policy})
+
+        coro = tool.run(context, validated_input)
+        if background_timeout is not None:
+            # 后台总超时强制：到点向协程注入 TimeoutError，工具在 finally 清理。
+            coro = asyncio.wait_for(coro, timeout=background_timeout)
+        cf_future = self.runner.submit(user_id=context.user_id, coro=coro, run_id=run.run_id)
+        wrapped = asyncio.wrap_future(cf_future)
+        done, _pending = await asyncio.wait({wrapped}, timeout=self.wait_window_seconds)
+
+        if wrapped in done:
+            result = self._result_from_future(wrapped)
+            self.store.try_transition(
+                run.run_id,
+                from_states={"running"},
+                to_state="completed_inline",
+                result=_serialize_tool_result(result),
+            )
+            self._record(context.session_id, {"event": "tool_run.completed_inline", "tool_run_id": run.run_id, "tool_name": spec.name, "ok": result.ok})
+            return result
+
+        # 等待窗口超时：tool.run 仍在后台执行。
+        if policy != "background":
+            cf_future.cancel()
+            self._swallow_orphan(wrapped)
+            self.store.try_transition(
+                run.run_id,
+                from_states={"running"},
+                to_state="failed",
+                result=_serialize_tool_result(ToolResult.failed(ToolError("tool execution timeout", code=ErrorCode.TIMEOUT))),
+                metadata={"error": {"reason": "timeout"}},
+            )
+            self._record(context.session_id, {"event": "tool_run.failed", "tool_run_id": run.run_id, "tool_name": spec.name, "reason": "timeout"})
             return ToolResult.failed(ToolError("tool execution timeout", code=ErrorCode.TIMEOUT))
+
+        # background：注册后台完成回调，再 CAS 转 reported_running。
+        cf_future.add_done_callback(lambda fut: self._on_background_done(run.run_id, spec.name, context.session_id, fut))
+        transitioned = self.store.try_transition(run.run_id, from_states={"running"}, to_state="reported_running")
+        if not transitioned:
+            # 回调已在 CAS 前抢先把运行推进到 completed_inline。
+            current = self.store.get(run.run_id)
+            if current.state == "completed_inline" and current.result is not None:
+                return _tool_result_from_run_dict(current.result)
+            return ToolResult.running(run_id=run.run_id, tool_name=spec.name, message=running_message)
+        self._record(context.session_id, {"event": "tool_run.reported_running", "tool_run_id": run.run_id, "tool_name": spec.name})
+        return ToolResult.running(run_id=run.run_id, tool_name=spec.name, message=running_message)
+
+    def _on_background_done(self, run_id: str, tool_name: str, session_id: str, fut: Any) -> None:
+        """后台 Tool 完成时推进 Tool Run 并触发 follow-up。
+
+        主要逻辑：先尝试 `running->completed_inline`（覆盖回调早于窗口 CAS 的竞态），
+        否则 `reported_running->completed_late/failed`；后者触发 follow-up 回调。
+        参数：`fut` 为后台执行 future。
+        返回值：无。
+        异常情况：follow-up 回调异常被吞并记录，不影响后台线程。
+        """
+
+        if fut.cancelled():
+            return
+        error = fut.exception()
+        timeout_reason = False
+        if error is None:
+            result = self._coerce_result(fut.result())
+            outcome_ok = True
+        elif isinstance(error, (asyncio.TimeoutError, TimeoutError)):
+            result = ToolResult.failed(ToolError("tool background execution timeout", code=ErrorCode.TIMEOUT))
+            outcome_ok = False
+            timeout_reason = True
+        else:
+            result = ToolResult.failed(ToolError(str(error), code=ErrorCode.UNKNOWN))
+            outcome_ok = False
+        result_dict = _serialize_tool_result(result)
+        if self.store.try_transition(run_id, from_states={"running"}, to_state="completed_inline", result=result_dict):
+            self._record(session_id, {"event": "tool_run.completed_inline", "tool_run_id": run_id, "tool_name": tool_name, "ok": result.ok})
+            return
+        to_state = "completed_late" if outcome_ok else "failed"
+        transition_metadata = {"error": {"reason": "timeout"}} if timeout_reason else None
+        if not self.store.try_transition(run_id, from_states={"reported_running"}, to_state=to_state, result=result_dict, metadata=transition_metadata):
+            self._record(session_id, {"event": "tool_run.duplicate_completion", "tool_run_id": run_id, "tool_name": tool_name})
+            return
+        self._record(session_id, {"event": f"tool_run.{to_state}", "tool_run_id": run_id, "tool_name": tool_name, "ok": result.ok})
+        if self.on_background_complete is not None:
+            try:
+                run = self.store.get(run_id)
+                self.on_background_complete(run, result)
+            except Exception as exc:  # noqa: BLE001 - follow-up 回调异常不应影响后台线程
+                self._record(session_id, {"event": "tool_run.follow_up.dispatch_failed", "tool_run_id": run_id, "tool_name": tool_name, "message": str(exc)})
+
+    def cancel_run(self, run_id: str, *, reason: str = "user_requested") -> dict:
+        """取消一个仍在后台运行的 Tool Run。
+
+        主要逻辑：校验运行存在、声明了可取消、仍处于 running/reported_running；
+        CAS 推进到 `cancelled` 后取消后台协程，让工具在 finally 清理端侧资源。
+        参数：`run_id` 为目标运行；`reason` 为取消原因。
+        返回值：结构化结果 `{ok, status, message}`。
+        异常情况：无（错误经返回值表达）。
+        """
+
+        run = self.store.get_optional(run_id)
+        if run is None:
+            return {"ok": False, "status": "not_found", "message": "找不到该后台运行。"}
+        if not bool((run.metadata or {}).get("cancel_supported")):
+            return {"ok": False, "status": "not_cancellable", "message": "该能力不支持取消。"}
+        if run.state not in {"running", "reported_running"}:
+            return {"ok": False, "status": "too_late", "message": "该运行已经结束，来不及取消。"}
+        transitioned = self.store.try_transition(
+            run_id,
+            from_states={"running", "reported_running"},
+            to_state="cancelled",
+            metadata={"cancel_reason": reason},
+        )
+        if not transitioned:
+            return {"ok": False, "status": "too_late", "message": "该运行已经结束，来不及取消。"}
+        self.runner.cancel(run_id)
+        self._record(run.session_id, {"event": "tool_run.cancelled", "tool_run_id": run_id, "tool_name": run.tool_name, "reason": reason})
+        return {"ok": True, "status": "cancelled", "message": "已取消。", "tool_run_id": run_id, "tool_name": run.tool_name}
+
+    @staticmethod
+    def _result_from_future(wrapped: Any) -> ToolResult:
+        """从已完成的 future 读取 ToolResult，异常归一为失败结果。"""
+
+        try:
+            return ToolExecutor._coerce_result(wrapped.result())
         except RealtimeAgentError as exc:
             return ToolResult.failed(exc)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001
             return ToolResult.failed(ToolError(str(exc), code=ErrorCode.UNKNOWN))
+
+    @staticmethod
+    def _coerce_result(value: Any) -> ToolResult:
+        """把 tool.run 返回值归一成 ToolResult。"""
+
+        if isinstance(value, ToolResult):
+            return value
+        return ToolResult.failed(ToolError("tool returned non-ToolResult value", code=ErrorCode.PROTOCOL_ERROR))
+
+    @staticmethod
+    def _swallow_orphan(wrapped: Any) -> None:
+        """避免被遗弃的 wrapper future 抛出 “exception never retrieved” 噪声。"""
+
+        def _consume(fut: Any) -> None:
+            if not fut.cancelled():
+                fut.exception()
+
+        wrapped.add_done_callback(_consume)
+
+    def _record(self, session_id: str, payload: dict) -> None:
+        """记录 Tool Run 生命周期事件。"""
+
+        if self.recorder is not None and hasattr(self.recorder, "record_agent_event"):
+            self.recorder.record_agent_event(session_id, payload)
 
     def _validate_input(self, tool: BaseTool, input_data: dict) -> dict:
         """按工具 input_model 校验并归一入参。
@@ -641,6 +922,69 @@ class ToolExecutor:
         return dict(input_data or {})
 
 
+def _background_timeout_for(tool: "BaseTool", spec: ToolSpec, *, wait_window: float, input_data: dict | None = None) -> float:
+    """返回 background 工具的后台总超时。
+
+    主要逻辑：工具可覆写 `background_timeout_seconds_for(input_data)` 按入参定预算
+    （如计时器按秒数）；否则使用声明的 `background_timeout_seconds`；再否则使用默认
+    后台超时。结果至少大于等待窗口，避免后台超时小于前台窗口造成立即过期。
+    参数：`tool` 为工具实例；`spec` 为工具规格；`wait_window` 为等待窗口；`input_data` 为入参。
+    返回值：后台总超时秒数。
+    异常情况：无。
+    """
+
+    floor = float(wait_window) + 1.0
+    resolver = getattr(tool, "background_timeout_seconds_for", None)
+    if callable(resolver):
+        try:
+            resolved = resolver(dict(input_data or {}))
+            if resolved is not None and float(resolved) > 0:
+                return max(floor, float(resolved))
+        except Exception:  # noqa: BLE001 - 解析失败回退到声明值
+            pass
+    declared = spec.background_timeout_seconds
+    if declared is not None and float(declared) > 0:
+        return float(declared)
+    return max(floor, TOOL_RUN_BACKGROUND_TIMEOUT_SECONDS)
+
+
+def _serialize_tool_result(result: ToolResult) -> dict[str, Any]:
+    """把 ToolResult 序列化为可落盘和回流的稳定字典。
+
+    主要逻辑：保留 ok/status/data/message/meta/error；assets 等富对象不进 Tool Run
+    快照，follow-up 只需要文本与结构化数据驱动模型回复。
+    参数：`result` 为工具结果。
+    返回值：可 JSON 序列化的字典。
+    异常情况：无。
+    """
+
+    return {
+        "ok": bool(result.ok),
+        "status": getattr(result, "status", "completed"),
+        "data": result.data,
+        "message": result.message,
+        "meta": dict(result.meta or {}),
+        "error": result.error,
+    }
+
+
+def _tool_result_from_run_dict(data: dict[str, Any]) -> ToolResult:
+    """从 Tool Run 快照里的结果字典重建 ToolResult。"""
+
+    return ToolResult(
+        ok=bool(data.get("ok")),
+        data=data.get("data"),
+        message=str(data.get("message") or ""),
+        assets=[],
+        visual_assets=[],
+        artifacts=[],
+        tasks=[],
+        meta=dict(data.get("meta") or {}),
+        error=data.get("error"),
+        status=str(data.get("status") or "completed"),
+    )
+
+
 class ToolGateway:
     """Agent Core 访问 Tool 的统一网关。
 
@@ -657,6 +1001,9 @@ class ToolGateway:
         context_factory: ToolContextFactory | None = None,
         recorder: Any = None,
         skill_service: Any = None,
+        tool_run_store: ToolRunStore | None = None,
+        tool_run_runner: ToolRunRunner | None = None,
+        on_background_complete: Any = None,
         default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
         max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
     ) -> None:
@@ -671,14 +1018,36 @@ class ToolGateway:
             default_timeout_seconds=self.default_timeout_seconds,
             max_wait_timeout_seconds=self.max_wait_timeout_seconds,
         )
+        self.tool_run_store = tool_run_store or ToolRunStore()
+        self.tool_run_runner = tool_run_runner or ToolRunRunner()
         self.executor = executor or ToolExecutor(
             default_timeout_seconds=self.default_timeout_seconds,
             max_wait_timeout_seconds=self.max_wait_timeout_seconds,
+            store=self.tool_run_store,
+            runner=self.tool_run_runner,
+            recorder=recorder,
+            on_background_complete=on_background_complete,
         )
+        # 注入的 executor 复用 gateway 的 store/recorder/回调，保证去重和可观测一致。
+        if self.executor.recorder is None:
+            self.executor.recorder = recorder
+        if executor is not None:
+            self.tool_run_store = self.executor.store
+            self.tool_run_runner = self.executor.runner
+            if self.executor.on_background_complete is None and on_background_complete is not None:
+                self.executor.on_background_complete = on_background_complete
         self.context_factory = context_factory
         self.recorder = recorder
         self.skill_service = skill_service
         self._progress_emitted: set[tuple[str, str]] = set()
+        # 把 Tool Run 管理门面交给上下文工厂，供 tool_run_manager 工具查询/取消后台运行。
+        if context_factory is not None and hasattr(context_factory, "bind_tool_run_admin"):
+            context_factory.bind_tool_run_admin(ToolRunAdmin(store=self.tool_run_store, executor=self.executor))
+
+    def set_background_complete_handler(self, handler: Any) -> None:
+        """注入后台 Tool Run 完成回调（由 FollowUpRouter 在装配阶段调用）。"""
+
+        self.executor.on_background_complete = handler
 
     def list_tools(self) -> list[BaseTool]:
         """返回当前策略允许暴露给 Agent Core 的 Tool。"""
@@ -1441,7 +1810,7 @@ class _SensorCapability:
 
         if not self._allow_stream:
             raise RealtimeAgentError(
-                f"streaming sensor API is only available in TaskContext: {self.stream_type}",
+                f"streaming sensor API is only available to background tools: {self.stream_type}",
                 code=ErrorCode.PERMISSION_DENIED,
             )
         return self._context._sensor_stream(
@@ -1510,7 +1879,7 @@ class _VibratorCapability:
         """发送振动器连续数据。"""
 
         if not self._allow_stream:
-            raise RealtimeAgentError("streaming actuator API is only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
+            raise RealtimeAgentError("streaming actuator API is only available to background tools", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_capability("actuator.haptic", selector=selector, require_single=True)
         merged_params = self._context._merge_capability_params("actuator.haptic", devices=devices, params=params)
         writer = self._context._open_output_stream_for_devices(
@@ -1631,7 +2000,7 @@ class _CommandsFacade:
         """启动远程长命令。"""
 
         if not self._allow_long_running:
-            raise RealtimeAgentError("long running commands are only available in TaskContext", code=ErrorCode.PERMISSION_DENIED)
+            raise RealtimeAgentError("long running commands are only available to background tools", code=ErrorCode.PERMISSION_DENIED)
         devices = self._context._resolve_devices_for_command(selector=selector, require_single=True)
         command_id = new_id("cmd")
         broker = self._context._command_result_broker()
@@ -1686,11 +2055,11 @@ class ToolDeviceFacade:
 
         return self._context._device_snapshots()
 
-class TaskDeviceFacade(ToolDeviceFacade):
-    """Task 可见设备能力门面。
+class BackgroundDeviceFacade(ToolDeviceFacade):
+    """background 工具可见设备能力门面。
 
     主要功能：在 ToolDeviceFacade 的短生命周期能力上，额外开放持续 stream 和远程
-    长命令能力。
+    长命令能力；由 ToolContextFactory 在 `late_result_policy=background` 时注入。
     """
 
     def __init__(self, *, context: "DeviceRuntime") -> None:
@@ -1759,7 +2128,7 @@ class DeviceRuntime:
     """SDK 内部设备运行时上下文。
 
     主要功能：承接 typed facade 的设备解析、事件投递、stream 打开和资产查询；
-    不作为公开 API 导出，业务代码只能看到 `ToolDeviceFacade` 或 `TaskDeviceFacade`。
+    不作为公开 API 导出，业务代码只能看到 `ToolDeviceFacade` 或 `BackgroundDeviceFacade`。
     """
 
     def __init__(self, *, user_id: str, app, allow_long_running: bool = False) -> None:
@@ -2158,108 +2527,195 @@ class QueryDeviceStateTool(BaseTool):
         )
 
 
-class TaskRuntimeManagerTool(BaseTool):
-    """统一管理 TaskEngine 运行实例的内置 Tool。
+class ToolRunAdmin:
+    """Tool Run 管理门面。
 
-    主要功能：以一个模型可见工具承载 Task 的查询、取消和列表能力。
-    业务 Task 启动由 SDK 自动生成的专用 start_* Tool 暴露给模型。
+    主要功能：给内置 `tool_run_manager` 工具提供查询、列出、取消后台 Tool Run 的稳定入口，
+    封装 ToolRunStore 与 ToolExecutor.cancel_run，避免 Tool 直接操作内部存储。
+    """
+
+    def __init__(self, *, store: Any, executor: "ToolExecutor") -> None:
+        self._store = store
+        self._executor = executor
+
+    def list_instances(self, *, user_id: str, include_terminal: bool = True) -> list[dict[str, Any]]:
+        """列出某用户的后台运行快照。"""
+
+        runs = [run for run in self._store.list_runs() if run.user_id == user_id]
+        if not include_terminal:
+            runs = [run for run in runs if not run.is_terminal]
+        runs.sort(key=lambda run: run.created_at)
+        return [self._public(run) for run in runs]
+
+    def query(self, run_id: str) -> dict[str, Any] | None:
+        """查询单个后台运行快照。"""
+
+        run = self._store.get_optional(run_id)
+        return self._public(run) if run is not None else None
+
+    def cancel(self, run_id: str, *, reason: str = "user_requested") -> dict[str, Any]:
+        """取消一个后台运行。"""
+
+        return self._executor.cancel_run(run_id, reason=reason)
+
+    @staticmethod
+    def _public(run: Any) -> dict[str, Any]:
+        """把 ToolRun 转成模型/调试可读的公开视图。"""
+
+        return {
+            "tool_run_id": run.run_id,
+            "tool_name": run.tool_name,
+            "state": run.state,
+            "created_at": run.created_at,
+            "updated_at": run.updated_at,
+            "cancel_supported": bool((run.metadata or {}).get("cancel_supported")),
+        }
+
+
+class ToolRunManagerTool(BaseTool):
+    """统一管理后台 Tool Run 的内置 Tool。
+
+    主要功能：以一个模型可见工具承载后台运行的查询、列出和取消能力。
+    启动一次能力直接调用对应业务工具即可；超窗会返回带 tool_run_id 的“运行中”结果。
     """
 
     class Input(BaseModel):
-        action: Literal["query", "cancel", "list_types", "list_instances"] = Field(
-            description="任务管理动作：query 查询，cancel 取消，list_types 列出类型，list_instances 列出实例。启动任务请调用对应 start_* Tool。",
+        action: Literal["query", "cancel", "list_instances"] = Field(
+            description="后台运行管理动作：query 查询单个运行，cancel 取消运行，list_instances 列出运行。",
         )
-        task_id: str | None = Field(default=None, description="查询或取消任务时使用的任务编号。")
-        include_terminal: bool = Field(default=True, description="列出任务实例时是否包含已完成、取消、失败或超时任务。")
+        tool_run_id: str | None = Field(default=None, description="查询或取消时使用的后台运行编号（工具返回“运行中”结果时携带）。")
+        include_terminal: bool = Field(default=True, description="列出运行时是否包含已完成、已取消、失败的运行。")
 
     spec = ToolSpec(
-        name="task_runtime_manager",
+        name="tool_run_manager",
         description=(
-            "统一管理后台 Task 运行实例。只用于查询、取消或列出 Task；"
-            "启动任务必须调用具体的 start_* Tool，例如 start_timer_task。"
+            "统一管理后台运行的能力（Tool Run）。只用于查询、取消或列出后台运行；"
+            "启动能力请直接调用对应工具。取消请提供工具返回的 tool_run_id。"
         ),
         input_model=Input,
-        capability_type="task",
-        tags=["task", "manage"],
+        capability_type="tool",
+        tags=["tool_run", "manage", "system"],
         progress_message=(
             "我处理一下这个后台任务。",
-            "稍等，我看一下任务。",
+            "稍等，我看一下后台运行。",
         ),
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        """执行统一 Task 管理动作。
+        """执行后台运行管理动作。
 
-        参数：`action` 指定管理动作；`task_type/task_id/input_data` 是各动作所需参数。
-        返回值：成功时返回任务类型、任务引用或实例列表。
-        异常情况：TaskEngine 未配置、缺少必要参数或任务不存在时返回结构化失败。
+        参数：`action` 指定管理动作；`tool_run_id` 是查询/取消所需运行编号。
+        返回值：成功时返回运行快照或列表；取消返回取消结果。
+        异常情况：管理门面未配置、缺少必要参数或运行不存在时返回结构化失败。
         """
 
-        if not isinstance(context, SystemToolContext) or context.tasks is None:
-            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        if not isinstance(context, SystemToolContext) or context.tool_runs is None:
+            return ToolResult.failed(ToolError("tool run admin is not configured", code=ErrorCode.PROTOCOL_ERROR))
+        admin = context.tool_runs
         action = str(input_data.get("action") or "").strip()
-        if action == "list_types":
-            return ToolResult.success(data={"task_types": context.tasks.list_task_types()}, message="task types listed")
         if action == "list_instances":
-            refs = context.tasks.list_tasks(
+            rows = admin.list_instances(
                 user_id=context.user_id,
                 include_terminal=bool(input_data.get("include_terminal", True)),
             )
-            return ToolResult.success(
-                data={"tasks": [ref.__dict__ for ref in refs]},
-                tasks=refs,
-                message=f"{len(refs)} tasks listed",
-            )
+            return ToolResult.success(data={"tool_runs": rows}, message=f"{len(rows)} tool runs listed")
         if action == "query":
-            task_id = str(input_data.get("task_id") or "").strip()
-            if not task_id:
-                return ToolResult.failed(ToolError("task_id is required", code=ErrorCode.INVALID_ARGUMENT))
-            ref = context.tasks.query(task_id)
-            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
+            run_id = str(input_data.get("tool_run_id") or "").strip()
+            if not run_id:
+                return ToolResult.failed(ToolError("tool_run_id is required", code=ErrorCode.INVALID_ARGUMENT))
+            row = admin.query(run_id)
+            if row is None:
+                return ToolResult.failed(ToolError("tool run not found", code=ErrorCode.NOT_FOUND))
+            return ToolResult.success(data=row, message=str(row.get("state") or ""))
         if action == "cancel":
-            task_id = str(input_data.get("task_id") or "").strip()
-            if not task_id:
-                return ToolResult.failed(ToolError("task_id is required", code=ErrorCode.INVALID_ARGUMENT))
-            ref = await context.tasks.cancel(task_id, reason="tool_requested")
-            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=ref.state)
-        if action == "start":
-            task_type = str(input_data.get("task_type") or "").strip()
-            if not task_type:
-                return ToolResult.failed(ToolError("task_type is required", code=ErrorCode.INVALID_ARGUMENT))
-            start_input = _normalize_task_runtime_start_input(
-                task_type=task_type,
-                input_data=dict(input_data.get("input_data") or {}),
-                available_task_types=_task_runtime_task_type_names(context.tasks.list_task_types()),
-            )
-            try:
-                ref = await context.tasks.create(
-                    task_type=start_input["task_type"],
-                    user_id=context.user_id,
-                    session_id=context.session_id,
-                    input_data=start_input["input_data"],
-                    summary=str(input_data.get("summary") or ""),
-                )
-            except RealtimeAgentError as exc:
-                error = exc.to_dict()
-                requested_task_type = task_type
-                resolved_task_type = str(start_input["task_type"])
-                message = f"任务启动失败：{error.get('message') or str(exc)}"
-                return ToolResult(
-                    ok=False,
-                    message=message,
-                    assets=[],
-                    artifacts=[],
-                    tasks=[],
-                    meta={
-                        "operation": "task_start",
-                        "requested_task_type": requested_task_type,
-                        "resolved_task_type": resolved_task_type,
-                    },
-                    error=error,
-                )
-            agent_reply = _task_ref_agent_reply(ref)
-            return ToolResult.success(data=ref.__dict__, tasks=[ref], message=agent_reply.get("message") or ref.state)
-        return ToolResult.failed(ToolError(f"unknown task action: {action}", code=ErrorCode.INVALID_ARGUMENT))
+            run_id = str(input_data.get("tool_run_id") or "").strip()
+            if not run_id:
+                return ToolResult.failed(ToolError("tool_run_id is required", code=ErrorCode.INVALID_ARGUMENT))
+            outcome = admin.cancel(run_id, reason="tool_requested")
+            return ToolResult.success(data=outcome, message=str(outcome.get("message") or ""))
+        return ToolResult.failed(ToolError(f"unknown tool run action: {action}", code=ErrorCode.INVALID_ARGUMENT))
+
+
+class TimerInput(BaseModel):
+    """计时器工具启动参数。"""
+
+    seconds: int = Field(
+        ge=0,
+        description="计时时长，单位秒。模型必须把分钟、小时换算成秒；普通计时应大于 0。",
+    )
+    message: str = Field(
+        default="",
+        description="到点时播报给用户的话；用户没有指定内容时可以留空。",
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_aliases(cls, data: Any) -> Any:
+        """兼容 provider 常见别名：duration/delay/timeout_seconds、notify_text/text。"""
+
+        if not isinstance(data, dict):
+            return data
+        normalized = dict(data)
+        if normalized.get("seconds") is None:
+            for alias in ("duration_seconds", "delay_seconds", "timeout_seconds", "duration"):
+                if normalized.get(alias) is not None:
+                    normalized["seconds"] = int(float(normalized[alias]))
+                    break
+        message = str(normalized.get("message") or normalized.get("notify_text") or normalized.get("text") or "").strip()
+        if message:
+            normalized["message"] = message
+        return normalized
+
+
+class TimerTool(BaseTool):
+    """计时器工具。
+
+    主要功能：用户要求倒计时、计时、稍后提醒或到点提示时启动；工具在后台等待指定
+    秒数后，把到点提醒经 Output Service 直通播报给用户。
+
+    与旧 timer_task 的等价关系：超过等待窗口（默认 3 秒）的计时会立即返回“计时器已开始
+    计时”，到点后通过 late result direct 通道播报；可经 tool_run_manager 取消。
+    """
+
+    spec = ToolSpec(
+        name="start_timer",
+        description=(
+            "启动计时器。用于用户要求倒计时、计时、稍后提醒或到点提示；"
+            "工具会立即告知已开始计时，并在指定秒数后播报到点提醒。"
+            "取消计时请使用 tool_run_manager。"
+        ),
+        input_model=TimerInput,
+        capability_type="tool",
+        tags=["timer", "reminder", "background"],
+        late_result_policy="background",
+        late_result_notify="direct",
+        cancel_supported=True,
+        follow_up_ttl_seconds=0,
+        running_message="计时器已开始计时。",
+    )
+
+    def background_timeout_seconds_for(self, input_data: dict) -> float:
+        """按计时秒数定后台总超时预算（留出余量避免到点前被强制取消）。"""
+
+        seconds = max(0, int(float(input_data.get("seconds") or 0)))
+        return float(seconds) + 30.0
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """等待指定秒数后返回到点提醒。
+
+        主要逻辑：后台 runner 上 `asyncio.sleep(seconds)`，到点返回到点文案；
+        该结果经 late result direct 通道直通播报。取消时协程在 sleep 处收到
+        CancelledError，运行进入 cancelled，不再播报。
+        参数：`context` 为 SDK 注入上下文；`input_data` 含 seconds/message。
+        返回值：到点提醒 `ToolResult`。
+        异常情况：取消时抛出 CancelledError，由 SDK 标记 cancelled。
+        """
+
+        seconds = max(0, int(float(input_data.get("seconds") or 0)))
+        message = str(input_data.get("message") or "").strip() or (f"{seconds} 秒计时器到点了。" if seconds > 0 else "计时器到点了。")
+        if seconds > 0:
+            await asyncio.sleep(seconds)
+        return ToolResult.success(data={"seconds": seconds, "notified": True}, message=message)
 
 
 class CloseAudioSessionTool(BaseTool):
@@ -2334,97 +2790,6 @@ def _is_explicit_audio_session_close_phrase(phrase: str) -> bool:
     return normalized in exact_phrases
 
 
-class TaskStartTool(BaseTool):
-    """由 SDK 根据 BaseTask 自动生成的模型可见启动 Tool。"""
-
-    def __init__(
-        self,
-        *,
-        task_type: str,
-        description: str,
-        input_model: Any = dict,
-        tool_name: str | None = None,
-        timeout_seconds: float | None = TASK_START_TOOL_TIMEOUT_SECONDS,
-    ) -> None:
-        self.task_type = task_type
-        self.name = tool_name or _default_task_start_tool_name(task_type)
-        task_description = str(description or f"启动 {task_type} 后台任务。").strip()
-        self.description = task_description
-        self.input_model = input_model
-        self.timeout_seconds = _coerce_tool_timeout(timeout_seconds, fallback=TASK_START_TOOL_TIMEOUT_SECONDS)
-        self.spec = ToolSpec(
-            name=self.name,
-            description=_task_start_tool_description(task_type=task_type, description=task_description),
-            input_model=input_model,
-            capability_type="task",
-            tags=["task", "start", task_type],
-            timeout_seconds=self.timeout_seconds,
-        )
-
-    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
-        if not isinstance(context, SystemToolContext) or context.tasks is None:
-            return ToolResult.failed(ToolError("task engine is not configured", code=ErrorCode.PROTOCOL_ERROR))
-        try:
-            ref = await context.tasks.create(
-                task_type=self.task_type,
-                user_id=context.user_id,
-                session_id=context.session_id,
-                input_data=dict(input_data or {}),
-                summary=str(self.description or self.task_type),
-            )
-        except RealtimeAgentError as exc:
-            error = exc.to_dict()
-            return ToolResult(
-                ok=False,
-                message=f"任务启动失败：{error.get('message') or str(exc)}",
-                assets=[],
-                artifacts=[],
-                tasks=[],
-                meta={
-                    "operation": "task_start",
-                    "requested_task_type": self.task_type,
-                    "resolved_task_type": self.task_type,
-                    "start_tool_name": self.name,
-                },
-                error=error,
-            )
-        agent_reply = _task_ref_agent_reply(ref)
-        message = str(agent_reply.get("message") or f"{self.task_type} started")
-        meta = {"operation": "task_start", "start_tool_name": self.name}
-        if agent_reply:
-            meta["agent_reply"] = agent_reply
-        if ref.state == "failed":
-            error = {
-                "code": ErrorCode.UNKNOWN.value,
-                "message": message,
-                "retryable": True,
-                "details": {"task_id": ref.task_id, "task_type": ref.task_type},
-            }
-            return ToolResult(
-                ok=False,
-                data=ref.__dict__,
-                message=message,
-                assets=[],
-                artifacts=[],
-                tasks=[ref],
-                meta=meta,
-                error=error,
-            )
-        return ToolResult.success(
-            data=ref.__dict__,
-            tasks=[ref],
-            message=message,
-            meta=meta,
-        )
-
-
-def _default_task_start_tool_name(task_type: str) -> str:
-    normalized = str(task_type or "").strip()
-    if normalized.endswith("_task"):
-        return f"start_{normalized}"
-    return f"start_{normalized}_task"
-
-
 def _coerce_tool_timeout(timeout_seconds: float | None, *, fallback: float) -> float:
     """归一 Tool 超时配置。
 
@@ -2466,8 +2831,13 @@ def _validate_tool_timeout(
     default_timeout_seconds: float = TOOL_DEFAULT_TIMEOUT_SECONDS,
     max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
 ) -> None:
-    """校验 Tool 注册时的短生命周期超时上限。"""
+    """校验 Tool 注册时的短生命周期超时上限和 late result 策略。"""
 
+    _validate_tool_late_result_policy(spec, max_wait_timeout_seconds=max_wait_timeout_seconds)
+    if spec.late_result_policy == "background":
+        # background 工具的最终结果由后台 runner + follow-up 路由承载，注册期不再
+        # 用等待窗口约束其 timeout_seconds；其上限改由 background_timeout_seconds 表达。
+        return
     _effective_tool_timeout(
         spec,
         default_timeout_seconds=default_timeout_seconds,
@@ -2475,82 +2845,48 @@ def _validate_tool_timeout(
     )
 
 
-def _task_ref_agent_reply(ref: Any) -> dict[str, Any]:
-    """从 TaskRef 中提取 Task.run() 写入的 Agent 回复建议。"""
-
-    metadata = getattr(ref, "metadata", {}) or {}
-    run_result = metadata.get("task_run_result") if isinstance(metadata, dict) else None
-    if not isinstance(run_result, dict):
-        return {}
-    agent_reply = run_result.get("agent_reply")
-    if not isinstance(agent_reply, dict):
-        return {}
-    return {k: v for k, v in agent_reply.items() if v not in (None, "")}
-
-
-def _task_start_tool_description(*, task_type: str, description: str) -> str:
-    task = str(task_type or "task").strip()
-    summary = str(description or f"启动 {task} 后台任务。").strip().rstrip("。")
-    return (
-        f"{summary}。"
-        f"当用户明确要求启动或持续执行该后台能力时调用本工具；"
-        f"调用成功后 SDK 会创建 `{task}` 后台 Task 实例并立即返回 task_id。"
-        "Task 会在后台继续运行、发出状态信号或到点通知；"
-        "后续查询进度、列出任务或取消任务请使用 task_runtime_manager。"
-    )
-
-
-def _task_runtime_task_type_names(rows: Any) -> set[str]:
-    """Extract registered task type names from TaskEngine list output."""
-
-    names: set[str] = set()
-    for row in rows or []:
-        if isinstance(row, dict):
-            value = row.get("task_type")
-        else:
-            value = row
-        text = str(value or "").strip()
-        if text:
-            names.add(text)
-    return names
-
-
-def _normalize_task_runtime_start_input(
+def _validate_tool_late_result_policy(
+    spec: ToolSpec,
     *,
-    task_type: str,
-    input_data: dict,
-    available_task_types: set[str],
-) -> dict[str, Any]:
-    """Normalize common model aliases for built-in task starts."""
+    max_wait_timeout_seconds: float = TOOL_MAX_WAIT_TIMEOUT_SECONDS,
+) -> None:
+    """校验 Tool 的 late result 策略声明。
 
-    normalized_type = task_type
-    normalized_input = dict(input_data)
-    if task_type in {"timer", "timer_task", "reminder", "alarm", "countdown", "计时器", "倒计时", "提醒", "闹钟"}:
-        if "timer_task" in available_task_types:
-            normalized_type = "timer_task"
-            normalized_input = _normalize_timer_task_input(normalized_input)
-    return {"task_type": normalized_type, "input_data": normalized_input}
+    主要逻辑：
+    1. `forbidden` 工具必须保证不会超窗，等价于 `fail_fast` 的短超时约束。
+    2. `background` 工具必须不在 `BACKGROUND_FORBIDDEN_TOOL_NAMES` 中，并且
+       `background_timeout_seconds`（若声明）必须大于等待窗口。
+    参数：`spec` 为工具规格。
+    返回值：无。
+    异常情况：策略非法时抛出 `ToolError`。
+    """
 
-
-def _normalize_timer_task_input(input_data: dict) -> dict:
-    """Map provider-friendly timer/reminder fields to the sample timer_task contract."""
-
-    normalized = dict(input_data)
-    seconds = normalized.get("seconds")
-    if seconds is None:
-        seconds = normalized.get("duration_seconds")
-    if seconds is None:
-        seconds = normalized.get("delay_seconds")
-    if seconds is None:
-        seconds = normalized.get("timeout_seconds")
-    if seconds is not None:
-        normalized["seconds"] = int(float(seconds))
-    message = str(normalized.get("message") or normalized.get("notify_text") or normalized.get("text") or "").strip()
-    if message:
-        normalized["message"] = message
-        normalized["notify_text"] = message
-    normalized.setdefault("auto_fire", True)
-    return normalized
+    policy = spec.late_result_policy
+    if policy not in {"background", "fail_fast", "forbidden"}:
+        raise ToolError(
+            f"invalid late_result_policy: {policy}",
+            code=ErrorCode.INVALID_ARGUMENT,
+            details={"tool": spec.name, "late_result_policy": policy},
+        )
+    if policy == "background":
+        if spec.name in BACKGROUND_FORBIDDEN_TOOL_NAMES:
+            raise ToolError(
+                f"tool {spec.name} must not declare late_result_policy=background",
+                code=ErrorCode.PROTOCOL_ERROR,
+                details={"tool": spec.name},
+            )
+        if spec.background_timeout_seconds is not None:
+            background_timeout = float(spec.background_timeout_seconds)
+            if background_timeout <= float(max_wait_timeout_seconds):
+                raise ToolError(
+                    "background_timeout_seconds must exceed wait window",
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    details={
+                        "tool": spec.name,
+                        "background_timeout_seconds": background_timeout,
+                        "wait_window_seconds": float(max_wait_timeout_seconds),
+                    },
+                )
 
 
 BOCHA_SEARCH_API_URL_DEFAULT = "https://api.bochaai.com/v1/web-search"
@@ -2594,6 +2930,9 @@ class SearchWebTool(BaseTool):
         capability_type="tool",
         tags=["search", "web"],
         progress_message=("我查一下资料。", "稍等，我搜索一下。"),
+        late_result_policy="background",
+        background_timeout_seconds=30,
+        follow_up_ttl_seconds=300,
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -3066,7 +3405,7 @@ class QueryRoutePlanInput(BaseModel):
 
     destination: str = Field(description="用户想去的目的地名称、地址或经纬度。")
     origin: str = Field(default="当前位置", description="导航起点；可填地址、地点名、经纬度或“当前位置”。传入“当前位置”时会先请求端侧定位。")
-    timeout_seconds: float = Field(default=3, gt=0, description="路线规划整体最大等待时间，单位秒。")
+    timeout_seconds: float = Field(default=45, gt=0, description="路线规划在后台的整体最大耗时预算，单位秒。该工具是后台能力：超过 3 秒未完成会先返回“正在规划”，结果稍后送达。")
 
 
 class QueryRoutePlanOutput(BaseModel):
@@ -3095,6 +3434,9 @@ class QueryRoutePlanTool(BaseTool):
         capability_type="mcp",
         tags=["navigation", "amap", "mcp"],
         progress_message=("我先规划一下路线。", "稍等，我查一下怎么走。"),
+        late_result_policy="background",
+        background_timeout_seconds=60,
+        follow_up_ttl_seconds=300,
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -3110,7 +3452,8 @@ class QueryRoutePlanTool(BaseTool):
 
         destination = str(input_data.get("destination") or "").strip()
         origin = str(input_data.get("origin") or "当前位置").strip() or "当前位置"
-        timeout_seconds = float(input_data.get("timeout_seconds") or 8)
+        # 后台能力：整体耗时预算放宽到后台总超时量级，前台 3 秒窗口由 ToolExecutor 负责。
+        timeout_seconds = float(input_data.get("timeout_seconds") or 45)
         deadline = time.monotonic() + timeout_seconds
         if not destination:
             return ToolResult.failed(ToolError("destination is required", code=ErrorCode.INVALID_ARGUMENT))
@@ -3692,6 +4035,9 @@ class McpCallTool(BaseTool):
         input_model=Input,
         capability_type="mcp",
         tags=["mcp"],
+        late_result_policy="background",
+        background_timeout_seconds=30,
+        follow_up_ttl_seconds=300,
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
@@ -3708,7 +4054,8 @@ class McpCallTool(BaseTool):
 
 BUILTIN_TOOLS = (
     QueryDeviceStateTool,
-    TaskRuntimeManagerTool,
+    ToolRunManagerTool,
+    TimerTool,
     CloseAudioSessionTool,
     SearchWebTool,
     QuerySystemTimeTool,
@@ -3725,7 +4072,7 @@ EXTENSION_BUILTIN_TOOLS = (
 )
 
 SYSTEM_CONTEXT_TOOL_NAMES = {
-    TaskRuntimeManagerTool.spec.name,
+    ToolRunManagerTool.spec.name,
     MemorySearchTool.spec.name,
     ManageMemoryTool.spec.name,
     SearchConversationHistoryTool.spec.name,

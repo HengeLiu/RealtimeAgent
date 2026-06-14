@@ -6,7 +6,6 @@ from pathlib import Path
 import pytest
 
 from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
-from realtime_agent.tasks import BaseTask, TaskAutoDiscovery
 from realtime_agent.tools import BaseTool, ToolAutoDiscovery, ToolError
 
 
@@ -18,11 +17,11 @@ def clear_capabilities_modules() -> None:
             sys.modules.pop(name, None)
 
 
-def test_example_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_path) -> None:
+def test_example_app_auto_discovery_registers_tool(monkeypatch, tmp_path) -> None:
     """测试目标：确认开发者新增能力后不修改 server 内部代码即可自动注册。
 
-    测试方法：临时创建 app-root 能力包，配置 Tool / Task 递归发现 `capabilities`。
-    预期结果：`capture_photo` Tool 和 `timer` Task 都进入注册表。
+    测试方法：临时创建 app-root 能力包，配置 Tool 递归发现 `capabilities`。
+    预期结果：`capture_photo` Tool 进入注册表（Task 已并入 Tool，不再有独立 Task 发现）。
     """
 
     fixture_root = tmp_path / "example_app"
@@ -35,12 +34,6 @@ def test_example_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_pa
         "    name = 'capture_photo'\n",
         encoding="utf-8",
     )
-    (capability_root / "tasks.py").write_text(
-        "from realtime_agent.tasks import BaseTask\n"
-        "class TimerTask(BaseTask):\n"
-        "    task_type = 'timer'\n",
-        encoding="utf-8",
-    )
 
     clear_capabilities_modules()
     monkeypatch.syspath_prepend(str(fixture_root))
@@ -50,15 +43,11 @@ def test_example_app_auto_discovery_registers_tool_and_tasks(monkeypatch, tmp_pa
         tools_discover_enabled=True,
         tools_discover_packages=("capabilities",),
         tools_discover_recursive=True,
-        tasks_discover_enabled=True,
-        tasks_discover_packages=("capabilities",),
-        tasks_discover_recursive=True,
     )
 
     app = RealtimeAgentApp(config)
 
     assert "capture_photo" in app.tool_registry.list_names()
-    assert "timer" in app.task_engine.registry.list_task_types()
     assert app.discovery_errors == []
 
 
@@ -66,7 +55,7 @@ def test_example_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_
     """测试目标：冻结示例应用开发者自动发现契约。
 
     测试方法：临时生成能力包，包含内部类和重复名称。
-    预期结果：内部类不注册，重复 Tool / Task 名称 fail fast。
+    预期结果：内部类不注册，重复 Tool 名称 fail fast。
     """
 
     pkg = tmp_path / "capabilities"
@@ -82,34 +71,21 @@ def test_example_app_discovery_contract_skips_internal_and_fails_duplicates(tmp_
         "    name = 'hidden_tool'\n",
         encoding="utf-8",
     )
-    (feature / "task.py").write_text(
-        "from realtime_agent.tasks import BaseTask\n"
-        "class DemoTask(BaseTask):\n"
-        "    task_type = 'demo_task'\n",
-        encoding="utf-8",
-    )
     clear_capabilities_modules()
     monkeypatch.syspath_prepend(str(tmp_path))
 
     tools = ToolAutoDiscovery().discover(["capabilities"], recursive=True)
-    tasks = TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
     assert [tool.name for tool in tools] == ["demo_tool"]
-    assert [task.task_type for task in tasks] == ["demo_task"]
 
     (feature / "duplicate.py").write_text(
         "from realtime_agent.tools import BaseTool\n"
-        "from realtime_agent.tasks import BaseTask\n"
         "class DuplicateTool(BaseTool):\n"
-        "    name = 'demo_tool'\n"
-        "class DuplicateTask(BaseTask):\n"
-        "    task_type = 'demo_task'\n",
+        "    name = 'demo_tool'\n",
         encoding="utf-8",
     )
     with pytest.raises(ToolError, match="duplicate tool name"):
         ToolAutoDiscovery().discover(["capabilities"], recursive=True)
-    with pytest.raises(Exception, match="duplicate task_type"):
-        TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
 
 def test_device_app_demo_files_are_copyable() -> None:

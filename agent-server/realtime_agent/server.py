@@ -444,10 +444,10 @@ class RealtimeAgentHttpServer:
         return web.json_response(self.audio_app.output_service.debug_snapshot())
 
     async def debug_tasks(self, request: web.Request) -> web.Response:
-        """返回 Task Core 调试快照。
+        """返回后台 Tool Run 调试快照。
 
-        主要逻辑：列出 TaskRef、最近 TaskSignal 和调度等待项，用于排查 Task actor
-        是否启动、是否进入终态以及最近一次 dispatch 结果。
+        主要逻辑：列出 Tool Run 的状态、结果策略和 follow-up 决策，用于排查 background
+        工具是否进入终态、late result 走了哪条回流通道。
         参数：可选 query `user_id` 和 `include_terminal`。
         返回值：JSON response。
         异常情况：无。
@@ -455,32 +455,25 @@ class RealtimeAgentHttpServer:
 
         user_id = request.query.get("user_id") or None
         include_terminal = request.query.get("include_terminal", "true").lower() not in {"0", "false", "no"}
-        tasks = []
-        for ref in self.audio_app.task_engine.list_tasks(user_id=user_id, include_terminal=include_terminal):
-            signals = self.audio_app.task_engine.store.signals_for_task(ref.task_id)
-            tasks.append(
+        store = getattr(self.audio_app.tool_gateway, "tool_run_store", None)
+        runs = []
+        for run in (store.list_runs() if store is not None else []):
+            if user_id is not None and run.user_id != user_id:
+                continue
+            if not include_terminal and run.is_terminal:
+                continue
+            runs.append(
                 {
-                    "task_id": ref.task_id,
-                    "task_type": ref.task_type,
-                    "state": ref.state,
-                    "summary": ref.summary,
-                    "metadata": dict(ref.metadata),
-                    "recent_signals": [
-                        {
-                            "signal_name": signal.signal_name,
-                            "payload": dict(signal.payload),
-                            "created_at": signal.created_at,
-                        }
-                        for signal in signals[-5:]
-                    ],
+                    "tool_run_id": run.run_id,
+                    "tool_name": run.tool_name,
+                    "state": run.state,
+                    "result_policy": run.result_policy,
+                    "created_at": run.created_at,
+                    "updated_at": run.updated_at,
+                    "follow_up": dict(run.follow_up),
                 }
             )
-        return web.json_response(
-            {
-                "tasks": tasks,
-                "scheduled_signals": self.audio_app.task_engine.list_scheduled_signals(),
-            }
-        )
+        return web.json_response({"tool_runs": runs})
 
     async def control_ws(self, request: web.Request) -> web.WebSocketResponse:
         """处理控制 WebSocket。

@@ -294,15 +294,6 @@ class ToolConfig:
 
 
 @dataclass(frozen=True)
-class TaskConfig:
-    enabled: bool = False
-    max_running_per_user: int = 16
-    store: dict[str, Any] = field(default_factory=lambda: {"type": "memory", "root": "runs/default-app/tasks"})
-    discover: DiscoveryConfig = field(default_factory=DiscoveryConfig)
-    extra: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True)
 class DevChecksConfig:
     run_package_check: bool = True
     run_boundary_check: bool = True
@@ -338,7 +329,6 @@ class RealtimeAgentYamlConfig:
     agent: AgentConfig = field(default_factory=AgentConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     tools: ToolConfig = field(default_factory=ToolConfig)
-    tasks: TaskConfig = field(default_factory=TaskConfig)
     memory: MemoryConfig = field(default_factory=MemoryConfig)
     skill: SkillConfig = field(default_factory=SkillConfig)
     mcp: McpConfig = field(default_factory=McpConfig)
@@ -383,7 +373,6 @@ def load_yaml_config(path: str | Path) -> RealtimeAgentYamlConfig:
         ),
         output=OutputConfig(**data.get("output", {})),
         tools=_tool_config(data.get("tools", {"enabled": True})),
-        tasks=_task_config(data.get("tasks", {})),
         memory=_memory_config(data.get("memory", {})),
         skill=SkillConfig(**_known(data.get("skill", {}), {"enabled", "roots", "allow_tool_policy"})),
         mcp=McpConfig(
@@ -514,21 +503,6 @@ def _tool_config(data: dict[str, Any]) -> ToolConfig:
     return ToolConfig(**values, discover=discover, extra=extra)
 
 
-def _task_config(data: dict[str, Any]) -> TaskConfig:
-    raw = dict(data or {})
-    discover = _discovery(raw.pop("discover", {}))
-    known = {"enabled", "max_running_per_user", "store"}
-    values = {key: raw.pop(key) for key in list(raw.keys()) if key in known}
-    extra = dict(raw)
-    extra["discover"] = {
-        "enabled": discover.enabled,
-        "packages": list(discover.packages),
-        "recursive": discover.recursive,
-        "fail_fast": discover.fail_fast,
-    }
-    return TaskConfig(**values, discover=discover, extra=extra)
-
-
 def _dev_checks(data: dict[str, Any]) -> dict[str, Any]:
     raw = dict(data or {})
     raw.pop("run_contract_tests", None)
@@ -544,7 +518,7 @@ def _apply_path_defaults(data: dict[str, Any]) -> dict[str, Any]:
     """按统一运行根目录补齐派生路径。
 
     主要逻辑：把 `paths.runtime_root` 作为唯一需要理解的运行目录，未显式配置的
-    users、assets、memory、tasks 和 preflight 路径都从它派生；老配置已写明的子路径
+    users、assets、memory 和 preflight 路径都从它派生；老配置已写明的子路径
     不会被覆盖。
     参数：`data` 为 YAML 解析后的原始配置。
     返回值：补齐派生路径后的配置字典。
@@ -573,11 +547,6 @@ def _apply_path_defaults(data: dict[str, Any]) -> dict[str, Any]:
 
     memory = data.setdefault("memory", {})
     memory.setdefault("path", runtime_root)
-
-    tasks = data.setdefault("tasks", {})
-    store = tasks.setdefault("store", {})
-    if str(store.get("type") or "").strip().lower() == "jsonl":
-        store.setdefault("root", f"{runtime_root}/tasks")
 
     dev_checks = data.setdefault("dev_checks", {})
     dev_checks.pop("contract_tests_path", None)

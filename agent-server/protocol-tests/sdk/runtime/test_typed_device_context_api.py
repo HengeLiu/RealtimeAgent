@@ -94,7 +94,7 @@ def test_tool_context_exposes_typed_facades_and_blocks_streaming(tmp_path) -> No
 
     with pytest.raises(Exception) as exc:
         context.devices.sensors.rgb.stream()
-    assert "only available in TaskContext" in str(exc.value)
+    assert "only available to background tools" in str(exc.value)
 
 
 def test_sensor_one_requires_unique_matching_device(tmp_path) -> None:

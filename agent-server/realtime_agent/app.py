@@ -16,6 +16,9 @@ from realtime_agent.conversation.runtime import (
     ConversationRuntimeDependencies,
     build_conversation_runtime,
 )
+from realtime_agent.conversation.follow_up import FollowUpRouter, OmniFollowUpInjector, VlFollowUpInjector
+from realtime_agent.pending_notification import JsonlPendingNotificationStore, PendingNotification
+from realtime_agent.tool_run import JsonlToolRunStore
 from realtime_agent.control import ControlService, DeviceAuthenticator, DeviceConnection
 from realtime_agent.mcp import McpGateway
 from realtime_agent.memory import JsonlMemoryStore, LlmMemoryManagementAgent, MemoryManagementAgent, MemoryService
@@ -24,21 +27,14 @@ from realtime_agent.output import OutputService, TtsProviderConfig
 from realtime_agent.protocol import SERVER_PRODUCER_ID, Event, StreamChunk, StreamFormat, new_id
 from realtime_agent.skills import SkillService
 from realtime_agent.stream import StreamHandle, StreamService
-from realtime_agent.tasks import BUILTIN_TASKS, JsonlTaskStore, TaskAutoDiscovery, TaskEngine, TaskSignalBridge, TaskStore
 from realtime_agent.tools import (
-    AssetFacade,
     BUILTIN_TOOLS,
     EXTENSION_BUILTIN_TOOLS,
-    OutputFacade,
-    SYSTEM_CONTEXT_TOOL_NAMES,
-    TaskStartTool,
     ToolAutoDiscovery,
     ToolContextFactory,
     ToolGateway,
     ToolPolicy,
     ToolRegistry,
-    TaskDeviceFacade,
-    DeviceRuntime,
 )
 
 
@@ -169,13 +165,6 @@ class RealtimeAgentConfig:
     tools_denylist: tuple[str, ...] = ()
     tools_default_timeout_seconds: float = 3.0
     tools_max_wait_timeout_seconds: float = 3.0
-    tasks_discover_enabled: bool = False
-    tasks_discover_packages: tuple[str, ...] = ()
-    tasks_discover_recursive: bool = False
-    tasks_discover_fail_fast: bool = True
-    tasks_max_running_per_user: int = 16
-    tasks_store_type: str = "memory"
-    tasks_store_root: str | None = None
     memory_enabled: bool = False
     memory_store_type: str = "jsonl"
     memory_path: str = "runs/default-app"
@@ -217,9 +206,6 @@ class RealtimeAgentConfig:
                     "tools_discover_enabled": True,
                     "tools_discover_packages": packages,
                     "tools_discover_recursive": True,
-                    "tasks_discover_enabled": True,
-                    "tasks_discover_packages": packages,
-                    "tasks_discover_recursive": True,
                 }
             )
         return replace(config, **updates)
@@ -329,13 +315,6 @@ class RealtimeAgentConfig:
             tools_denylist=tuple(loaded.tools.denylist),
             tools_default_timeout_seconds=loaded.tools.default_timeout_seconds,
             tools_max_wait_timeout_seconds=loaded.tools.max_wait_timeout_seconds,
-            tasks_discover_enabled=loaded.tasks.discover.enabled,
-            tasks_discover_packages=tuple(loaded.tasks.discover.packages),
-            tasks_discover_recursive=loaded.tasks.discover.recursive,
-            tasks_discover_fail_fast=loaded.tasks.discover.fail_fast,
-            tasks_max_running_per_user=loaded.tasks.max_running_per_user,
-            tasks_store_type=str(loaded.tasks.store.get("type") or "memory"),
-            tasks_store_root=loaded.tasks.store.get("root"),
             memory_enabled=memory_enabled,
             memory_store_type=loaded.memory.store_type,
             memory_path=loaded.memory.path,
@@ -441,33 +420,7 @@ class RealtimeAgentApp:
             tool_progress_ttl_seconds=self.config.output_tool_progress_ttl_seconds,
             endpoint_ack_timeout_seconds=self.config.output_endpoint_ack_timeout_seconds,
         )
-        self.task_engine = TaskEngine(
-            store=_build_task_store(self.config),
-            bridge=TaskSignalBridge(
-                recorder=self.recorder,
-                output_service=self.output_service,
-                control_service=self.control_service if self.config.agent_mode == "vision" else None,
-            ),
-            device_context_factory=lambda user_id: TaskDeviceFacade(
-                context=DeviceRuntime(user_id=user_id, app=self, allow_long_running=True)
-            ),
-            output_context_factory=lambda user_id: OutputFacade(user_id=user_id, app=self),
-            asset_context_factory=lambda user_id: AssetFacade(user_id=user_id, app=self),
-            max_running_per_user=self.config.tasks_max_running_per_user,
-        )
         self.discovery_errors: list[dict[str, str]] = []
-        for task_cls in BUILTIN_TASKS:
-            self.task_engine.register(task_cls)
-        if self.config.tasks_discover_enabled:
-            task_discovery = TaskAutoDiscovery()
-            for task_cls in task_discovery.discover(
-                list(self.config.tasks_discover_packages),
-                recursive=self.config.tasks_discover_recursive,
-                fail_fast=self.config.tasks_discover_fail_fast,
-            ):
-                self.task_engine.register(task_cls)
-            self.discovery_errors.extend(task_discovery.errors)
-        self.task_engine.restore_unfinished()
         self.memory_service = MemoryService(
             enabled=self.config.memory_enabled,
             store=JsonlMemoryStore(_memory_root(self.config)),
@@ -506,47 +459,23 @@ class RealtimeAgentApp:
                     continue
                 self.tool_registry.register(tool)
             self.discovery_errors.extend(tool_discovery.errors)
-        builtin_task_types = {task_cls.spec().task_type for task_cls in BUILTIN_TASKS}
-        task_infos = sorted(
-            self.task_engine.list_task_types(),
-            key=lambda item: (str(item.get("task_type") or "") not in builtin_task_types, str(item.get("task_type") or "")),
-        )
-        for task_info in task_infos:
-            task_type = str(task_info.get("task_type") or "").strip()
-            if not task_type:
-                continue
-            task_cls = self.task_engine.registry.get(task_type)
-            task_spec = task_cls.spec()
-            start_tool_name = task_spec.start_tool_name or str(task_info.get("start_tool_name") or "")
-            if start_tool_name in self.tool_registry.list_names() and task_type not in builtin_task_types:
-                fallback_tool_name = f"start_{task_type}"
-                start_tool_name = fallback_tool_name if fallback_tool_name not in self.tool_registry.list_names() else start_tool_name
-            if start_tool_name in self.tool_registry.list_names():
-                continue
-            start_tool = TaskStartTool(
-                task_type=task_type,
-                description=str(getattr(task_cls, "description", "") or f"启动 {task_type} 后台任务。"),
-                input_model=task_spec.input_model,
-                tool_name=start_tool_name,
-                timeout_seconds=task_spec.start_result_timeout_seconds,
-            )
-            self.tool_registry.register(start_tool)
-            SYSTEM_CONTEXT_TOOL_NAMES.add(start_tool.resolved_spec().name)
+        runs_root = Path(getattr(self.recorder, "runs_root", "runs/default-app"))
         self.tool_gateway = ToolGateway(
             registry=self.tool_registry,
             policy=ToolPolicy(allowlist=list(self.config.tools_allowlist), denylist=list(self.config.tools_denylist)),
             context_factory=ToolContextFactory(
                 app=self,
-                task_engine=self.task_engine,
                 memory_service=self.memory_service,
                 skill_service=self.skill_service,
                 mcp_gateway=self.mcp_gateway,
             ),
             recorder=self.recorder,
             skill_service=self.skill_service,
+            tool_run_store=JsonlToolRunStore(runs_root / "tool-runs"),
             default_timeout_seconds=self.config.tools_default_timeout_seconds,
             max_wait_timeout_seconds=self.config.tools_max_wait_timeout_seconds,
         )
+        self.pending_notification_store = JsonlPendingNotificationStore(runs_root / "tool-runs" / "pending_notifications.jsonl")
         omni_config = self._build_omni_provider_config()
         self.agent_core = build_conversation_runtime(
             config=ConversationRuntimeBuildConfig(
@@ -607,6 +536,7 @@ class RealtimeAgentApp:
         if hasattr(self.agent_core, "bind_pipeline_event_handler"):
             self.agent_core.bind_pipeline_event_handler(self._handle_runtime_control_event)
         self.vision_agent_core = self.agent_core
+        self._wire_follow_up_router()
         self.audio_pipeline = RuntimeAudioInputBoundary(
             audio_consumer=self.agent_core,
             config=RuntimeAudioPipelineConfig(
@@ -624,6 +554,86 @@ class RealtimeAgentApp:
         self._active_device_by_user: dict[str, str] = {}
         self._device_dialogs_by_user: dict[str, DeviceDialogState] = {}
         self.output_service.add_output_finished_listener(self._handle_output_finished)
+
+    def _wire_follow_up_router(self) -> None:
+        """装配 late result follow-up 路由。
+
+        主要逻辑：把后台 Tool Run 完成回调接到 FollowUpRouter；按当前 agent_mode 绑定
+        VL（文本驱动 turn）注入通道，并让 turn 完成后 flush 排队的 late result。
+        Omni 链路的注入通道在后续阶段接入。
+        返回值：无。
+        异常情况：无。
+        """
+
+        core = getattr(self.agent_core, "core", self.agent_core)
+        self.follow_up_router = FollowUpRouter(
+            store=self.tool_gateway.tool_run_store,
+            recorder=self.recorder,
+            output_service=self.output_service,
+            on_session_closed=self._record_pending_notification,
+        )
+        agent_mode = _normalize_agent_mode(self.config.agent_mode)
+        if hasattr(core, "inject_followup_result") and hasattr(core, "is_session_active"):
+            injector = OmniFollowUpInjector(core) if agent_mode == "omni" else VlFollowUpInjector(core)
+            self.follow_up_router.bind_injector(injector)
+        if hasattr(core, "bind_follow_up_flush"):
+            core.bind_follow_up_flush(self.follow_up_router.flush)
+        self.tool_gateway.set_background_complete_handler(self.follow_up_router.on_tool_run_complete)
+        self._recover_interrupted_tool_runs()
+
+    def _has_active_tool_run(self, user_id: str) -> bool:
+        """判断某用户是否有仍在后台等待结果的 Tool Run。"""
+
+        store = getattr(getattr(self, "tool_gateway", None), "tool_run_store", None)
+        if store is None:
+            return False
+        for run in store.list_non_terminal():
+            if run.user_id == user_id and run.state in {"running", "reported_running"}:
+                return True
+        return False
+
+    def _record_pending_notification(self, completion: Any) -> None:
+        """会话关闭时把 late result 写入待通知存储，等下次唤醒注入。"""
+
+        self.pending_notification_store.add(
+            PendingNotification.create(
+                user_id=completion.user_id,
+                session_id=completion.session_id,
+                run_id=completion.run_id,
+                tool_name=completion.tool_name,
+                text=completion.text,
+                source=completion.source,
+                ttl_seconds=max(0.0, (completion.follow_up_deadline_at or 0.0) - time.time()) if completion.follow_up_deadline_at else 0.0,
+            )
+        )
+
+    def _recover_interrupted_tool_runs(self) -> None:
+        """服务重启后失败化悬挂 Tool Run，并生成“查询中断”待通知。
+
+        主要逻辑：重启会丢失后台 runner，running/reported_running 的运行无法继续；
+        统一置 failed(reason=server_restart)，并为可回流的运行写一条待通知，下次唤醒
+        告知用户上次查询已中断。
+        """
+
+        store = self.tool_gateway.tool_run_store
+        for run in store.list_non_terminal():
+            if run.state == "running":
+                store.try_transition(run.run_id, from_states={"running"}, to_state="failed", metadata={"error": {"reason": "server_restart"}})
+            elif run.state == "reported_running":
+                store.try_transition(run.run_id, from_states={"reported_running"}, to_state="failed", metadata={"error": {"reason": "server_restart"}})
+            else:
+                continue
+            self.recorder.record_agent_event(run.session_id, {"event": "tool_run.failed", "tool_run_id": run.run_id, "tool_name": run.tool_name, "reason": "server_restart"})
+            self.pending_notification_store.add(
+                PendingNotification.create(
+                    user_id=run.user_id,
+                    session_id=run.session_id,
+                    run_id=run.run_id,
+                    tool_name=run.tool_name,
+                    text=f"（系统通知）刚才发起的{run.tool_name or '查询'}因为服务重启中断了，没有完成。如果还需要，请重新告诉我。",
+                    source="tool_run",
+                )
+            )
 
     def _build_omni_provider_config(self) -> RealtimeProviderConfig:
         """构造 Omni Realtime provider 配置。
@@ -764,8 +774,9 @@ class RealtimeAgentApp:
             self.control_service.publish(event)
             broker = getattr(self, "_command_result_broker", None)
             if broker is not None:
+                # 端侧命令回报只进 CommandResultBroker；background 工具在自己的协程里通过
+                # CommandHandle.results() 内联消费回报，不再转换成 task.event.* 事件。
                 broker.record(event)
-            self._handle_device_command_report(event)
             return
         if event.event_name == "control.audio_session.opened":
             if event.stream_id and event.stream_type:
@@ -1085,6 +1096,41 @@ class RealtimeAgentApp:
             self.agent_core.open(user_id, session_id)
         except Exception as exc:  # noqa: BLE001 - provider 建连失败要收敛成会话关闭动作
             self._handle_agent_session_open_failed(user_id, session_id, exc)
+            return
+        self._inject_pending_notifications(user_id, session_id)
+
+    def _inject_pending_notifications(self, user_id: str, session_id: str) -> None:
+        """会话打开时把未过期待通知作为上下文消息注入，等模型首轮提及。
+
+        主要逻辑：消费待通知存储中该用户未过期条目，写入 messages（事件
+        `tool_result.pending_notification`），让首轮上下文携带 late result。过期条目
+        在消费时被丢弃，不再打扰用户。
+        """
+
+        store = getattr(self, "pending_notification_store", None)
+        if store is None:
+            return
+        for notification in store.consume_unexpired(user_id):
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": notification.text,
+                    "event": "tool_result.pending_notification",
+                    "source": "pending_notification",
+                    "tool_run_id": notification.run_id,
+                },
+            )
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool_run.follow_up.wake_injected",
+                    "tool_run_id": notification.run_id,
+                    "tool_name": notification.tool_name,
+                    "channel": "wake_context",
+                },
+            )
 
     def _handle_agent_session_open_failed(self, user_id: str, session_id: str, exc: Exception) -> None:
         """把 provider 建连失败收敛为一次会话关闭请求。
@@ -1409,61 +1455,6 @@ class RealtimeAgentApp:
             },
         )
 
-    def _handle_device_command_report(self, event: Event) -> None:
-        """把端侧命令回报转换为 Task actor 事件。
-
-        主要逻辑：phone 视觉任务等端侧执行能力只通过
-        `command.*` 事件回报 started / progress / completed /
-        failed。这里根据 payload.task_id 把回报转换成 `task.event.*`，
-        由对应 Task 实例决定如何处理，而不暴露 device_id 点对点 RPC。
-        参数：`event` 为端侧上报的命令事件。
-        返回值：无。
-        异常情况：找不到 task 时忽略，避免普通端侧命令回执影响控制面。
-        """
-
-        payload = dict(event.payload or {})
-        command_id = str(payload.get("command_id") or "").strip()
-        broker = getattr(self, "_command_result_broker", None)
-        command_metadata = broker.metadata_for(command_id) if broker is not None and command_id else {}
-        payload = {**command_metadata, **payload}
-        task_id = str(payload.get("task_id") or "").strip()
-        if not task_id:
-            return
-        try:
-            ref = self.task_engine.query(task_id)
-        except Exception:
-            return
-
-        task_type = str(payload.get("task_type") or ref.task_type)
-        task_event_name = {
-            "command.accepted": "task.event.status",
-            "command.progress": "task.event.process",
-            "command.completed": "task.event.finish",
-            "command.failed": "task.event.error",
-        }[event.event_name]
-        task_payload = {
-            "task_id": task_id,
-            "task_type": task_type,
-            "producer_id": event.producer_id,
-            "command_event_name": event.event_name,
-            "cause": {"domain": "command", "event": event.event_name, "producer_id": event.producer_id},
-            **payload,
-        }
-        if event.event_name == "command.failed":
-            message = str(payload.get("message") or "")
-            task_payload.setdefault("raw_error", message)
-            if payload.get("user_message") is None and payload.get("text") is None:
-                task_payload["message"] = "端侧任务执行失败"
-        self.task_engine.dispatch_event(
-            Event(
-                event_name=task_event_name,
-                producer_id=SERVER_PRODUCER_ID,
-                user_id=event.user_id,
-                session_id=self._event_device_id(event),
-                payload=task_payload,
-            )
-        )
-
     def _finalize_audio_session(self, user_id: str, *, reason: str) -> None:
         """释放 endpoint 已确认关闭的音频会话。"""
 
@@ -1532,6 +1523,13 @@ class RealtimeAgentApp:
                     continue
                 if current - state.last_activity_at <= self.config.audio_session_idle_timeout_seconds:
                     continue
+                if self._has_active_tool_run(user_id):
+                    # 用户仍在等待后台工具结果时延后 idle 关闭，避免结果回来时会话已关。
+                    self.recorder.record_agent_event(
+                        state.device_id,
+                        {"event": "audio_session.idle_close.deferred", "user_id": user_id, "reason": "active_tool_run"},
+                    )
+                    continue
                 self.close_audio_session(user_id, reason="audio_session_idle_timeout", mode="close_now")
                 closed_sessions.append(state.device_id)
         if self.config.audio_session_max_duration_seconds > 0:
@@ -1595,24 +1593,6 @@ def _normalize_runtime_config(config: RealtimeAgentConfig) -> RealtimeAgentConfi
         omni_prompt=_with_memory_instructions(config.omni_prompt, enabled=True),
         vision_prompt=_with_memory_instructions(config.vision_prompt, enabled=True),
     )
-
-
-def _build_task_store(config: RealtimeAgentConfig) -> TaskStore:
-    """按配置创建 TaskStore。
-
-    主要逻辑：默认使用内存 store；配置为 `jsonl` 时写入可恢复任务日志。
-    参数：`config` 为 RealtimeAgentConfig。
-    返回值：TaskStore 实例。
-    异常情况：未知类型时抛出 ValueError。
-    """
-
-    store_type = (config.tasks_store_type or "memory").strip().lower()
-    if store_type == "memory":
-        return TaskStore()
-    if store_type == "jsonl":
-        root = config.tasks_store_root or str(Path(config.runs_root) / "tasks")
-        return JsonlTaskStore(root)
-    raise ValueError(f"unsupported task store type: {config.tasks_store_type}")
 
 
 def _memory_root(config: RealtimeAgentConfig) -> str | Path:

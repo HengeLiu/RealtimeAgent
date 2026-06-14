@@ -14,7 +14,6 @@ from realtime_agent.conversation.core.base import (
     ConversationAgentCore,
     ConversationContext,
     ConversationOutputAdapter,
-    TaskSignal,
 )
 from realtime_agent.conversation.config import ConversationRuntimeConfig
 from realtime_agent.conversation.turn import OutputInterruptionController, RealtimeTurnController
@@ -43,5 +42,4 @@ __all__ = [
     "OutputInterruptionController",
     "RealtimeTurnController",
     "SpeechInputDelta",
-    "TaskSignal",
 ]

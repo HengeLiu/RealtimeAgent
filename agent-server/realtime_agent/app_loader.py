@@ -63,9 +63,6 @@ def apply_app_launch(config: RealtimeAgentConfig, launch: AppLaunch) -> Realtime
                 "tools_discover_enabled": True,
                 "tools_discover_packages": packages,
                 "tools_discover_recursive": True,
-                "tasks_discover_enabled": True,
-                "tasks_discover_packages": packages,
-                "tasks_discover_recursive": True,
             }
         )
     return replace(config, **updates)

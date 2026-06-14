@@ -1,5 +1,8 @@
 # Task Core 开发计划
 
+> **状态：已被取代。** Task 概念正在按 [Tool与Task概念统一实施计划.md](Tool与Task概念统一实施计划.md) 退役；
+> 本文仅在迁移期作为旧实现参考。
+
 本文基于 [TaskCore设计.md](TaskCore设计.md)，拆分 `realtime-agent` Task Core 的实现步骤。目标是先建立稳定的 Task actor 内核，再迁移端侧命令、计时器和示例任务，避免后台执行、事件路由和业务任务改造同时落地导致排障困难。
 
 ## 1. 实施原则

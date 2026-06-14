@@ -2832,6 +2832,154 @@ def test_qwen_omni_tool_result_is_injected_back_to_conversation() -> None:
     assert any(record.get("event") == "omni.tool_result.ready" for record in records)
 
 
+class _FollowupFakeConversation:
+    """记录 follow-up 队列下发的 fake conversation。"""
+
+    def __init__(self) -> None:
+        self.items: list[dict] = []
+        self.responses: list[dict] = []
+
+    def create_item(self, item: dict) -> None:
+        self.items.append(item)
+
+    def create_response(self, **kwargs) -> None:
+        self.responses.append(kwargs)
+
+
+def _make_followup_provider(conversation):
+    """构造已绑定 fake conversation 的 Qwen adapter，返回 (provider, records)。"""
+
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
+
+    records: list[dict] = []
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        tool_call_done=lambda record: {
+            "tool_call_id": record["tool_call_id"],
+            "name": record["name"],
+            "ok": True,
+        },
+    )
+    return provider, records
+
+
+def test_qwen_omni_followup_queue_serializes_multiple_tool_results() -> None:
+    """测试目标：多个工具结果的 follow-up 按 FIFO 在每次 response.done 后逐条下发。
+
+    测试方法：连续触发两次工具调用（不夹 response.done），再发两次 response.done。
+    预期结果：两次工具结果都入队不互相覆盖；每次 response.done 只创建一个 follow-up，
+    最终创建两次。
+    """
+
+    conversation = _FollowupFakeConversation()
+    provider, records = _make_followup_provider(conversation)
+
+    provider._handle_provider_event({"type": "response.function_call_arguments.done", "call_id": "call-1", "name": "tool_a", "arguments": "{}"})
+    provider._handle_provider_event({"type": "response.function_call_arguments.done", "call_id": "call-2", "name": "tool_b", "arguments": "{}"})
+
+    # 两个工具结果都已回填，但 follow-up 尚未创建。
+    assert [item["call_id"] for item in conversation.items] == ["call-1", "call-2"]
+    assert conversation.responses == []
+    assert len(provider._pending_tool_followup_responses) == 2
+
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
+    assert len(conversation.responses) == 1
+    assert len(provider._pending_tool_followup_responses) == 1
+
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
+    assert len(conversation.responses) == 2
+    assert not provider._pending_tool_followup_responses
+
+
+def test_qwen_omni_running_tool_result_enqueues_running_followup() -> None:
+    """测试目标：status=running 的工具结果回填后 follow-up 使用“仍在处理”指令。
+
+    测试方法：让 tool_call_done 返回 status=running，触发工具完成与 response.done。
+    预期结果：follow-up response 的 instructions 含“后台处理/稍后”语义，不声称已完成。
+    """
+
+    from realtime_agent.conversation.core.omni_host import QwenOmniRealtimeAdapter
+
+    conversation = _FollowupFakeConversation()
+    records: list[dict] = []
+    provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
+    provider._conversation = conversation
+    provider._output_modalities = ["text", "audio"]
+    provider._callbacks = RealtimeProviderCallbacks(
+        audio_delta=lambda audio, fmt, metadata: None,
+        audio_done=lambda metadata: None,
+        provider_event=records.append,
+        error=lambda message, record: records.append({"event": "error", "message": message, **record}),
+        tool_call_done=lambda record: {
+            "tool_call_id": record["tool_call_id"],
+            "name": record["name"],
+            "ok": True,
+            "status": "running",
+            "message": "工具已启动，仍在后台处理，结果稍后送达。",
+        },
+    )
+
+    provider._handle_provider_event({"type": "response.function_call_arguments.done", "call_id": "call-r", "name": "query_route_plan", "arguments": "{}"})
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
+
+    assert len(conversation.responses) == 1
+    instructions = conversation.responses[0]["instructions"]
+    assert "后台处理" in instructions or "稍后" in instructions
+    assert "不要假装已经拿到结果" in instructions
+
+
+def test_qwen_omni_submit_followup_instructions_idle_creates_immediately() -> None:
+    """测试目标：late result 注入入口在无活跃 response 时立即下发。
+
+    测试方法：会话空闲（无活跃 response）时调用 submit_followup_instructions。
+    预期结果：返回 True，立即创建一个 follow-up response。
+    """
+
+    conversation = _FollowupFakeConversation()
+    provider, records = _make_followup_provider(conversation)
+
+    ok = provider.submit_followup_instructions(
+        instructions="刚才的路线已查到：步行约 800 米。请用一句中文告诉用户。",
+        tool_name="query_route_plan",
+    )
+    assert ok is True
+    assert len(conversation.responses) == 1
+    assert "步行约 800 米" in conversation.responses[0]["instructions"]
+
+
+def test_qwen_omni_submit_followup_instructions_waits_for_active_response() -> None:
+    """测试目标：存在活跃 response 时 late result 注入不抢发，等 response.done 再下发。"""
+
+    conversation = _FollowupFakeConversation()
+    provider, records = _make_followup_provider(conversation)
+    provider._active_response = True
+
+    ok = provider.submit_followup_instructions(instructions="late result", tool_name="query_route_plan")
+    assert ok is True
+    # 活跃 response 期间不创建。
+    assert conversation.responses == []
+    assert len(provider._pending_tool_followup_responses) == 1
+
+    provider._handle_provider_event({"type": "response.done", "status": "completed"})
+    assert len(conversation.responses) == 1
+
+
+def test_qwen_omni_submit_followup_instructions_returns_false_when_closed() -> None:
+    """测试目标：会话已关闭时 late result 注入返回 False，让上层走待通知路径。"""
+
+    provider, records = _make_followup_provider(conversation=None)
+    provider._conversation = None
+
+    ok = provider.submit_followup_instructions(instructions="late result", tool_name="query_route_plan")
+    assert ok is False
+
+
 def test_qwen_omni_close_audio_session_tool_does_not_create_followup_response() -> None:
     """测试目标：验证关闭会话工具不会再触发 Realtime follow-up response。
 
@@ -2903,12 +3051,14 @@ def test_qwen_omni_tool_followup_skips_when_conversation_closed() -> None:
     records = []
     provider = QwenOmniRealtimeAdapter(RealtimeProviderConfig(provider="qwen", model="fake-omni", prompt="继续回答"))
     provider._conversation = None
-    provider._pending_tool_followup_response = {
-        "instructions": "继续回答",
-        "output_modalities": ["text", "audio"],
-        "tool_call_id": "call-closed",
-        "tool_name": "echo_realtime",
-    }
+    provider._pending_tool_followup_responses.append(
+        {
+            "instructions": "继续回答",
+            "output_modalities": ["text", "audio"],
+            "tool_call_id": "call-closed",
+            "tool_name": "echo_realtime",
+        }
+    )
     provider._callbacks = RealtimeProviderCallbacks(
         audio_delta=lambda audio, fmt, metadata: None,
         audio_done=lambda metadata: None,
@@ -3370,7 +3520,7 @@ def test_qwen_omni_capture_photo_appends_image_bytes(tmp_path) -> None:
     ]
     assert conversation.commits == 1
     assert conversation.responses == []
-    assert provider._pending_tool_followup_response is None
+    assert not provider._pending_tool_followup_responses
     append_record = next(record for record in records if record.get("event") == "omni.capture_photo.image_appended")
     assert append_record["image_path"] == str(image_path.resolve())
     assert append_record["image_sha256"] == "4c84c82bf54f47daa25a64cc46cb553c7c073ecc64c9f8b40287301cc3bf3407"
@@ -3447,7 +3597,7 @@ def test_qwen_omni_capture_photo_accepts_uri_field_for_image_path(tmp_path) -> N
     assert conversation.audios == ["AQI="]
     assert conversation.videos == ["/9hicm93c2VyLXBob3RvLXVyaf/Z"]
     assert conversation.commits == 1
-    assert provider._pending_tool_followup_response is None
+    assert not provider._pending_tool_followup_responses
     assert not any(record.get("event") == "omni.capture_photo.image_append.missing_image" for record in records)
 
 

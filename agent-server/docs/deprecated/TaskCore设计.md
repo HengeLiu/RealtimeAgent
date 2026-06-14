@@ -1,5 +1,8 @@
 # realtime-agent Task Core 设计
 
+> **状态：已被取代。** Tool Run 机制落地后，Task 不再作为一等概念维护，其职责并入 Tool；
+> 取代文档见 [Tool与Task概念统一设计.md](Tool与Task概念统一设计.md)。本文仅在迁移期作为旧实现参考。
+
 本文面向当前新版 `realtime-agent`，说明 Task Core 的目标架构、当前实现边界和后续演进要求。文档统一使用当前 `realtime_agent` 实现中的名称，例如 `TaskEngine`、`TaskRef`、`TaskSignal`、`TaskSignalBridge`、`TaskStartTool`、`TaskRuntimeManagerTool`、`TaskContext` 和 `command.*`。
 
 ## 1. 文档定位

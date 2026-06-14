@@ -14,7 +14,6 @@ from realtime_agent.conversation import (
     ConversationMemoryService,
     ConversationRuntimeConfig,
     SpeechInputDelta,
-    TaskSignal,
 )
 from realtime_agent.conversation.core import ConversationContext
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
@@ -113,18 +112,16 @@ def test_conversation_context_carries_agent_context_fields() -> None:
 def test_agent_core_abc_exposes_design_level_methods() -> None:
     """测试目标：验证 AgentCoreABC 覆盖抽象架构设计文档中的核心接口。
 
-    测试方法：检查 Protocol 上的 `open/consume_input/consume_task_signal/interrupt/close/snapshot`
-    方法，并构造 `TaskSignal` 与 `AgentSnapshot`。
-    预期结果：AgentCore 抽象可以表达任务信号回流和状态快照，不再只有旧 runtime
-    兼容入口。
+    测试方法：检查 Protocol 上的 `open/consume_input/interrupt/close/snapshot` 方法，
+    并构造 `AgentSnapshot`。late result 回流已统一由 FollowUpRouter 承载，AgentCore
+    不再暴露 Task 信号入口。
+    预期结果：AgentCore 抽象可以表达会话生命周期和状态快照。
     """
 
-    for method_name in ("open", "consume_input", "consume_task_signal", "interrupt", "close", "snapshot"):
+    for method_name in ("open", "consume_input", "interrupt", "close", "snapshot"):
         assert hasattr(AgentCoreABC, method_name)
-    signal = TaskSignal(kind="task.progress", session_id="session-a", user_id="user-a", payload={"step": 1})
     snapshot = AgentSnapshot(user_id="user-a", session_id="session-a", mode="vision", state="thinking")
 
-    assert signal.payload["step"] == 1
     assert snapshot.state == "thinking"
 
 

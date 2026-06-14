@@ -120,22 +120,6 @@ class ConversationContext:
 
 
 @dataclass(frozen=True, slots=True)
-class TaskSignal:
-    """AgentCore 可消费的任务信号抽象。
-
-    主要功能：表达长生命周期 Task 回流给 Agent 的结构化信号。真实 Task 系统仍可
-    使用 `realtime_agent.tasks.TaskSignal`，这里提供 conversation 抽象层的最小稳定
-    契约，避免 AgentCore 直接依赖具体 Task actor。
-    """
-
-    kind: str
-    session_id: str
-    user_id: str | None = None
-    payload: Mapping[str, Any] = field(default_factory=dict)
-    metadata: Mapping[str, Any] = field(default_factory=dict)
-
-
-@dataclass(frozen=True, slots=True)
 class AgentSnapshot:
     """AgentCore 状态快照。
 
@@ -165,9 +149,6 @@ class AgentCoreABC(Protocol):
 
     def consume_input(self, delta: SpeechInputDelta) -> None:
         """消费标准输入增量。"""
-
-    def consume_task_signal(self, signal: TaskSignal) -> None:
-        """消费长生命周期 Task 回流信号。"""
 
     def interrupt(self, user_id: str, *, reason: str = "user_speech") -> None:
         """请求中断当前输出或生成。"""

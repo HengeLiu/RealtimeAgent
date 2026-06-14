@@ -31,9 +31,6 @@ tools:
     recursive: true
     fail_fast: true
 
-tasks:
-  enabled: false
-
 mcp:
   enabled: false
 

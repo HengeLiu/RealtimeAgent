@@ -44,7 +44,7 @@ def package_check(argv: list[str] | None = None) -> None:
         except Exception as exc:
             errors.append(f"entry point import failed: {name}={target}: {type(exc).__name__}: {exc}")
     package = importlib.import_module("realtime_agent")
-    public_names = ["RealtimeAgentApp", "RealtimeAgentConfig", "BaseTool", "BaseTask", "ToolResult", "TaskSignal", "ToolDeviceFacade", "TaskDeviceFacade"]
+    public_names = ["RealtimeAgentApp", "RealtimeAgentConfig", "BaseTool", "ToolResult", "ToolDeviceFacade", "BackgroundDeviceFacade"]
     missing = [name for name in public_names if not hasattr(package, name)]
     errors.extend(f"missing public export: {name}" for name in missing)
 

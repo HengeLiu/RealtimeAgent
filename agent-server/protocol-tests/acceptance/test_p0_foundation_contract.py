@@ -9,7 +9,6 @@ import pytest
 
 from realtime_agent.config import load_yaml_config
 from realtime_agent.errors import ErrorCode
-from realtime_agent.tasks import BaseTask, TaskAutoDiscovery, TaskSignal, TaskRegistry
 from realtime_agent.tools import BaseTool, ToolAutoDiscovery, ToolError, ToolRegistry, ToolResult
 
 
@@ -51,34 +50,6 @@ def test_tool_result_public_contract_fields() -> None:
     }
 
 
-def test_task_signal_public_decision_and_notify_flags() -> None:
-    """测试目标：冻结 TaskSignal 的 Agent 决策和直达通知开关。
-
-    测试方法：构造默认信号和需要 Agent 决策的信号。
-    预期结果：默认允许直接通知，复杂信号可显式要求 Agent 决策。
-    """
-
-    default_signal = TaskSignal(
-        task_id="task-1",
-        task_type="timer",
-        signal_name="task.completed",
-        user_id="user-1",
-    )
-    decision_signal = TaskSignal(
-        task_id="task-2",
-        task_type="navigation",
-        signal_name="navigation.decision.required",
-        user_id="user-1",
-        requires_agent_decision=True,
-        allow_direct_notify=False,
-    )
-
-    assert default_signal.requires_agent_decision is False
-    assert default_signal.allow_direct_notify is True
-    assert decision_signal.requires_agent_decision is True
-    assert decision_signal.allow_direct_notify is False
-
-
 def test_discovery_config_and_dev_checks_fields_are_loaded() -> None:
     """测试目标：确认配置支持 P0 自动发现和 dev_checks 新字段。
 
@@ -91,14 +62,12 @@ def test_discovery_config_and_dev_checks_fields_are_loaded() -> None:
 
     assert config.tools.discover.recursive is True
     assert config.tools.discover.fail_fast is True
-    assert config.tasks.discover.recursive is True
-    assert config.tasks.discover.fail_fast is True
     assert config.dev_checks.report_path == "examples/simple-agent-server/runs/preflight.json"
     assert config.dev_checks.require_recent_playback_ok is False
 
 
 def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path, monkeypatch) -> None:
-    """测试目标：验证 Tool / Task 自动发现的 P0 行为。
+    """测试目标：验证 Tool 自动发现的 P0 行为。
 
     测试方法：临时创建嵌套包，包含根模块、子模块、内部类和重复名称。
     预期结果：递归扫描能发现子模块类，内部类被跳过，重复名称会 fail fast。
@@ -109,11 +78,8 @@ def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path,
     sub.mkdir(parents=True)
     (pkg / "__init__.py").write_text(
         "from realtime_agent.tools import BaseTool\n"
-        "from realtime_agent.tasks import BaseTask\n"
         "class RootTool(BaseTool):\n"
         "    name = 'root_tool'\n"
-        "class RootTask(BaseTask):\n"
-        "    task_type = 'root_task'\n"
         "class _InternalTool(BaseTool):\n"
         "    name = 'internal_tool'\n",
         encoding="utf-8",
@@ -121,34 +87,24 @@ def test_auto_discovery_recurses_skips_internal_and_fails_on_duplicate(tmp_path,
     (sub / "__init__.py").write_text("", encoding="utf-8")
     (sub / "feature.py").write_text(
         "from realtime_agent.tools import BaseTool\n"
-        "from realtime_agent.tasks import BaseTask\n"
         "class NestedTool(BaseTool):\n"
-        "    name = 'nested_tool'\n"
-        "class NestedTask(BaseTask):\n"
-        "    task_type = 'nested_task'\n",
+        "    name = 'nested_tool'\n",
         encoding="utf-8",
     )
     monkeypatch.syspath_prepend(str(tmp_path))
 
     tools = ToolAutoDiscovery().discover(["demo_pkg"], recursive=True)
-    tasks = TaskAutoDiscovery().discover(["demo_pkg"], recursive=True)
 
     assert {tool.name for tool in tools} == {"root_tool", "nested_tool"}
-    assert {task.task_type for task in tasks} == {"root_task", "nested_task"}
 
     (sub / "duplicate.py").write_text(
         "from realtime_agent.tools import BaseTool\n"
-        "from realtime_agent.tasks import BaseTask\n"
         "class DuplicateTool(BaseTool):\n"
-        "    name = 'nested_tool'\n"
-        "class DuplicateTask(BaseTask):\n"
-        "    task_type = 'nested_task'\n",
+        "    name = 'nested_tool'\n",
         encoding="utf-8",
     )
     with pytest.raises(ToolError, match="duplicate tool name"):
         ToolAutoDiscovery().discover(["demo_pkg"], recursive=True)
-    with pytest.raises(Exception, match="duplicate task_type"):
-        TaskAutoDiscovery().discover(["demo_pkg"], recursive=True)
 
 
 def test_discovery_records_import_errors_when_not_fail_fast(tmp_path, monkeypatch) -> None:
@@ -178,9 +134,9 @@ def test_discovery_records_import_errors_when_not_fail_fast(tmp_path, monkeypatc
 
 
 def test_registry_duplicate_names_fail_fast() -> None:
-    """测试目标：确认注册表自身也拒绝重复 Tool / Task 名称。
+    """测试目标：确认注册表拒绝重复 Tool 名称。
 
-    测试方法：注册两个同名 Tool 和两个同 task_type Task。
+    测试方法：注册两个同名 Tool。
     预期结果：第二次注册抛出结构化协议错误。
     """
 
@@ -190,21 +146,11 @@ def test_registry_duplicate_names_fail_fast() -> None:
     class SecondTool(BaseTool):
         name = "same_tool"
 
-    class FirstTask(BaseTask):
-        task_type = "same_task"
-
-    class SecondTask(BaseTask):
-        task_type = "same_task"
-
     tool_registry = ToolRegistry()
-    task_registry = TaskRegistry()
     tool_registry.register(FirstTool())
-    task_registry.register(FirstTask)
 
     with pytest.raises(ToolError, match="duplicate tool name"):
         tool_registry.register(SecondTool())
-    with pytest.raises(Exception, match="duplicate task_type"):
-        task_registry.register(SecondTask)
 
 
 def test_preflight_generates_p0_json_report(tmp_path) -> None:

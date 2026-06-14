@@ -2773,6 +2773,41 @@ class OutputService:
             )
         )
 
+    def notify_tool_run(
+        self,
+        *,
+        user_id: str,
+        session_id: str,
+        text: str,
+        tool_name: str = "",
+        tool_run_id: str = "",
+        priority: str = "normal",
+        ttl_seconds: float = 0,
+        dedupe_key: str | None = None,
+    ) -> NotificationDecision:
+        """直通播报一次后台 Tool Run 的 late result（不经模型组织）。
+
+        主要逻辑：把工具结果文本交给 NotificationCoordinator 统一仲裁，由其按优先级、
+        TTL 和打断策略决定是否播报；只接收已经安全的用户可听文案。
+        参数：`text` 为用户可听文案；其余为可观测和仲裁参数。
+        返回值：`NotificationDecision`。
+        异常情况：下游输出失败时向上抛出。
+        """
+
+        return self.notification_coordinator.submit(
+            NotificationRequest(
+                user_id=user_id,
+                session_id=session_id,
+                text=text,
+                priority=priority,
+                ttl_seconds=ttl_seconds,
+                dedupe_key=dedupe_key,
+                allow_direct_notify=True,
+                requires_agent_context_sync=False,
+                metadata={"tool_run_id": tool_run_id, "tool_name": tool_name, "channel": "tool_run_direct"},
+            )
+        )
+
     def submit_output(self, intent: OutputItem, text: str) -> None:
         """提交完整文本输出。
 
@@ -2781,7 +2816,7 @@ class OutputService:
         DashScope 流式任务尚未启动而在 `streaming_complete()` 阶段失败。
         参数：`intent` 为内部输出意图，`text` 为完整播报文本。
         返回值：无。
-        异常情况：TTS 合成或 stream 写入失败时向上抛出，由 TaskSignalBridge 记录系统错误。
+        异常情况：TTS 合成或 stream 写入失败时向上抛出，由调用方记录系统错误。
         """
 
         if not text:

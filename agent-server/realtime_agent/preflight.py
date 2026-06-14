@@ -160,14 +160,11 @@ def _package_import_check() -> dict:
         "RealtimeAgentApp",
         "RealtimeAgentConfig",
         "RealtimeAgentError",
-        "BaseTask",
         "BaseTool",
-        "TaskSignal",
-        "TaskRef",
         "ToolError",
         "ToolResult",
         "ToolDeviceFacade",
-        "TaskDeviceFacade",
+        "BackgroundDeviceFacade",
     ]
     errors: list[str] = []
     try:
@@ -204,8 +201,6 @@ def _config_validation_check(config: RealtimeAgentYamlConfig) -> dict:
         errors.append(f"unsupported agent.mode: {config.agent.mode}")
     if config.tools.discover.enabled and not config.tools.discover.recursive:
         errors.append("tools.discover.recursive should be true for developer app roots")
-    if config.tasks.discover.enabled and not config.tasks.discover.recursive:
-        errors.append("tasks.discover.recursive should be true for developer app roots")
     return {"name": "config_validation", "ok": not errors, "errors": errors}
 
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from realtime_agent.conversation.core.omni_host import OmniRealtimeAgentCore
-from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext
 from realtime_agent.conversation.core.loop import OmniRealtimeLoop
 from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary, SileroSpeechInputBoundary
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
@@ -165,23 +165,6 @@ class OmniManualConversationRuntime:
         """
 
         self._consume_speech_delta(delta)
-
-    def consume_task_signal(self, signal: TaskSignal) -> None:
-        """消费长生命周期 Task 回流信号。
-
-        当前 Omni Manual provider 尚未支持把 TaskSignal 直接注入模型会话；先写入
-        conversation 事件，保证信号不会静默丢失，后续可在 AgentLoop 内按策略转成
-        provider item 或输出 delta。
-        """
-
-        self.emitter.emit(
-            "task_signal_received",
-            user_id=signal.user_id or "",
-            session_id=signal.session_id,
-            kind=signal.kind,
-            payload=dict(signal.payload),
-            metadata=dict(signal.metadata),
-        )
 
     def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
         """兼容旧 AgentCore 输入提交入口。"""

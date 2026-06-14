@@ -3,7 +3,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from realtime_agent.tasks import TaskAutoDiscovery
 from realtime_agent.tools import ToolAutoDiscovery
 
 
@@ -27,10 +26,8 @@ def test_dev_support_example_exists_with_capability_package(monkeypatch) -> None
     monkeypatch.syspath_prepend(str(app_root))
 
     tools = ToolAutoDiscovery().discover(["capabilities"], recursive=True)
-    tasks = TaskAutoDiscovery().discover(["capabilities"], recursive=True)
 
     assert {tool.name for tool in tools} == set()
-    assert {task.task_type for task in tasks} == set()
 
 
 def test_device_playback_acceptance_and_artifact_schema_exist() -> None:

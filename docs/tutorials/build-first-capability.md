@@ -1,11 +1,14 @@
-# 第一个 Tool 和 Task
+# 第一个能力工具
 
-`realtime-agent` 推荐把业务能力分成 Tool 和 Task。
+`realtime-agent` 把所有模型可调用能力统一表达为 **Tool**。一次能力调用由 SDK 建模成一个可
+追踪的 Tool Run：
 
-- **Tool**：一次性短动作，例如拍照、查路线、搜索资料。
-- **Task**：持续或后台动作，例如找物、红绿灯观察、计时器、导航执行过程。
+- **前台短能力**（默认 `fail_fast`）：拍照、查时间、查当前位置等，模型等待结果后继续当前回复。
+- **后台能力**（`late_result_policy="background"`）：找物、导航路线、联网搜索、计时器等耗时不
+  稳定的能力。调用先返回“正在处理”，结果就绪后由系统按会话状态送回模型组织回复或直接播报。
 
-开发者不需要直接操作 WebSocket。业务代码通过 SDK 注入的 Context API 使用设备能力。
+开发者只需实现 `BaseTool`，能力差异由 `ToolSpec` 声明。不需要直接操作 WebSocket，业务代码通过
+SDK 注入的 Context API 使用设备能力。（历史上的 Task 概念已并入 Tool，不再单独维护。）
 
 ## 应用目录结构
 
@@ -17,7 +20,6 @@ examples/<your-app>/agent-server/
   capabilities/
     __init__.py
     tools.py
-    tasks.py
 ```
 
 当前可参考最小 server 配置：
@@ -73,48 +75,67 @@ class CapturePhotoTool(BaseTool):
 3. 图片字节通过 stream 上传，Tool 返回资产引用。
 4. 用户可听输出应通过 `context.output.say()` 或 ToolResult message 表达。
 
-## 写一个 Task
+## 写一个后台能力工具
 
-Task 适合处理持续动作或后台动作。SDK 已经内置 `timer_task`，默认会暴露
-`start_timer_task` 给模型，用于倒计时、稍后提醒和到点提示。下面的简化代码展示
-自定义 Task 的结构，业务应用可以按同样方式实现自己的后台任务：
+耗时不稳定或需要持续运行的能力声明 `late_result_policy="background"`。调用超过等待窗口
+（默认 3 秒）未完成时，工具先返回“正在处理”，模型据此告诉用户稍候；结果就绪后由 SDK 的
+FollowUpRouter 按会话状态送回模型或直接播报。SDK 已内置 `start_timer` 工具用于倒计时、稍后
+提醒和到点提示。下面是一个等效的后台计时能力示例：
 
 ```python
+import asyncio
+
 from pydantic import BaseModel, Field
 
-from realtime_agent import BaseTask, TaskContext
+from realtime_agent import BaseTool, ToolContext, ToolResult, ToolSpec
 
 
-class TimerTaskInput(BaseModel):
+class TimerInput(BaseModel):
     """计时器启动参数。"""
 
-    seconds: int = Field(ge=1, description="计时器时长，单位秒。")
-    message: str = Field(default="", description="计时结束时播报给用户的话。")
+    seconds: int = Field(ge=0, description="计时时长，单位秒。")
+    message: str = Field(default="", description="到点时播报给用户的话。")
 
 
-class TimerTask(BaseTask):
-    """到点后通过 Output Service 播报提醒。"""
+class TimerTool(BaseTool):
+    """后台等待指定秒数后到点提醒。"""
 
-    task_type = "timer_task"
-    description = "启动计时器后台任务。"
-    input_model = TimerTaskInput
+    spec = ToolSpec(
+        name="start_timer",
+        description="启动计时器：倒计时、稍后提醒或到点提示。",
+        input_model=TimerInput,
+        late_result_policy="background",   # 超窗转后台，结果稍后送达
+        late_result_notify="direct",        # 到点直接播报，不必再经模型组织
+        cancel_supported=True,              # 可经 tool_run_manager 取消
+        running_message="计时器已开始计时。",
+    )
 
-    async def on_start(self, context: TaskContext) -> None:
-        """启动计时器。"""
+    def background_timeout_seconds_for(self, input_data: dict) -> float:
+        """按计时秒数给后台总超时预算留出余量。"""
 
-        input_data = dict(context.metadata.get("input") or {})
-        seconds = int(input_data["seconds"])
-        message = input_data.get("message") or "时间到了"
-        await context.schedule_signal("timer.due", delay_seconds=seconds, payload={"message": message})
+        return float(input_data.get("seconds") or 0) + 30.0
+
+    async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
+        """后台等待到点并返回提醒文案。"""
+
+        seconds = max(0, int(input_data.get("seconds") or 0))
+        message = str(input_data.get("message") or "").strip() or "时间到了。"
+        if seconds > 0:
+            await asyncio.sleep(seconds)
+        return ToolResult.success(message=message)
 ```
 
-真实任务还需要处理完成、失败、取消和通知。建议先在自己的 app-root 下补充
-`capabilities/tasks.py`，再通过自动发现注册。
+要点：
 
+1. background 工具的 `run()` 在后台 runner 上执行，可以驻留较久、`await` 设备命令或定时。
+2. 需要持续 stream 或长命令时，background 工具的 `context.devices` 自动获得长命令能力，可用
+   `handle = await context.devices.commands.start(...)` 并 `async for event in handle.results()`
+   内联消费端侧回报；被取消时在 `except asyncio.CancelledError` 中清理端侧资源。
+3. 取消、查询、列出后台运行由内置 `tool_run_manager` 工具承载。
 
 ## 让 SDK 发现能力
 
-示例应用通过 `server.yaml` 配置 Tool / Task 自动发现。开发者把 `BaseTool` 或 `BaseTask` 子类放进配置的包里，启动时 SDK 会扫描并注册。
+示例应用通过 `server.yaml` 配置 Tool 自动发现。开发者把 `BaseTool` 子类放进配置的包里，启动时 SDK 会扫描并注册。
 
 检查配置：
 

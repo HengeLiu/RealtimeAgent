@@ -17,7 +17,6 @@ from realtime_agent.conversation.turn import RealtimeTurnController
 from realtime_agent.output import AssistantTextDelta
 from realtime_agent.output.service import OutputItem
 from realtime_agent.protocol import Event, StreamChunk
-from realtime_agent.tasks import BaseTask, TaskSignal
 from realtime_agent.tools import BaseTool, ToolContext, ToolResult
 
 
@@ -1929,59 +1928,3 @@ def test_vision_agent_injects_latest_message_summary_without_duplicate_history(t
     assert model.messages[0][-1]["role"] == "user"
 
 
-class DemoTask(BaseTask):
-    """测试用 Task。"""
-
-    task_type = "demo_task"
-
-    async def on_start(self, context) -> None:
-        """测试目标：验证 TaskSignal 只能通过 bridge 回流。
-
-        测试方法：启动时提交一个 requires_agent_decision 信号。
-        预期结果：TaskSignalBridge 写入 task-signals 和 agent-events。
-        """
-
-        context.bridge.handle_signal(
-            TaskSignal(
-                task_id=context.task_ref.task_id,
-                task_type=context.task_ref.task_type,
-                signal_name="demo.needs_agent",
-                user_id=context.user_id,
-                session_id=context.session_id,
-                payload={"step": "started"},
-                requires_agent_decision=True,
-                allow_direct_notify=False,
-            )
-        )
-
-
-def test_task_engine_create_query_cancel_and_agent_event_bridge(tmp_path) -> None:
-    """测试目标：验证 TaskEngine 支持 create/query/cancel 和 TaskSignalBridge 回流 Agent。
-
-    测试方法：注册 DemoTask 后创建任务，任务启动时发出 requires_agent_decision 事件。
-    预期结果：任务进入 started 状态后可查询和取消，runs 中写入 task signal 与 agent context sync 事件。
-    """
-
-    import asyncio
-
-    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
-    app.task_engine.register(DemoTask)
-
-    ref = asyncio.run(
-        app.task_engine.create(
-            task_type="demo_task",
-            user_id="user-task",
-            session_id="sess-task",
-            input_data={"goal": "check"},
-        )
-    )
-
-    assert app.task_engine.query(ref.task_id).state == "started"
-    cancelled = asyncio.run(app.task_engine.cancel(ref.task_id, reason="test_done"))
-    assert cancelled.state == "cancelled"
-
-    session_dir = tmp_path / "runs" / "user-task" / "sess-task"
-    agent_events = (session_dir / "agent-events.jsonl").read_text(encoding="utf-8")
-    task_signals = (session_dir / "task-signals.jsonl").read_text(encoding="utf-8")
-    assert "task.requires_agent_context_sync" in agent_events
-    assert "demo.needs_agent" in task_signals

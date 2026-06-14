@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from realtime_agent.conversation.core.vision_host import VisionRealtimeAgentCore
-from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext, TaskSignal
+from realtime_agent.conversation.core.base import AgentCoreEvent, AgentSnapshot, ConversationContext
 from realtime_agent.conversation.core.loop import VlAgentLoop
 from realtime_agent.conversation.events import ConversationRuntimeEventEmitter
 from realtime_agent.conversation.input import AsrSpeechInputBoundary, CallbackVisualInputBoundary
@@ -170,22 +170,6 @@ class VisionConversationRuntime:
         """
 
         self._consume_speech_delta(delta)
-
-    def consume_task_signal(self, signal: TaskSignal) -> None:
-        """消费长生命周期 Task 回流信号。
-
-        当前 VL conversation runtime 尚未把 TaskSignal 直接注入下一轮 VLM 上下文；
-        先写入 conversation 事件，保证信号进入 runs 并可被后续 loop 策略接管。
-        """
-
-        self.emitter.emit(
-            "task_signal_received",
-            user_id=signal.user_id or "",
-            session_id=signal.session_id,
-            kind=signal.kind,
-            payload=dict(signal.payload),
-            metadata=dict(signal.metadata),
-        )
 
     def commit_input(self, user_id: str, session_id: str, *, reason: str = "endpoint_commit") -> None:
         """兼容旧 AgentCore 输入提交入口。"""

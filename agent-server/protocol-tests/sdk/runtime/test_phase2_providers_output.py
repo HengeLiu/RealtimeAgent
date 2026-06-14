@@ -5,7 +5,6 @@ from realtime_agent.app import RealtimeAgentApp, RealtimeAgentConfig
 from realtime_agent.output import AssistantTextDelta
 from realtime_agent.output.service import NotificationRequest, OutputItem, MockStreamingTTS, OutputService, TtsProviderConfig
 from realtime_agent.protocol import Event, StreamChunk, StreamFormat
-from realtime_agent.tasks import TaskSignal, TaskSignalBridge
 
 
 class Connection:
@@ -704,37 +703,6 @@ def test_cached_prompt_audio_reuses_audio_and_records_wav(tmp_path) -> None:
         assert handle.getframerate() == 16000
         assert handle.getnchannels() == 1
         assert handle.getnframes() > 0
-
-
-def test_notification_coordinator_respects_task_signal_notify_and_agent_sync(tmp_path) -> None:
-    """测试目标：验证 TaskSignal 能区分直接通知和 Agent 上下文同步。
-
-    测试方法：构造一个禁止直接播报、但要求 Agent 决策的任务信号，经 TaskSignalBridge 处理。
-    预期结果：不产生端侧音频，task signal 和 agent sync 事件都会写入 runs。
-    """
-
-    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
-    connection = Connection("dev-playback")
-    register_speaker(app, connection)
-    bridge = TaskSignalBridge(recorder=app.recorder, output_service=app.output_service)
-    signal = TaskSignal(
-        task_id="task-nav-001",
-        task_type="navigation",
-        signal_name="reroute_required",
-        user_id="user-001",
-        session_id="sess-task",
-        payload={"text": "需要重新规划路线"},
-        requires_agent_decision=True,
-        allow_direct_notify=False,
-    )
-
-    bridge.handle_signal(signal)
-
-    assert connection.chunks == []
-    task_signals = session_text(app, "sess-task", "task-signals.jsonl")
-    agent_events = session_text(app, "sess-task", "agent-events.jsonl")
-    assert "reroute_required" in task_signals
-    assert "task.requires_agent_context_sync" in agent_events
 
 
 def test_notification_dedupe_and_merge_decisions_are_observable(tmp_path) -> None:

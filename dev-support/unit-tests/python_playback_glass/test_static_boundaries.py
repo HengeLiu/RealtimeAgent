@@ -18,7 +18,6 @@ def test_python_playback_glass_does_not_import_server_internal_runtime() -> None
         "RealtimeAgentApp",
         "RealtimeAgentConfig",
         "ToolGateway",
-        "TaskEngine",
         "OutputService",
         "AssetService",
         "register_device(",

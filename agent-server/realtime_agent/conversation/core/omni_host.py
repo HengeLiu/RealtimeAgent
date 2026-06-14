@@ -7,6 +7,7 @@ import math
 import os
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Protocol
@@ -143,6 +144,10 @@ def _registered_prompt_text(name: str, fallback: str) -> str:
     return asset.content if asset is not None else fallback
 
 
+# late result follow-up instructions 截断上限，过长的结果留在 messages 供下轮上下文。
+OMNI_FOLLOW_UP_INSTRUCTIONS_MAX_CHARS = 2000
+
+
 REALTIME_TOOL_CALL_PROMPT_RULE = _registered_prompt_text(
     "omni_tool_call_rules",
     (
@@ -150,6 +155,9 @@ REALTIME_TOOL_CALL_PROMPT_RULE = _registered_prompt_text(
         "在工具调用完成并收到工具结果前，不要先向用户播报“我要调用工具”“正在调用工具”“请稍等”等提示音频。"
         "永远不要向用户朗读工具名称、函数名、参数、JSON、schema、调用过程或系统实现细节。"
         "工具结果返回后，再用简短自然中文说明用户真正需要知道的结果。"
+        "如果工具结果显示仍在后台处理（status=running 或提示“稍后送达”），"
+        "就用一句话告诉用户正在处理、稍后会有结果，不要假装已经拿到结果，也不要重复调用同一个工具；"
+        "系统会在结果就绪后再次把结果交给你，由你那时再告诉用户。"
     ),
 )
 
@@ -307,7 +315,11 @@ class QwenOmniRealtimeAdapter:
         self._callbacks: RealtimeProviderCallbacks | None = None
         self._output_modalities: list[Any] = []
         self._completed_tool_call_ids: set[str] = set()
-        self._pending_tool_followup_response: dict[str, Any] | None = None
+        # follow-up response 队列：工具结果回填与 late result 注入都经由它在
+        # response.done 之后串行下发，遵守 provider“同时只有一个活跃 response”约束。
+        self._pending_tool_followup_responses: deque[dict[str, Any]] = deque()
+        # 是否有活跃 response：late result 注入只在无活跃 response 时可立即下发。
+        self._active_response = False
         self._current_response_audio_emitted = False
         self._session_updated = threading.Event()
         self._operation_lock = threading.RLock()
@@ -606,7 +618,7 @@ class QwenOmniRealtimeAdapter:
             self._conversation = None
             self._output_modalities = []
             self._completed_tool_call_ids.clear()
-            self._pending_tool_followup_response = None
+            self._pending_tool_followup_responses.clear()
             self._current_response_audio_emitted = False
             self._release_provider_slot()
 
@@ -679,6 +691,7 @@ class QwenOmniRealtimeAdapter:
         if event_type == "session.updated":
             self._session_updated.set()
         if event_type == "response.created":
+            self._active_response = True
             self._current_response_audio_emitted = False
             callbacks.provider_event(_summarize_omni_event(message))
             return
@@ -725,6 +738,7 @@ class QwenOmniRealtimeAdapter:
                 callbacks.audio_done({"provider": "qwen", "model": self.config.model, "provider_event": event_type, "response_id": response_id})
             return
         if event_type == "response.done":
+            self._active_response = False
             callbacks.provider_event(_summarize_omni_event(message))
             self._create_pending_tool_followup_response()
             self._current_response_audio_emitted = False
@@ -928,12 +942,14 @@ class QwenOmniRealtimeAdapter:
                     },
                 )
             if create_followup_response:
-                self._pending_tool_followup_response = {
-                    "instructions": response_instructions,
-                    "output_modalities": self._output_modalities or None,
-                    "tool_call_id": call_id,
-                    "tool_name": result.get("name"),
-                }
+                self._enqueue_followup_response(
+                    {
+                        "instructions": response_instructions,
+                        "output_modalities": self._output_modalities or None,
+                        "tool_call_id": call_id,
+                        "tool_name": result.get("name"),
+                    }
+                )
                 if self._callbacks:
                     self._callbacks.provider_event(
                         {
@@ -941,69 +957,127 @@ class QwenOmniRealtimeAdapter:
                             "provider": "qwen",
                             "tool_call_id": call_id,
                             "tool_name": result.get("name"),
+                            "queue_depth": len(self._pending_tool_followup_responses),
                         }
                     )
         except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
             if self._callbacks:
                 self._callbacks.error(str(exc), {"event": "omni.tool_result.inject.failed", "call_id": call_id})
 
-    def _create_pending_tool_followup_response(self) -> None:
-        """在原始 response 完成后创建工具结果后的 follow-up response。"""
+    def _enqueue_followup_response(self, pending: dict[str, Any]) -> None:
+        """把一次 follow-up response 请求加入 FIFO 队列。
 
-        if self._pending_tool_followup_response is None:
-            return
-        pending = self._pending_tool_followup_response
-        self._pending_tool_followup_response = None
+        主要逻辑：工具结果回填和 late result 注入都经由该队列，在 response.done
+        之后逐条下发，避免单槽覆盖和并发创建多个活跃 response。
+        参数：`pending` 含 instructions、output_modalities 和可观测的工具标识。
+        返回值：无。
+        异常情况：无。
+        """
+
+        with self._operation_lock:
+            self._pending_tool_followup_responses.append(dict(pending))
+
+    def submit_followup_instructions(
+        self,
+        *,
+        instructions: str,
+        output_modalities: list[Any] | None = None,
+        source: str = "follow_up_router",
+        tool_call_id: str = "",
+        tool_name: str = "",
+    ) -> bool:
+        """对外提交一次 late result follow-up 注入请求。
+
+        主要逻辑：由 FollowUpRouter 在 late result 到达时调用；只把请求入队，真正的
+        `create_response` 仍在下一次 response.done 后串行下发，保持 provider 活跃
+        response 唯一约束。会话已关闭时返回 False，让上层走待通知路径。
+        参数：`instructions` 为携带最终结果和播报指令的指令文本。
+        返回值：成功入队返回 True；会话已关闭返回 False。
+        异常情况：无。
+        """
+
         if self._conversation is None:
-            if self._callbacks:
-                self._callbacks.provider_event(
-                    {
-                        "event": "omni.tool_followup_response.skipped",
-                        "provider": "qwen",
-                        "reason": "conversation_closed",
-                        "tool_call_id": pending.get("tool_call_id"),
-                        "tool_name": pending.get("tool_name"),
-                    }
-                )
-            return
-        try:
-            with self._operation_lock:
-                conversation = self._conversation
-                if conversation is None:
-                    if self._callbacks:
-                        self._callbacks.provider_event(
-                            {
-                                "event": "omni.tool_followup_response.skipped",
-                                "provider": "qwen",
-                                "reason": "conversation_closed",
-                                "tool_call_id": pending.get("tool_call_id"),
-                                "tool_name": pending.get("tool_name"),
-                            }
-                        )
-                    return
+            return False
+        self._enqueue_followup_response(
+            {
+                "instructions": instructions,
+                "output_modalities": output_modalities if output_modalities is not None else (self._output_modalities or None),
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "source": source,
+            }
+        )
+        if self._callbacks:
+            self._callbacks.provider_event(
+                {
+                    "event": "omni.tool_followup_response.deferred",
+                    "provider": "qwen",
+                    "source": source,
+                    "tool_name": tool_name,
+                    "queue_depth": len(self._pending_tool_followup_responses),
+                }
+            )
+        # late result 可能在没有活跃 response 时到达（用户已停止说话），此时需要主动驱动一次队列。
+        self._create_pending_tool_followup_response()
+        return True
+
+    def _create_pending_tool_followup_response(self) -> None:
+        """在原始 response 完成后创建队首的 follow-up response。
+
+        主要逻辑：每次 response.done 只下发一个队首 follow-up；其产生的新 response
+        完成后会再次触发本方法，从而串行排空队列。
+        """
+
+        with self._operation_lock:
+            if not self._pending_tool_followup_responses:
+                return
+            # 已有活跃 response 时不抢发；等其 response.done 再排空，避免并发创建 response。
+            if self._active_response:
+                return
+            conversation = self._conversation
+            if conversation is None:
+                pending = self._pending_tool_followup_responses.popleft()
+                if self._callbacks:
+                    self._callbacks.provider_event(
+                        {
+                            "event": "omni.tool_followup_response.skipped",
+                            "provider": "qwen",
+                            "reason": "conversation_closed",
+                            "tool_call_id": pending.get("tool_call_id"),
+                            "tool_name": pending.get("tool_name"),
+                        }
+                    )
+                return
+            pending = self._pending_tool_followup_responses.popleft()
+            self._active_response = True
+            try:
                 conversation.create_response(
                     instructions=pending.get("instructions"),
                     output_modalities=pending.get("output_modalities"),
                 )
-            if self._callbacks:
-                self._callbacks.provider_event(
-                    {
-                        "event": "omni.tool_followup_response.created",
-                        "provider": "qwen",
-                        "tool_call_id": pending.get("tool_call_id"),
-                        "tool_name": pending.get("tool_name"),
-                    }
-                )
-        except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
-            if self._callbacks:
-                self._callbacks.error(
-                    str(exc),
-                    {
-                        "event": "omni.tool_followup_response.create.failed",
-                        "tool_call_id": pending.get("tool_call_id"),
-                        "tool_name": pending.get("tool_name"),
-                    },
-                )
+            except Exception as exc:  # noqa: BLE001 - provider SDK 异常需要转成可观测事件
+                # 创建失败时回退活跃标记，避免后续 follow-up 永久卡在队列里。
+                self._active_response = False
+                if self._callbacks:
+                    self._callbacks.error(
+                        str(exc),
+                        {
+                            "event": "omni.tool_followup_response.create.failed",
+                            "tool_call_id": pending.get("tool_call_id"),
+                            "tool_name": pending.get("tool_name"),
+                        },
+                    )
+                return
+        if self._callbacks:
+            self._callbacks.provider_event(
+                {
+                    "event": "omni.tool_followup_response.created",
+                    "provider": "qwen",
+                    "tool_call_id": pending.get("tool_call_id"),
+                    "tool_name": pending.get("tool_name"),
+                    "source": pending.get("source", "tool_result"),
+                }
+            )
 
 
 def _resolve_capture_photo_tool_image_path(result: dict[str, Any]) -> Path | None:
@@ -1110,6 +1184,17 @@ def _capture_photo_response_instructions(base: str) -> str:
 def _tool_result_followup_instructions(base: str, result: dict[str, Any]) -> str:
     """构造工具结果后的 follow-up 响应指令。"""
 
+    if str(result.get("status") or "completed") == "running":
+        rule = _registered_prompt_text(
+            "tool_result_running_followup",
+            (
+                "刚刚的操作还在后台处理，暂时没有最终结果。"
+                "本次回答只需用一句简短口语中文告诉用户正在处理、稍后会有结果，"
+                "不要假装已经拿到结果，不要重复调用同一个工具，"
+                "也不要向用户复述工具名、函数名、参数或任何内部标识。"
+            ),
+        )
+        return f"{base}\n\n{rule}"
     if result.get("ok") is not False:
         return base
     error = result.get("error") if isinstance(result.get("error"), dict) else {}
@@ -1254,6 +1339,30 @@ class MockRealtimeProviderAdapter:
         """记录取消状态。"""
 
         self.cancelled = True
+
+    def submit_followup_instructions(
+        self,
+        *,
+        instructions: str,
+        output_modalities: list[Any] | None = None,
+        source: str = "follow_up_router",
+        tool_call_id: str = "",
+        tool_name: str = "",
+    ) -> bool:
+        """记录 late result 注入请求，便于单元测试断言。"""
+
+        self.followup_instructions = getattr(self, "followup_instructions", [])
+        self.followup_instructions.append(instructions)
+        if self._callbacks is not None:
+            self._callbacks.provider_event(
+                {
+                    "event": "mock_omni.followup_instructions.submitted",
+                    "provider": "mock",
+                    "source": source,
+                    "has_instructions": bool(instructions),
+                }
+            )
+        return True
 
     def close(self, *, user_id: str, reason: str) -> None:
         """关闭 mock 会话。"""
@@ -1427,6 +1536,7 @@ class RealtimeToolBridge:
             "tool_call_id": tool_call_id,
             "name": name,
             "ok": result.ok,
+            "status": getattr(result, "status", "completed"),
             "data": result.data,
             "message": result.message,
             "error": result.error,
@@ -2181,6 +2291,97 @@ class OmniRealtimeAgentCore:
             )
         if session_id and (response_active or decision.interrupted_stream_id):
             self._set_turn_state(user_id, session_id, "interrupted", reason=reason)
+
+    def is_session_active(self, user_id: str, session_id: str) -> bool:
+        """判断某用户的 Omni 会话是否仍活跃。"""
+
+        existing = self._sessions.get(user_id)
+        return bool(existing) and existing[0] == session_id and session_id not in self._failed_sessions
+
+    def is_turn_idle(self, user_id: str, session_id: str) -> bool:
+        """判断当前是否无活跃 provider response，可立即注入 late result。"""
+
+        return session_id not in self._active_response_sessions
+
+    def inject_followup_result(self, *, user_id: str, session_id: str, text: str, run_id: str = "") -> bool:
+        """把 late result 经 instructions 注入活跃 Omni 会话并写入历史。
+
+        主要逻辑：late result 以 `role=user` 文本写入 messages（事件
+        `tool_result.late.done`），再调用 provider 的 `submit_followup_instructions`
+        驱动模型基于结果播报；instructions 携带结果与播报指令，做长度截断。
+        参数：`text` 为系统包装后的工具结果文本；`run_id` 用于可观测串联。
+        返回值：成功注入返回 True；会话不活跃或 provider 不支持时返回 False。
+        异常情况：provider 异常被吞并记录，不影响后台线程。
+        """
+
+        existing = self._sessions.get(user_id)
+        if not existing or existing[0] != session_id or session_id in self._failed_sessions:
+            return False
+        provider = existing[1]
+        submit = getattr(provider, "submit_followup_instructions", None)
+        if not callable(submit):
+            return False
+        wrapped = str(text or "").strip()
+        if not wrapped:
+            return False
+        instructions = wrapped[:OMNI_FOLLOW_UP_INSTRUCTIONS_MAX_CHARS]
+        if self.control_service is not None:
+            self.control_service.append_message(
+                user_id,
+                {
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": wrapped,
+                    "event": "tool_result.late.done",
+                    "source": "follow_up_router",
+                    "tool_run_id": run_id,
+                },
+            )
+        try:
+            ok = bool(
+                submit(
+                    instructions=instructions,
+                    source="follow_up_router",
+                    tool_name="",
+                    tool_call_id=run_id,
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 - provider 异常不应破坏后台线程
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "tool_run.follow_up.inject_failed", "tool_run_id": run_id, "message": str(exc)},
+            )
+            return False
+        if ok:
+            self.recorder.record_agent_event(
+                session_id,
+                {"event": "tool_run.follow_up.injected", "tool_run_id": run_id, "channel": "omni_instructions"},
+            )
+        return ok
+
+    def _user_id_for_session(self, session_id: str) -> str:
+        """从会话表反查 user_id。"""
+
+        for user_id, existing in self._sessions.items():
+            if existing and existing[0] == session_id:
+                return user_id
+        return ""
+
+    def bind_follow_up_flush(self, callback: Callable[[str], None]) -> None:
+        """绑定 turn 完成后的 late result flush 回调。"""
+
+        self._follow_up_flush = callback
+
+    def _notify_turn_completed(self, user_id: str, session_id: str) -> None:
+        """provider response 完成后触发排队 late result 的 flush。"""
+
+        callback = getattr(self, "_follow_up_flush", None)
+        if callback is None:
+            return
+        try:
+            callback(user_id)
+        except Exception:  # noqa: BLE001 - flush 异常不应影响 provider 回调线程
+            pass
 
     def close(self, user_id: str, reason: str) -> None:
         """关闭用户 realtime 会话。
@@ -3087,6 +3288,9 @@ class OmniRealtimeAgentCore:
             lifecycle = self._response_lifecycle_by_session.get(session_id)
             if lifecycle is not None:
                 lifecycle.state = "cancelled" if lifecycle.interrupted else "done"
+            user_id = self._user_id_for_session(session_id)
+            if user_id:
+                self._notify_turn_completed(user_id, session_id)
             return
         if event != "omni.response.created":
             return

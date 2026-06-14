@@ -21,8 +21,13 @@
 - [SDK 照片资产处理链路设计](internal/照片资产处理链路设计.md)
 - [SDK 照片资产处理链路开发计划](internal/照片资产处理链路实施计划.md)
 - [Vision 图片和视频输入设计](internal/Vision图片视频输入设计.md)
+- [Tool Run 统一异步工具调用设计](internal/ToolRun统一异步工具调用设计.md)
+- [Tool Run 统一异步工具调用实施计划](internal/ToolRun统一异步工具调用实施计划.md)
+- [Tool 与 Task 概念统一设计](internal/Tool与Task概念统一设计.md)
+- [Tool 与 Task 概念统一实施计划](internal/Tool与Task概念统一实施计划.md)
 
 ## Experiment
 
 - [VL 增量图片上下文预览压缩实验](experiment/VL模型连续提交图片实验.md)
 - [VAD 边界检测基准实验方案](experiment/VAD边界检测基准实验方案.md)
+- [Omni session 结束后工具结果注入实验](experiment/omni-session结束后工具结果注入实验.md)
