@@ -150,14 +150,7 @@ class OmniManualConversationRuntime:
         显式提交输入并创建响应。
         """
 
-        import logging
-        _log = logging.getLogger(__name__)
-        deltas = list(self.speech_boundary.append_audio(chunk))
-        if chunk.seq % 100 == 0 or deltas:
-            _log.info("append_audio_event seq=%d payload=%d deltas=%d kinds=%s",
-                      chunk.seq, len(chunk.payload), len(deltas),
-                      [d.kind for d in deltas])
-        for delta in deltas:
+        for delta in self.speech_boundary.append_audio(chunk):
             self._consume_speech_delta(delta)
 
     def consume_input(self, delta: SpeechInputDelta) -> None:

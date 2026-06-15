@@ -1,14 +1,9 @@
 from __future__ import annotations
 
-import logging
 import sys
-import threading
 import time
-from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-
-logger = logging.getLogger("realtime_agent.server")
 
 from realtime_agent.conversation.context import PromptRegistry
 from realtime_agent.asset import AssetService
@@ -367,7 +362,6 @@ class DeviceDialogState:
 class RealtimeAgentApp:
     def __init__(self, config: RealtimeAgentConfig | None = None) -> None:
         self.config = _normalize_runtime_config(config or RealtimeAgentConfig())
-        self.web_app_hooks: list[Callable] = []
         self.recorder = RunRecorder(Path(self.config.runs_root))
         self.conversation_memory = ConversationMemoryService(
             Path(self.config.runs_root),
@@ -559,8 +553,6 @@ class RealtimeAgentApp:
         self.stream_service.set_dispatcher(self)
         self._active_device_by_user: dict[str, str] = {}
         self._device_dialogs_by_user: dict[str, DeviceDialogState] = {}
-        self._wake_greeting_pending: set[str] = set()
-        self._session_open_lock = threading.Lock()
         self.output_service.add_output_finished_listener(self._handle_output_finished)
 
     def _wire_follow_up_router(self) -> None:
@@ -723,7 +715,6 @@ class RealtimeAgentApp:
         self._finalize_audio_session(snapshot.user_id, reason=reason)
 
     def publish_control_event(self, event: Event) -> None:
-        logger.info("publish_control_event: %s user=%s device=%s", event.event_name, event.user_id, event.session_id)
         if event.event_name == "control.user.wake.detected":
             self._handle_wake_detected(event)
             return
@@ -796,13 +787,6 @@ class RealtimeAgentApp:
             device_id = self._event_device_id(event)
             self._mark_audio_session_opened(event.user_id, device_id)
             self._open_agent_session(event.user_id, device_id)
-            pending = event.user_id in self._wake_greeting_pending
-            logger.info("wake_greeting check: user_id=%s pending=%s set=%s", event.user_id, pending, self._wake_greeting_pending)
-            if pending:
-                self._wake_greeting_pending.discard(event.user_id)
-                uid, did = event.user_id, device_id
-                self.loop.call_later(0.5, self._trigger_wake_greeting, uid, did)
-                logger.info("wake_greeting scheduled for user=%s device=%s", uid, did)
             return
         if event.event_name == "control.audio_session.closed":
             self.control_service.publish(event)
@@ -1108,25 +1092,45 @@ class RealtimeAgentApp:
         """
         if not session_id or not hasattr(self.agent_core, "open"):
             return
-        # Serialize concurrent open() calls (e.g. from pre-warm thread + event handler)
-        with self._session_open_lock:
-            try:
-                self.agent_core.open(user_id, session_id)
-            except Exception as exc:  # noqa: BLE001 - provider 建连失败要收敛成会话关闭动作
-                self._handle_agent_session_open_failed(user_id, session_id, exc)
-
-    def _trigger_wake_greeting(self, user_id: str, session_id: str) -> None:
-        logger.info("wake_greeting TRIGGERED for user=%s session=%s", user_id, session_id)
         try:
-            self.agent_core.create_response(
+            self.agent_core.open(user_id, session_id)
+        except Exception as exc:  # noqa: BLE001 - provider 建连失败要收敛成会话关闭动作
+            self._handle_agent_session_open_failed(user_id, session_id, exc)
+            return
+        self._inject_pending_notifications(user_id, session_id)
+
+    def _inject_pending_notifications(self, user_id: str, session_id: str) -> None:
+        """会话打开时把未过期待通知作为上下文消息注入，等模型首轮提及。
+
+        主要逻辑：消费待通知存储中该用户未过期条目，写入 messages（事件
+        `tool_result.pending_notification`），让首轮上下文携带 late result。过期条目
+        在消费时被丢弃，不再打扰用户。
+        """
+
+        store = getattr(self, "pending_notification_store", None)
+        if store is None:
+            return
+        for notification in store.consume_unexpired(user_id):
+            self.control_service.append_message(
                 user_id,
-                session_id,
-                reason="wake_greeting",
-                instructions="用户刚刚通过唤醒词激活了你，请用一句简短的中文问候语回应，比如'你好，有什么可以帮你的吗？'",
+                {
+                    "session_id": session_id,
+                    "role": "user",
+                    "content": notification.text,
+                    "event": "tool_result.pending_notification",
+                    "source": "pending_notification",
+                    "tool_run_id": notification.run_id,
+                },
             )
-            logger.info("wake_greeting create_response SUCCESS for user=%s", user_id)
-        except Exception as e:
-            logger.error("wake_greeting create_response FAILED for user=%s: %s", user_id, e)
+            self.recorder.record_agent_event(
+                session_id,
+                {
+                    "event": "tool_run.follow_up.wake_injected",
+                    "tool_run_id": notification.run_id,
+                    "tool_name": notification.tool_name,
+                    "channel": "wake_context",
+                },
+            )
 
     def _handle_agent_session_open_failed(self, user_id: str, session_id: str, exc: Exception) -> None:
         """把 provider 建连失败收敛为一次会话关闭请求。
@@ -1185,7 +1189,6 @@ class RealtimeAgentApp:
         device_id = self._event_device_id(event)
         self._active_device_by_user[event.user_id] = device_id
         self._device_dialogs_by_user[event.user_id] = DeviceDialogState(user_id=event.user_id, device_id=device_id)
-        self._wake_greeting_pending.add(event.user_id)
         self.recorder.bind_device(user_id=event.user_id, device_id=device_id)
         self.control_service.publish(
             Event(
@@ -1205,15 +1208,6 @@ class RealtimeAgentApp:
                 payload={"reason": "wake_detected"},
             )
         )
-        # Pre-warm DashScope connection in background while device processes wake.
-        # OmniRealtimeAgentCore.open() is idempotent — when audio_session.opened
-        # arrives and calls _open_agent_session again, it's a no-op if same session.
-        threading.Thread(
-            target=self._open_agent_session,
-            args=(event.user_id, device_id),
-            daemon=True,
-            name="dashscope-prewarm",
-        ).start()
 
     @staticmethod
     def _event_device_id(event: Event) -> str:

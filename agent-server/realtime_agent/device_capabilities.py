@@ -13,18 +13,16 @@ STANDARD_SUPPORT_IDS = {
     "sensor.imu",
     "sensor.tof",
     "actuator.haptic",
-    "actuator.speaker",
 }
 
 SENSOR_SUPPORT_IDS = {"sensor.rgb", "sensor.imu", "sensor.tof"}
-ACTUATOR_SUPPORT_IDS = {"actuator.haptic", "actuator.speaker"}
+ACTUATOR_SUPPORT_IDS = {"actuator.haptic"}
 
 SUPPORT_STREAM_TYPES = {
     "sensor.rgb": "sensor.rgb",
     "sensor.imu": "sensor.imu",
     "sensor.tof": "sensor.tof",
     "actuator.haptic": "actuator.haptic",
-    "actuator.speaker": "actuator.speaker",
 }
 
 DEFAULT_MODES = {
@@ -146,8 +144,6 @@ def _compile_normalized_supports_to_routes(normalized: list[dict[str, Any]]) -> 
             routes.append({"event": "stream.output.*", "filter": {"stream_type": stream_type}})
             for command in item.get("commands") or ["vibrate"]:
                 routes.append({"event": "command.*", "filter": {"payload.command": f"haptic.{command}"}})
-        elif support_id == "actuator.speaker":
-            routes.append({"event": "stream.output.*", "filter": {"stream_type": stream_type}})
     return _dedupe_routes(routes)
 
 
