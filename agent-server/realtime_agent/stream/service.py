@@ -181,7 +181,6 @@ class StreamService:
                 stream_type=stream_type,
                 payload={
                     "stream_type": stream_type,
-                    "stream_id": stream_id,
                     "format": stream_format.__dict__,
                 },
             )

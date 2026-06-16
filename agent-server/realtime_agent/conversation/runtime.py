@@ -117,7 +117,7 @@ def _build_omni_runtime(
         speech_boundary=SileroSpeechInputBoundary(
             pre_roll_ms=config.omni_config.turn_detection_prefix_padding_ms or 1200,
             stop_wait_ms=config.omni_config.turn_detection_silence_duration_ms or 200,
-            threshold=config.omni_config.turn_detection_threshold or 0.05,
+            threshold=config.omni_config.turn_detection_threshold or 0.5,
         ),
     )
 
