@@ -123,12 +123,9 @@ class ModelContext:
 
 
 def estimate_tokens(value: Any) -> int:
-    """用加权字符数估算 token 数。
+    """用轻量字符数估算 token 数。
 
-    主要逻辑：不引入 provider tokenizer，按字符类型加权估算。
-    - ASCII 字符（英文、数字、标点）：约 4 字符/token
-    - CJK 统一汉字：约 1.5 字符/token（常见中文字符在 cl100k_base 下约 1 token/字）
-    - 其他字符（拉丁扩展、Emoji 等）：约 2 字符/token
+    主要逻辑：第一版不引入 provider tokenizer，按中英文混合场景用字符数近似估算。
     参数：`value` 是任意上下文内容。
     返回值：至少为 1 的估算 token 数。
     异常情况：无。
@@ -137,32 +134,7 @@ def estimate_tokens(value: Any) -> int:
     text = _stringify(value)
     if not text:
         return 0
-    ascii_count = 0
-    cjk_count = 0
-    other_count = 0
-    for ch in text:
-        code = ord(ch)
-        if code < 0x80:
-            ascii_count += 1
-        elif _is_cjk(code):
-            cjk_count += 1
-        else:
-            other_count += 1
-    return max(1, ascii_count // 4 + (cjk_count * 3 + 1) // 2 + other_count // 2)
-
-
-def _is_cjk(code: int) -> bool:
-    """判断 Unicode 码点是否属于 CJK 统一汉字范围。"""
-
-    return (
-        0x4E00 <= code <= 0x9FFF       # CJK Unified Ideographs
-        or 0x3400 <= code <= 0x4DBF    # CJK Extension A
-        or 0xF900 <= code <= 0xFAFF    # CJK Compatibility Ideographs
-        or 0x20000 <= code <= 0x2A6DF  # CJK Extension B
-        or 0x2A700 <= code <= 0x2CEAF  # CJK Extensions C-F
-        or 0x3000 <= code <= 0x303F    # CJK Symbols and Punctuation
-        or 0xFF00 <= code <= 0xFFEF    # Fullwidth Forms
-    )
+    return max(1, (len(text) + 3) // 4)
 
 
 def _preview(value: Any, *, limit: int = 240) -> str:
