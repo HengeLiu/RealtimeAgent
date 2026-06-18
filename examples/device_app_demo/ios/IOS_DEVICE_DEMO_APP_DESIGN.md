@@ -6,9 +6,9 @@
 
 iOS App 的目标是提供一个足够简单、可复现、便于排障的真机页面：
 
-- App 启动后自动调用 Swift SDK 申请硬件权限、注册设备并绑定硬件能力。
-- 注册成功且权限授权成功后进入“等待通话”状态。
-- “开始通话”按钮在未就绪时置灰，准备好后可点击。
+- App 启动后停在空闲态，不自动申请权限或注册；与 web-chat 对齐，由用户首次点击主按钮触发权限申请、设备注册并直接发起对话。
+- 首次点击主按钮即一气呵成：申请硬件权限 → 注册设备 → 开始对话；对话结束回到“等待通话”后，再次点击只需开始对话。
+- “开始通话”按钮在中间过渡态（授权/注册/连接中）置灰，空闲、等待和失败态可点击。
 - 点击开始通话后，由 Swift SDK 准备硬件资源并请求 server 开始对话。
 - 对话页展示相机预览、对话状态、音频播放/录音状态和结束按钮。
 - 调试入口展示 SDK diagnostics、最近事件、日志和可复制排障信息。
@@ -64,22 +64,21 @@ DeviceDemoApp
 
 ```plantuml
 @startuml
-[*] --> Launching
-Launching --> RequestingPermissions : app appears
+[*] --> Idle
+Idle --> RequestingPermissions : tap start
 RequestingPermissions --> Registering : permissions granted
 RequestingPermissions --> Failed : permission denied
-Registering --> Waiting : sdk registered
+Registering --> Conversing : sdk registered, start after register
 Registering --> Failed : register failed
 Waiting --> ConversationStarting : tap start
 ConversationStarting --> Conversing : sdk reports conversation active
 ConversationStarting --> Failed : start failed
-Conversing --> CloseRequesting : tap end / idle timeout
-CloseRequesting --> Closing : sdk sent dialog close request
+Conversing --> Closing : tap end / server close requested
 Closing --> Waiting : sdk reports conversation closed
-Conversing --> Closing : server close requested
-Failed --> RequestingPermissions : retry
-Waiting --> Closed : app shutdown
-Conversing --> Closed : force close on app shutdown
+Failed --> RequestingPermissions : retry (re-bootstrap)
+Disconnected --> Failed : sdk reports disconnected
+Failed --> Conversing : reconnect (re-register + start)
+Idle <-- Conversing : app entered background (release client)
 @enduml
 ```
 
@@ -87,17 +86,18 @@ App 状态只表达 UI。真实协议状态由 SDK 维护，App 不根据标准�
 
 ## 5. 启动流程
 
-App 启动后自动执行：
+App 启动后停在空闲态，等待用户首次点击主按钮后执行（`startAfterRegister=true`，与 web-chat 一致）：
 
 1. 创建 `DeviceDemoViewModel`。
 2. ViewModel 创建 Swift SDK `DeviceClient`，声明硬件能力：
    - `audioInput: .enabled()`
    - `speaker: .enabled(buffer: .default, duplexMode: .fullDuplexServerBargeIn)`
    - `camera: .enabled(source: previewFrameSource)`
+   - `properties` 中声明定位能力 `realtime_agent.location: true` 与 `realtime_agent.location_commands: ["device.location.get_current"]`，与 web-chat 对齐；`device.location.get_current` 标准命令由 Swift SDK 用 CoreLocation 内置处理，App 无需注册 handler（需在 Info.plist 配置 `NSLocationWhenInUseUsageDescription`）。
 3. 注册 `onCustomCommand` 和 `onEvent("custom.*")` 示例 handler。
 4. 调用 `client.requestPermissions()`。
 5. 权限成功后调用 `client.register()`。
-6. 注册成功后进入 `Waiting`。
+6. 注册成功后，如本次由用户点击触发则直接 `client.startConversation(...)` 进入对话；否则停在 `Waiting`。
 
 目标伪代码：
 
@@ -431,6 +431,16 @@ client.onEvent("custom.demo.message") { event in
 | server close | 回到等待页 |
 
 App 不通过错误处理绕过 SDK 协议状态机。
+
+### 断连、重连与生命周期
+
+与 web-chat 第 11 节对齐，补齐端侧稳定性保障：
+
+- SDK 发布 `disconnected(reason)` 后：停止展示对话页、停止 camera preview、取消诊断轮询，主按钮显示 `连接断开\n重连`，并保留最近 diagnostics 和日志。
+- 用户点击重连后，统一走 `bootstrap(startAfterRegister: true)`：先 `releaseClient()` 释放旧 client（取消心跳、control/stream 接收循环和诊断轮询，并**解绑旧 client 回调**避免其 close 过程回写已切换的 UI 状态），再重新创建、注册并直接恢复对话。
+- 重试、重连、再注册全部复用同一条 `bootstrap` 路径，避免遗留连接或重复 client。
+- App 进入后台（`scenePhase == .background`）等价于 web 的 `beforeunload`：释放 client 并回到空闲态，回到前台后由用户点击重新连接。iOS 后台无法维持实时音视频链路，故主动释放；server 侧最终通过 control 断开和心跳超时收口。
+- App 不手动清理 mic、speaker、stream 或旧 session，这些由 SDK 完成。
 
 ## 16. 文件和目录建议
 

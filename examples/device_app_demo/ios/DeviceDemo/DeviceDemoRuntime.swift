@@ -6,7 +6,7 @@ import RealtimeAgentDeviceKit
 ///
 /// 主要功能：让 UI 用一个稳定枚举表达启动、连接、对话和失败状态。
 enum DeviceDemoPhase: String {
-    case launching = "启动中"
+    case idle = "空闲"
     case requestingPermissions = "申请权限"
     case registering = "注册中"
     case waiting = "等待开始"
@@ -57,7 +57,7 @@ final class DeviceDemoRuntime: ObservableObject {
         didSet { UserDefaults.standard.set(serverURL, forKey: Self.serverURLKey) }
     }
 
-    @Published private(set) var phase: DeviceDemoPhase = .launching
+    @Published private(set) var phase: DeviceDemoPhase = .idle
     @Published private(set) var failureStage: DeviceDemoFailureStage?
     @Published private(set) var diagnostics = RealtimeAgentDiagnostics()
     @Published private(set) var logs: [String] = []
@@ -83,7 +83,7 @@ final class DeviceDemoRuntime: ObservableObject {
     /// 异常情况：无。
     var primaryButtonTitle: String {
         switch phase {
-        case .waiting:
+        case .idle, .waiting:
             return "开始\n音视频对话"
         case .failed:
             return failureStage?.retryTitle ?? "失败\n重试"
@@ -96,7 +96,18 @@ final class DeviceDemoRuntime: ObservableObject {
     ///
     /// 主要逻辑：等待态用于开始通话，失败态用于重试；其他中间态禁止重复点击。
     var isPrimaryButtonEnabled: Bool {
-        phase == .waiting || phase == .failed
+        phase == .idle || phase == .waiting || phase == .failed
+    }
+
+    /// 对话状态条文案。
+    ///
+    /// 主要逻辑:结束中显示“正在结束”;已收到 server 下行音频 chunk 时显示“助手回复中”;否则显示“对话中”。
+    /// 与 web-chat 的 `conversationText` 对齐,基于诊断快照动态切换,而不是固定文案。
+    var conversationStatusText: String {
+        if phase == .closing {
+            return "正在结束"
+        }
+        return diagnostics.receivedOutputChunks > 0 ? "助手回复中" : "对话中"
     }
 
     /// 调试面板中的停止按钮是否可用。
@@ -116,14 +127,15 @@ final class DeviceDemoRuntime: ObservableObject {
         self.logFilePath = logFileURL.path
     }
 
-    /// App 启动后的 SDK 初始化流程。
+    /// SDK 初始化流程。
     ///
-    /// 主要逻辑：创建 SDK client，申请硬件权限，完成设备注册；成功后进入等待状态，
-    /// UI 的“开始通话”按钮才允许触发实时对话。
-    func bootstrap() {
+    /// 主要逻辑：创建 SDK client，申请硬件权限，完成设备注册；与 web-chat 对齐，由用户首次点击触发，
+    /// 而不是 App 启动即执行。`startAfterRegister` 为 true 时注册成功后直接发起实时对话。
+    /// 参数：`startAfterRegister` 控制注册成功后是否一气呵成进入对话。
+    func bootstrap(startAfterRegister: Bool = false) {
         guard bootstrapTask == nil else { return }
         bootstrapTask = Task { [weak self] in
-            await self?.bootstrapSDK()
+            await self?.bootstrapSDK(startAfterRegister: startAfterRegister)
             await MainActor.run {
                 self?.bootstrapTask = nil
             }
@@ -132,12 +144,15 @@ final class DeviceDemoRuntime: ObservableObject {
 
     /// 处理主按钮点击。
     ///
-    /// 主要逻辑：等待态开始通话；失败态根据失败阶段重新执行初始化或开始通话。
+    /// 主要逻辑：与 web-chat 对齐——空闲态首次点击申请权限、注册并直接开始对话；等待态(对话结束后)
+    /// 直接开始对话；失败态根据失败阶段重试。
     /// 参数：无。
     /// 返回值：无。
     /// 异常情况：具体错误由对应流程写入日志并进入失败状态。
     func handlePrimaryButtonTap() async {
         switch phase {
+        case .idle:
+            bootstrap(startAfterRegister: true)
         case .waiting:
             await startConversation()
         case .failed:
@@ -198,6 +213,22 @@ final class DeviceDemoRuntime: ObservableObject {
         }
     }
 
+    /// App 进入后台时释放连接。
+    ///
+    /// 主要逻辑：对齐 web-chat 的 `beforeunload` 资源释放——iOS 后台无法维持实时音视频链路，
+    /// 因此关闭 client 并回到空闲态，用户回到前台后再点击重新连接。让 SDK 负责本地资源清理，
+    /// server 侧最终通过 control 断开和心跳超时收口。
+    func handleEnteredBackground() {
+        guard client != nil || phase != .idle else { return }
+        appendLog("app entered background -> release client")
+        cameraPreview.stop()
+        failureStage = nil
+        phase = .idle
+        Task { [weak self] in
+            await self?.releaseClient()
+        }
+    }
+
     /// 清空调试弹窗和沙盒文件中的日志。
     ///
     /// 主要用途：真机复现播放问题前清掉历史事件，避免把旧日志误认为本次链路状态。
@@ -232,6 +263,8 @@ final class DeviceDemoRuntime: ObservableObject {
             properties: [
                 "demo.name": "device_app_demo",
                 "demo.interaction": "audio_video_conversation",
+                "realtime_agent.location": true,
+                "realtime_agent.location_commands": ["device.location.get_current"],
             ],
             configuration: RealtimeAgentClientConfiguration(
                 autoFailUnhandledCommands: false,
@@ -240,10 +273,12 @@ final class DeviceDemoRuntime: ObservableObject {
         )
     }
 
-    private func bootstrapSDK() async {
+    private func bootstrapSDK(startAfterRegister: Bool) async {
         failureStage = nil
-        phase = .launching
-        appendLog("bootstrap sdk")
+        appendLog("bootstrap sdk start_after_register=\(startAfterRegister)")
+
+        // 重连/重试前先释放旧 client，避免遗留心跳、control/stream 任务和重复连接。
+        await releaseClient()
 
         var currentStage = DeviceDemoFailureStage.launch
         do {
@@ -266,6 +301,10 @@ final class DeviceDemoRuntime: ObservableObject {
             failureStage = nil
             phase = .waiting
             appendLog("device registered and permissions granted")
+
+            if startAfterRegister {
+                await startConversation()
+            }
         } catch {
             fail(stage: currentStage, error: error, prefix: "bootstrap failed")
             await client?.close()
@@ -274,13 +313,29 @@ final class DeviceDemoRuntime: ObservableObject {
         }
     }
 
+    /// 释放当前 client 并停止相关后台循环。
+    ///
+    /// 主要用途：重连、重试和 App 进入后台前调用，确保旧连接的心跳、接收循环和诊断轮询被取消，
+    /// 不与新 client 争抢协议状态机。
+    private func releaseClient() async {
+        guard let existing = client else { return }
+        diagnosticsTask?.cancel()
+        diagnosticsTask = nil
+        client = nil
+        // 解绑回调，避免旧 client 在 close 过程中把 .closed/.waiting 回写到已切换的 UI 状态。
+        existing.onConnectionStateChange { _ in }
+        existing.onConversationStateChange { _ in }
+        existing.onDebugLog { _ in }
+        await existing.close(force: true)
+    }
+
     private func retryFailedStep() async {
         let stage = failureStage
         appendLog("retry failed step: \(String(describing: stage))")
         switch stage {
         case .startConversation:
             if client == nil {
-                bootstrap()
+                bootstrap(startAfterRegister: true)
             } else {
                 phase = .waiting
                 await startConversation()
@@ -288,10 +343,10 @@ final class DeviceDemoRuntime: ObservableObject {
         case .closeConversation:
             await stopConversation()
         case .connectionDisconnected:
-            client = nil
-            bootstrap()
+            // 断线重连：重新创建 client、注册并直接恢复对话，旧 client 由 bootstrap 统一释放。
+            bootstrap(startAfterRegister: true)
         case .launch, .permission, .registration, .none:
-            bootstrap()
+            bootstrap(startAfterRegister: true)
         }
     }
 

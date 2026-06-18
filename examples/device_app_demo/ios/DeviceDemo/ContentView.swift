@@ -33,9 +33,6 @@ struct ContentView: View {
             DebugSheet()
                 .environmentObject(runtime)
         }
-        .task {
-            runtime.bootstrap()
-        }
     }
 }
 
@@ -119,19 +116,29 @@ private struct ConversationView: View {
 }
 
 private struct AudioConversationBar: View {
+    @EnvironmentObject private var runtime: DeviceDemoRuntime
+
     var body: some View {
-        TimelineView(.animation) { timeline in
-            let phase = timeline.date.timeIntervalSinceReferenceDate
-            HStack(spacing: 18) {
-                WaveformView(phase: phase)
-                Text("对话中")
-                    .font(.title3.weight(.medium))
-                WaveformView(phase: phase + 0.45)
+        Button {
+            Task { await runtime.stopConversation() }
+        } label: {
+            TimelineView(.animation) { timeline in
+                let phase = timeline.date.timeIntervalSinceReferenceDate
+                HStack(spacing: 18) {
+                    WaveformView(phase: phase)
+                    Text(runtime.conversationStatusText)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(.primary)
+                    WaveformView(phase: phase + 0.45)
+                }
+                .frame(maxWidth: 390, minHeight: 82)
+                .padding(.horizontal, 20)
+                .overlay(Rectangle().stroke(.primary, lineWidth: 2))
             }
-            .frame(maxWidth: 390, minHeight: 82)
-            .padding(.horizontal, 20)
-            .overlay(Rectangle().stroke(.primary, lineWidth: 2))
         }
+        .buttonStyle(.plain)
+        .disabled(!runtime.isStopConversationEnabled)
+        .accessibilityLabel("结束音视频对话")
     }
 }
 
