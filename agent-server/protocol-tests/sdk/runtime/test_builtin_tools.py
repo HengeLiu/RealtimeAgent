@@ -354,60 +354,37 @@ def test_wgs84_to_gcj02_matches_known_shanghai_point() -> None:
     assert _wgs84_to_gcj02(37.0, -122.0) == (37.0, -122.0)
 
 
-def test_extract_amap_address_tolerates_shapes() -> None:
-    """测试目标：逆地理编码解析兼容多种高德 MCP 返回结构。
+def test_compose_place_from_poi_builds_precise_address() -> None:
+    """测试目标：用 around_search POI 的 pname/cityname/adname/address 拼出精确地点。
 
-    测试方法：分别用 regeocode 包裹、扁平 components(无 formatted_address)、纯文本、
-    isError 四种 content。
-    预期结果：前三种都能解析出地名；isError 返回空地址和错误。
+    预期结果：省/市/区去重后拼接，门牌地址作为主体并加“附近”；无 address 时退回 POI 名称。
     """
 
-    from realtime_agent.tools import _extract_amap_address
+    from realtime_agent.tools import _compose_place_from_poi
 
-    def wrap(text: str, is_error: bool = False) -> dict:
-        return {"result": {"isError": is_error, "content": [{"type": "text", "text": text}]}}
-
-    nested = wrap(json.dumps({"regeocode": {"formatted_address": "上海市徐汇区桂平路"}}, ensure_ascii=False))
-    assert _extract_amap_address(nested)[0] == "上海市徐汇区桂平路"
-
-    # 只有行政区划、没有 formatted_address 时用区划拼地名（这正是之前只回经纬度的根因之一）。
-    components_only = wrap(
-        json.dumps(
-            {"addressComponent": {"province": "上海市", "city": [], "district": "徐汇区", "township": "漕河泾街道"}},
-            ensure_ascii=False,
-        )
+    place, components = _compose_place_from_poi(
+        {
+            "pname": "上海市",
+            "cityname": "上海市",
+            "adname": "徐汇区",
+            "address": "虹梅路街道虹漕路88号",
+            "name": "H88越虹广场",
+        }
     )
-    formatted, components, error = _extract_amap_address(components_only)
-    assert error is None
-    assert formatted == "上海市徐汇区漕河泾街道"
-    assert components["district"] == "徐汇区"
+    assert place == "上海市徐汇区虹梅路街道虹漕路88号附近"
+    assert components == {"province": "上海市", "city": "上海市", "district": "徐汇区"}
 
-    # 官方高德 MCP 把 province 拼成 "provice"，应能识别并补回省份。
-    typo = wrap(
-        json.dumps(
-            {"regeocode": {"addressComponent": {"provice": "上海市", "city": [], "district": "徐汇区"}}},
-            ensure_ascii=False,
-        )
-    )
-    formatted_typo, components_typo, _ = _extract_amap_address(typo)
-    assert components_typo["province"] == "上海市"
-    assert formatted_typo == "上海市徐汇区"
-
-    # 纯文本地址直接采用。
-    assert _extract_amap_address(wrap("上海市徐汇区漕河泾"))[0] == "上海市徐汇区漕河泾"
-
-    # isError 返回空地址和错误文本。
-    formatted_err, _, error_err = _extract_amap_address(wrap("rate limit", is_error=True))
-    assert formatted_err == ""
-    assert error_err
+    # 没有 address 时退回 POI 名称。
+    place2, _ = _compose_place_from_poi({"pname": "上海市", "cityname": "上海市", "adname": "徐汇区", "name": "锦和中心"})
+    assert place2 == "上海市徐汇区锦和中心附近"
 
 
-def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch) -> None:
-    """测试目标：验证定位 Tool 拿到端侧 WGS-84 后转 GCJ-02 并用高德逆地理编码出地名。
+def test_query_current_location_resolves_address_via_around_search(tmp_path, monkeypatch) -> None:
+    """测试目标：定位 Tool 拿到端侧 WGS-84 后转 GCJ-02，用 around_search 解析门牌级地点。
 
-    测试方法：注册声明定位能力的端侧并回发 WGS-84 坐标，替换 AMap MCP Gateway 记录
-    regeo 调用并返回 formatted_address。
-    预期结果：送给高德的是转换后的 GCJ-02 坐标，输出带 address 和行政区划。
+    测试方法：注册声明定位能力的端侧并回发 WGS-84 坐标，替换 AMap MCP Gateway 让
+    amap.around_search 返回最近 POI（自带 pname/cityname/adname/address）。
+    预期结果：送给高德的是转换后的 GCJ-02 坐标；address 为“…虹漕路88号附近”，带行政区划和 nearby_poi。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
@@ -424,30 +401,15 @@ def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch)
             self.calls = []
 
         def call(self, tool_name, arguments, timeout_seconds=None):
-            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments), "timeout_seconds": timeout_seconds})
-            return {
-                "result": {
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": json.dumps(
-                                {
-                                    "regeocode": {
-                                        "formatted_address": "上海市徐汇区漕河泾街道桂平路",
-                                        "addressComponent": {
-                                            "province": "上海市",
-                                            "city": [],
-                                            "district": "徐汇区",
-                                            "township": "漕河泾街道",
-                                        },
-                                    }
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
-                    ]
-                }
+            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments)})
+            poi = {
+                "name": "H88越虹广场",
+                "address": "虹梅路街道虹漕路88号",
+                "pname": "上海市",
+                "cityname": "上海市",
+                "adname": "徐汇区",
             }
+            return {"result": {"content": [{"type": "text", "text": json.dumps({"pois": [poi]}, ensure_ascii=False)}]}}
 
     fake_mcp = FakeMcp()
     monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: fake_mcp)
@@ -484,89 +446,15 @@ def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch)
 
     assert result.ok is True
     assert result.data["location_ready"] is True
-    assert result.data["address"] == "上海市徐汇区漕河泾街道桂平路"
+    assert result.data["address"] == "上海市徐汇区虹梅路街道虹漕路88号附近"
     assert result.data["address_components"]["district"] == "徐汇区"
-    # 直辖市 city 返回空列表时回退到 province。
-    assert result.data["address_components"]["city"] == "上海市"
+    assert result.data["nearby_poi"] == "H88越虹广场"
     assert result.data["coordinate_system"] == "wgs84"
-    assert abs(result.data["gcj02_longitude"] - 121.410163) < 1e-4
     # 送给高德的是转换后的 GCJ-02 坐标，而非原始 WGS-84。
-    regeo_calls = [call for call in fake_mcp.calls if call["tool_name"] == "amap.regeo"]
-    assert regeo_calls
-    sent_lng = float(regeo_calls[-1]["arguments"]["location"].split(",")[0])
+    around_calls = [call for call in fake_mcp.calls if call["tool_name"] == "amap.around_search"]
+    assert around_calls
+    sent_lng = float(around_calls[-1]["arguments"]["location"].split(",")[0])
     assert abs(sent_lng - 121.410163) < 1e-4
-
-
-def test_query_current_location_enriches_district_with_nearby_poi(tmp_path, monkeypatch) -> None:
-    """测试目标：逆地理编码只到区县级时，用周边检索补最近 POI 给出更精确地点。
-
-    测试方法：FakeMcp 让 amap.regeo 只返回 district=徐汇区，amap.around_search 返回最近 POI。
-    预期结果：最终 address 含 POI（如“…漕河泾开发区附近”），而不是只有“徐汇区”。
-    """
-
-    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
-    user_id = "user-location-poi"
-    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-location-poi")
-    register_endpoint(
-        app,
-        endpoint,
-        properties={"realtime_agent.location": True, "realtime_agent.location_commands": ["device.location.get_current"]},
-    )
-
-    def text_result(obj: dict) -> dict:
-        return {"result": {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}]}}
-
-    class FakeMcp:
-        def __init__(self) -> None:
-            self.calls = []
-
-        def call(self, tool_name, arguments, timeout_seconds=None):
-            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments)})
-            if tool_name == "amap.regeo":
-                return text_result({"regeocode": {"addressComponent": {"district": "徐汇区"}}})
-            if tool_name == "amap.around_search":
-                return text_result({"pois": [{"name": "漕河泾开发区", "address": "桂平路426号"}]})
-            return text_result({})
-
-    fake_mcp = FakeMcp()
-    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: fake_mcp)
-
-    async def _run():
-        task = asyncio.create_task(
-            app.tool_gateway.call(
-                name="query_current_location",
-                user_id=user_id,
-                session_id="session-location",
-                input_data={"timeout_seconds": 1},
-            )
-        )
-        deadline = asyncio.get_running_loop().time() + 1
-        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
-            await asyncio.sleep(0.01)
-        assert endpoint.events
-        command = endpoint.events[-1]
-        app.publish_control_event(
-            Event(
-                event_name="command.completed",
-                user_id=user_id,
-                producer_id="dev-location-poi",
-                payload={
-                    "command_id": command.payload["command_id"],
-                    "command": "device.location.get_current",
-                    "location": {"latitude": 31.173648, "longitude": 121.405517, "accuracy": 19.5},
-                },
-            )
-        )
-        return await asyncio.wait_for(task, timeout=2)
-
-    result = asyncio.run(_run())
-
-    assert result.ok is True
-    assert result.data["location_ready"] is True
-    assert "徐汇区" in result.data["address"]
-    assert "桂平路426号" in result.data["address"]
-    assert result.data["nearby_poi"] == "漕河泾开发区"
-    assert any(call["tool_name"] == "amap.around_search" for call in fake_mcp.calls)
 
 
 def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> None:

@@ -2891,7 +2891,6 @@ logger = logging.getLogger(__name__)
 
 AMAP_MCP_ROUTE_TOOL = "amap.route_plan"
 AMAP_MCP_GEO_TOOL = "amap.geo"
-AMAP_MCP_REGEO_TOOL = "amap.regeo"
 AMAP_MCP_AROUND_TOOL = "amap.around_search"
 
 # 逆地理编码：单次尝试超时与拿地名的整体预算（须小于 query_current_location 的 background 预算 30s）。
@@ -3283,63 +3282,50 @@ async def _request_device_location(
 
 
 async def _resolve_location_name(context: ToolContext, location_data: dict) -> ToolResult:
-    """把端侧坐标解析成地点名称后返回，绝不回退裸经纬度。
+    """把端侧坐标解析成精确地点名称后返回，绝不回退裸经纬度。
 
-    主要逻辑：用高德逆地理编码把坐标转成地名；成功即返回地名。可重试失败（超时等）时
-    在整体预算内持续重试——因为工具是 background，超过前台窗口会先回 running_message，
-    地名稍后随 follow-up 送达。最终仍拿不到地名时返回不含坐标的“查不到”提示。
+    主要逻辑：用高德周边检索（maps_around_search）取最近 POI，由其 pname/cityname/
+    adname/address 拼出门牌级地点。可重试失败（超时）时在整体预算内持续重试——工具是
+    background，超过前台窗口会先回 running_message，地名稍后随 follow-up 送达。最终
+    仍拿不到地名时返回不含坐标的“查不到”提示。
     参数：`context` 为工具上下文；`location_data` 为 `_request_device_location` 的成功数据。
     返回值：成功返回带 address 的 ToolResult；失败返回 location_ready=False 且不含经纬度。
-    异常情况：无（逆地理编码异常已在内部收敛）。
+    异常情况：无（周边检索异常已在内部收敛）。
     """
 
-    latitude = location_data["latitude"]
-    longitude = location_data["longitude"]
+    gcj_lat = location_data["gcj02_latitude"]
+    gcj_lng = location_data["gcj02_longitude"]
     mcp = getattr(context, "mcp", None)
     deadline = time.monotonic() + ADDRESS_RESOLVE_BUDGET_SECONDS
     attempts = 0
     last_error: str | None = None
     while True:
         attempts += 1
-        regeo = await _reverse_geocode_amap(
+        nearby = await _nearby_place_amap(
             mcp,
-            latitude=latitude,
-            longitude=longitude,
+            gcj_latitude=gcj_lat,
+            gcj_longitude=gcj_lng,
             timeout_seconds=ADDRESS_ATTEMPT_TIMEOUT_SECONDS,
         )
-        if regeo["ok"]:
-            address = regeo["formatted_address"]
-            nearby_name = None
-            # 逆地理编码只到区县级时，用周边检索补一个最近 POI，给出更精确的地点。
-            nearby = await _nearby_place_amap(
-                mcp,
-                gcj_latitude=regeo["gcj02_latitude"],
-                gcj_longitude=regeo["gcj02_longitude"],
-                timeout_seconds=ADDRESS_ATTEMPT_TIMEOUT_SECONDS,
-            )
-            if nearby:
-                nearby_name = nearby.get("name") or None
-                detail = nearby.get("address") or nearby.get("name") or ""
-                if detail and detail not in address:
-                    address = f"{address}{detail}附近" if address else f"{detail}附近"
+        if nearby["ok"]:
             return ToolResult.success(
                 data={
                     "location_ready": True,
                     "provider": "device_gps",
-                    "address": address,
-                    "address_components": regeo["components"],
-                    "nearby_poi": nearby_name,
+                    "address": nearby["place"],
+                    "address_components": nearby["components"],
+                    "nearby_poi": nearby["name"],
                     "address_provider": "amap_mcp",
                     "coordinate_system": "wgs84",
-                    "gcj02_latitude": regeo["gcj02_latitude"],
-                    "gcj02_longitude": regeo["gcj02_longitude"],
+                    "gcj02_latitude": gcj_lat,
+                    "gcj02_longitude": gcj_lng,
                     "accuracy_meters": location_data.get("accuracy_meters"),
                     "error": None,
                 },
-                message=f"你当前位于{address}。",
+                message=f"你当前位于{nearby['place']}。",
             )
-        last_error = regeo["error"]
-        if not regeo.get("retryable") or time.monotonic() >= deadline:
+        last_error = nearby["error"]
+        if not nearby.get("retryable") or time.monotonic() >= deadline:
             logger.info(
                 "query_current_location address unavailable attempts=%s error=%s",
                 attempts,
@@ -3680,19 +3666,15 @@ def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
         try:
             tool_names = {tool.name for tool in configured_gateway.list_tools()}
             if AMAP_MCP_ROUTE_TOOL in tool_names:
-                # 已配置网关可能只注册了 geo/route，补上逆地理编码和周边检索工具，
-                # 否则 query_current_location 拿不到地名或拿不到更精确的 POI。
-                for missing_name, target in (
-                    (AMAP_MCP_REGEO_TOOL, "maps_regeocode"),
-                    (AMAP_MCP_AROUND_TOOL, "maps_around_search"),
-                ):
-                    if missing_name not in tool_names:
-                        try:
-                            configured_gateway.register_tool(
-                                McpToolSpec(name=missing_name, server="amap", target_name=target)
-                            )
-                        except Exception:
-                            pass
+                # 已配置网关可能只注册了 geo/route，补上周边检索工具，
+                # 否则 query_current_location 拿不到精确地点。
+                if AMAP_MCP_AROUND_TOOL not in tool_names:
+                    try:
+                        configured_gateway.register_tool(
+                            McpToolSpec(name=AMAP_MCP_AROUND_TOOL, server="amap", target_name="maps_around_search")
+                        )
+                    except Exception:
+                        pass
                 return configured_gateway
         except Exception:
             pass
@@ -3716,7 +3698,6 @@ def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
     )
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_GEO_TOOL, server="amap", target_name="maps_geo"))
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_ROUTE_TOOL, server="amap", target_name="maps_direction_walking"))
-    gateway.register_tool(McpToolSpec(name=AMAP_MCP_REGEO_TOOL, server="amap", target_name="maps_regeocode"))
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_AROUND_TOOL, server="amap", target_name="maps_around_search"))
     return gateway
 
@@ -3928,10 +3909,7 @@ def _wgs84_to_gcj02(latitude: float, longitude: float) -> tuple[float, float]:
 
 
 def _amap_component_text(value: Any) -> str:
-    """把高德 addressComponent 字段归一成字符串。
-
-    主要逻辑：高德对直辖市等会把 city 返回成空列表，这里把列表/None 统一成字符串。
-    """
+    """把高德返回字段归一成字符串（兼容直辖市等返回空列表的情况）。"""
 
     if isinstance(value, list):
         return "".join(str(item) for item in value if item)
@@ -3940,157 +3918,51 @@ def _amap_component_text(value: Any) -> str:
     return str(value)
 
 
-def _amap_regeo_debug(call_result: dict) -> str:
-    """提取逆地理编码返回的简短文本，仅用于日志排查。"""
+def _compose_place_from_poi(poi: dict) -> tuple[str, dict]:
+    """用周边检索 POI 自带的省/市/区 + 门牌地址拼出可读精确地点。
 
-    result = dict(call_result.get("result") or call_result)
-    text = _mcp_first_text(result)
-    if not text:
-        try:
-            text = json.dumps(result, ensure_ascii=False)
-        except Exception:  # noqa: BLE001
-            text = str(result)
-    return text[:300]
-
-
-def _extract_amap_address(call_result: dict) -> tuple[str, dict | None, str | None]:
-    """从高德 maps_regeocode 结果中尽量解析出地点名称和行政区划。
-
-    主要逻辑：兼容不同高德 MCP 实现——结果可能是 `{regeocode:{...}}`、扁平对象、
-    纯文本地址，或只有行政区划没有 formatted_address。没有现成地址时用省/市/区/街道拼。
-    返回值：(formatted_address, components, error)；解析不到地址时 formatted_address 为空。
-    异常情况：无（解析失败收敛成 error 文本）。
+    主要逻辑：maps_around_search 的每个 POI 都带 pname/cityname/adname/address，
+    直接拼成“{省}{市}{区}{门牌地址}附近”，门牌地址作为精确位置主体。
+    返回值：(place, components)。
     """
 
-    result = dict(call_result.get("result") or call_result)
-    if result.get("isError"):
-        return "", None, _mcp_first_text(result) or "amap returned error"
-    text = _mcp_first_text(result)
-    if not text:
-        return "", None, "amap response is empty"
-    try:
-        parsed = json.loads(text)
-    except (ValueError, TypeError):
-        # 高德 MCP 直接返回纯文本地址时，把文本本身当作地名。
-        return text.strip(), None, None
-    if isinstance(parsed, list):
-        parsed = parsed[0] if parsed else {}
-    if not isinstance(parsed, dict):
-        return "", None, "amap response is not an object"
-    regeocode = parsed.get("regeocode") if isinstance(parsed.get("regeocode"), dict) else parsed
-    component = regeocode.get("addressComponent") or regeocode.get("address_component") or regeocode
-    if not isinstance(component, dict):
-        component = {}
-    # 注意：官方高德 MCP 的 maps_regeocode 把 province 拼成了 "provice"，两种都兼容。
-    province = _amap_component_text(component.get("province") or component.get("provice"))
-    city = _amap_component_text(component.get("city")) or province
-    district = _amap_component_text(component.get("district"))
-    township = _amap_component_text(component.get("township"))
-    formatted = str(
-        regeocode.get("formatted_address")
-        or regeocode.get("formattedAddress")
-        or regeocode.get("address")
-        or parsed.get("formatted_address")
-        or parsed.get("address")
-        or ""
-    ).strip()
-    if not formatted:
-        # 没有现成的格式化地址时，用行政区划拼一个可读地名。
-        parts = [province]
-        if city and city != province:
-            parts.append(city)
-        parts.extend([district, township])
-        formatted = "".join(part for part in parts if part)
-    components = {"province": province, "city": city, "district": district, "township": township}
-    if not formatted:
-        return "", components, "amap response has no address fields"
-    return formatted, components, None
+    province = _amap_component_text(poi.get("pname"))
+    city = _amap_component_text(poi.get("cityname")) or province
+    district = _amap_component_text(poi.get("adname"))
+    address = _amap_component_text(poi.get("address"))
+    name = _amap_component_text(poi.get("name"))
+    prefix_parts: list[str] = []
+    for part in (province, city, district):
+        if part and part not in "".join(prefix_parts):
+            prefix_parts.append(part)
+    prefix = "".join(prefix_parts)
+    detail = address or name
+    if detail and detail not in prefix:
+        place = f"{prefix}{detail}附近" if prefix else f"{detail}附近"
+    else:
+        place = prefix or detail
+    return place, {"province": province, "city": city, "district": district}
 
 
-async def _reverse_geocode_amap(
-    mcp: Any,
-    *,
-    latitude: float,
-    longitude: float,
-    timeout_seconds: float,
-) -> dict:
-    """用高德 MCP 逆地理编码把端侧 WGS-84 坐标转成地点名称。
+async def _nearby_place_amap(mcp: Any, *, gcj_latitude: float, gcj_longitude: float, timeout_seconds: float) -> dict:
+    """用高德周边检索（maps_around_search）把坐标解析成最近 POI 的精确地点。
 
-    主要逻辑：先把 WGS-84 转成 GCJ-02(高德坐标系)，再调用 maps_regeocode，
-    解析 formatted_address 和行政区划。
-    参数：`mcp` 为 ToolContext 注入的 MCP Gateway；`latitude/longitude` 为端侧
-    上报的 WGS-84 坐标；`timeout_seconds` 为逆地理编码等待预算。
-    返回值：始终包含 gcj02 坐标；成功时附 formatted_address 和 components，
-    失败时 `ok=False` 并带 error，便于上层只读降级。
+    主要逻辑：maps_around_search 返回的 POI 自带 pname/cityname/adname/address，
+    直接拼成门牌级地点，无需再调 maps_regeocode（后者只返回区县级）。
+    参数：`gcj_latitude/gcj_longitude` 为 GCJ-02 坐标；`timeout_seconds` 为等待预算。
+    返回值：{ok, retryable, place, name, components, error}；仅超时标记可重试。
     异常情况：无（任何失败都收敛成 ok=False）。
     """
 
-    gcj_lat, gcj_lng = _wgs84_to_gcj02(latitude, longitude)
+    location_arg = f"{gcj_longitude:.6f},{gcj_latitude:.6f}"
     result: dict[str, Any] = {
         "ok": False,
-        "gcj02_latitude": gcj_lat,
-        "gcj02_longitude": gcj_lng,
-        "formatted_address": None,
+        "retryable": False,
+        "place": None,
+        "name": None,
         "components": None,
         "error": None,
-        # 仅超时视为可重试（短暂慢）；配置缺失/工具不存在/返回无地址等重试也无用，标记不可重试。
-        "retryable": False,
     }
-    location_arg = f"{gcj_lng:.6f},{gcj_lat:.6f}"
-    try:
-        gateway = _resolve_amap_mcp_gateway(mcp)
-        call_result = await asyncio.wait_for(
-            asyncio.to_thread(
-                gateway.call,
-                tool_name=AMAP_MCP_REGEO_TOOL,
-                arguments={"location": location_arg},
-                timeout_seconds=max(0.2, timeout_seconds),
-            ),
-            timeout=timeout_seconds,
-        )
-    except (asyncio.TimeoutError, TimeoutError) as exc:
-        result["error"] = f"高德逆地理编码超时：{exc}" if str(exc) else "高德逆地理编码超时。"
-        result["retryable"] = True
-        logger.info("query_current_location regeo timeout location=%s error=%s", location_arg, result["error"])
-        return result
-    except Exception as exc:  # noqa: BLE001 - 逆地理编码失败只降级为无地名，不阻断定位
-        result["error"] = str(exc) or "高德逆地理编码不可用。"
-        logger.info("query_current_location regeo call failed location=%s error=%s", location_arg, result["error"])
-        return result
-
-    formatted, components, parse_error = _extract_amap_address(call_result)
-    if not formatted:
-        result["error"] = parse_error or "高德返回结果缺少地址。"
-        logger.info(
-            "query_current_location regeo no address location=%s error=%s raw=%s",
-            location_arg,
-            result["error"],
-            _amap_regeo_debug(call_result),
-        )
-        return result
-    result["ok"] = True
-    result["formatted_address"] = formatted
-    result["components"] = components
-    logger.info(
-        "query_current_location regeo ok location=%s address=%s raw=%s",
-        location_arg,
-        formatted,
-        _amap_regeo_debug(call_result),
-    )
-    return result
-
-
-async def _nearby_place_amap(mcp: Any, *, gcj_latitude: float, gcj_longitude: float, timeout_seconds: float) -> dict | None:
-    """用高德周边检索取最近 POI，给 district 级地址补一个可识别的地点名。
-
-    主要逻辑：maps_regeocode 在部分高德 MCP 实现里只返回区县级，这里用
-    maps_around_search 取最近 POI（名称/地址）补精度。best-effort：失败返回 None。
-    参数：`gcj_latitude/gcj_longitude` 为 GCJ-02 坐标；`timeout_seconds` 为等待预算。
-    返回值：{name, address} 或 None。
-    异常情况：无（任何失败收敛成 None）。
-    """
-
-    location_arg = f"{gcj_longitude:.6f},{gcj_latitude:.6f}"
     try:
         gateway = _resolve_amap_mcp_gateway(mcp)
         call_result = await asyncio.wait_for(
@@ -4103,23 +3975,35 @@ async def _nearby_place_amap(mcp: Any, *, gcj_latitude: float, gcj_longitude: fl
             timeout=timeout_seconds,
         )
         parsed = _mcp_text_json(call_result)
-    except Exception as exc:  # noqa: BLE001 - 周边检索只是锦上添花，失败保持区县级
-        logger.info("query_current_location around failed location=%s error=%s", location_arg, exc)
-        return None
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        result["error"] = f"高德周边检索超时：{exc}" if str(exc) else "高德周边检索超时。"
+        result["retryable"] = True
+        logger.info("query_current_location around timeout location=%s error=%s", location_arg, result["error"])
+        return result
+    except Exception as exc:  # noqa: BLE001 - 失败不回退坐标，交给上层判断重试或报查不到
+        result["error"] = str(exc) or "高德周边检索不可用。"
+        logger.info("query_current_location around call failed location=%s error=%s", location_arg, result["error"])
+        return result
+
     pois = parsed.get("pois")
     if isinstance(pois, dict):
         pois = [pois]
     if not isinstance(pois, list):
-        return None
+        pois = []
     for poi in pois:
         if not isinstance(poi, dict):
             continue
-        name = str(poi.get("name") or "").strip()
-        address = str(poi.get("address") or "").strip()
-        if name or address:
-            logger.info("query_current_location around ok location=%s name=%s address=%s", location_arg, name, address)
-            return {"name": name, "address": address}
-    return None
+        place, components = _compose_place_from_poi(poi)
+        if place:
+            result["ok"] = True
+            result["place"] = place
+            result["name"] = _amap_component_text(poi.get("name")) or None
+            result["components"] = components
+            logger.info("query_current_location around ok location=%s place=%s", location_arg, place)
+            return result
+    result["error"] = "高德周边检索无结果。"
+    logger.info("query_current_location around no result location=%s", location_arg)
+    return result
 
 
 class SearchConversationHistoryInput(BaseModel):

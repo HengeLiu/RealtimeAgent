@@ -279,7 +279,7 @@ const settings = track.getSettings();
 - speaker：当前 stream、buffered_ms、queued chunks、underrun、last seq、drain 状态。
 - camera：permission、preview state、最近一次 frame size。
 - 最近 200 条 debug log。
-- 获取定位按钮：用浏览器 `navigator.geolocation` 取一次 WGS-84 经纬度并打印到日志，便于本机自测定位链路（坐标系转换和逆地理编码由服务端工具负责）。注意浏览器仅在安全上下文（https 或 localhost）下允许定位。
+- 获取定位按钮：用浏览器 `navigator.geolocation` 取一次 WGS-84 经纬度并打印到日志，便于本机自测定位链路（坐标系转换和地点名称解析（高德周边检索）由服务端工具负责）。注意浏览器仅在安全上下文（https 或 localhost）下允许定位。
 - 复制诊断信息按钮。
 - 清空日志按钮。
 
