@@ -3981,7 +3981,8 @@ def _extract_amap_address(call_result: dict) -> tuple[str, dict | None, str | No
     component = regeocode.get("addressComponent") or regeocode.get("address_component") or regeocode
     if not isinstance(component, dict):
         component = {}
-    province = _amap_component_text(component.get("province"))
+    # 注意：官方高德 MCP 的 maps_regeocode 把 province 拼成了 "provice"，两种都兼容。
+    province = _amap_component_text(component.get("province") or component.get("provice"))
     city = _amap_component_text(component.get("city")) or province
     district = _amap_component_text(component.get("district"))
     township = _amap_component_text(component.get("township"))

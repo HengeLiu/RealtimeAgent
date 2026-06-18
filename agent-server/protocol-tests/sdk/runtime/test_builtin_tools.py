@@ -382,6 +382,17 @@ def test_extract_amap_address_tolerates_shapes() -> None:
     assert formatted == "上海市徐汇区漕河泾街道"
     assert components["district"] == "徐汇区"
 
+    # 官方高德 MCP 把 province 拼成 "provice"，应能识别并补回省份。
+    typo = wrap(
+        json.dumps(
+            {"regeocode": {"addressComponent": {"provice": "上海市", "city": [], "district": "徐汇区"}}},
+            ensure_ascii=False,
+        )
+    )
+    formatted_typo, components_typo, _ = _extract_amap_address(typo)
+    assert components_typo["province"] == "上海市"
+    assert formatted_typo == "上海市徐汇区"
+
     # 纯文本地址直接采用。
     assert _extract_amap_address(wrap("上海市徐汇区漕河泾"))[0] == "上海市徐汇区漕河泾"
 
