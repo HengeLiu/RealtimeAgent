@@ -103,6 +103,9 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
     private var camera: Camera = .disabled()
     private var speaker: Speaker = .disabled()
     private var microphoneTask: Task<Void, Never>?
+    #if os(iOS)
+    private var locationProvider: RealtimeAgentLocationProvider?
+    #endif
     private static let speakerDrainIdleSleepNanoseconds: UInt64 = 5_000_000
     private static let speakerDrainYieldEveryChunks = 64
     private static let streamReceiveReconnectBaseSleepNanoseconds: UInt64 = 100_000_000
@@ -676,6 +679,16 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
 
     private func dispatchCommand(_ event: RealtimeAgentEvent) async throws -> Bool {
         let command = event.payload["command"] as? String ?? ""
+        #if os(iOS)
+        if command == "device.location.get_current", locationEnabled {
+            let responder = commandResponder(for: event)
+            let params = event.payload["params"] as? [String: Any] ?? [:]
+            Task { [weak self] in
+                await self?.handleLocationCommand(responder: responder, params: params)
+            }
+            return true
+        }
+        #endif
         diagnostics.unhandledEvents += 1
         if configuration.autoFailUnhandledCommands {
             let responder = commandResponder(for: event)
@@ -786,6 +799,38 @@ public final class RealtimeAgentDeviceClient: @unchecked Sendable {
         await emitConversationState(.waiting)
         return true
     }
+
+    #if os(iOS)
+    private var locationEnabled: Bool {
+        device.properties["realtime_agent.location"] as? Bool == true
+    }
+
+    /// 处理 `device.location.get_current` 标准命令。
+    ///
+    /// 主要逻辑：在主线程用 CoreLocation 取一次定位，成功回 `command.completed`，失败回 `command.failed`，
+    /// 对齐 JavaScript SDK 的浏览器 geolocation 行为。命令在独立 Task 中执行，避免阻塞 control 接收循环。
+    private func handleLocationCommand(responder: RealtimeAgentCommandResponder, params: [String: Any]) async {
+        let highAccuracy = params["high_accuracy"] as? Bool ?? true
+        let timeoutMS = intValue(params["timeout_ms"]) ?? 5000
+        do {
+            let provider = await MainActor.run { () -> RealtimeAgentLocationProvider in
+                if let existing = locationProvider { return existing }
+                let provider = RealtimeAgentLocationProvider()
+                locationProvider = provider
+                return provider
+            }
+            let location = try await provider.currentLocation(highAccuracy: highAccuracy, timeoutMS: timeoutMS)
+            await debugLog("location resolved command_id=\(responder.commandID)")
+            try await responder.completed(["location": location.fields])
+        } catch let error as RealtimeAgentLocationProvider.LocationError {
+            await debugLog("location failed command_id=\(responder.commandID) code=\(error.code) message=\(error.message)")
+            try? await responder.failed(code: error.code, message: error.message)
+        } catch {
+            await debugLog("location failed command_id=\(responder.commandID) error=\(error.localizedDescription)")
+            try? await responder.failed(code: "location_failed", message: error.localizedDescription)
+        }
+    }
+    #endif
 
     private func commandResponder(for event: RealtimeAgentEvent) -> RealtimeAgentCommandResponder {
         RealtimeAgentCommandResponder(request: event) { [weak self] name, payload in

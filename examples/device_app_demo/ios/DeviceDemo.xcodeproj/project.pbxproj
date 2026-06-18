@@ -11,6 +11,7 @@
 		D00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000102 /* ContentView.swift */; };
 		D00000000000000000000003 /* DeviceDemoRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000103 /* DeviceDemoRuntime.swift */; };
 		D00000000000000000000004 /* CameraPreviewController.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000104 /* CameraPreviewController.swift */; };
+		D00000000000000000000006 /* DeviceSensorsReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = D00000000000000000000107 /* DeviceSensorsReader.swift */; };
 		D00000000000000000000005 /* RealtimeAgentDeviceKit in Frameworks */ = {isa = PBXBuildFile; productRef = D00000000000000000000902 /* RealtimeAgentDeviceKit */; };
 /* End PBXBuildFile section */
 
@@ -19,6 +20,7 @@
 		D00000000000000000000102 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		D00000000000000000000103 /* DeviceDemoRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceDemoRuntime.swift; sourceTree = "<group>"; };
 		D00000000000000000000104 /* CameraPreviewController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CameraPreviewController.swift; sourceTree = "<group>"; };
+		D00000000000000000000107 /* DeviceSensorsReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSensorsReader.swift; sourceTree = "<group>"; };
 		D00000000000000000000105 /* DeviceDemo/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = DeviceDemo/Info.plist; sourceTree = SOURCE_ROOT; };
 		D00000000000000000000106 /* DeviceDemo.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DeviceDemo.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -50,6 +52,7 @@
 				D00000000000000000000102 /* ContentView.swift */,
 				D00000000000000000000103 /* DeviceDemoRuntime.swift */,
 				D00000000000000000000104 /* CameraPreviewController.swift */,
+				D00000000000000000000107 /* DeviceSensorsReader.swift */,
 				D00000000000000000000105 /* DeviceDemo/Info.plist */,
 			);
 			path = DeviceDemo;
@@ -136,6 +139,7 @@
 				D00000000000000000000002 /* ContentView.swift in Sources */,
 				D00000000000000000000003 /* DeviceDemoRuntime.swift in Sources */,
 				D00000000000000000000004 /* CameraPreviewController.swift in Sources */,
+				D00000000000000000000006 /* DeviceSensorsReader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
