@@ -2892,6 +2892,7 @@ logger = logging.getLogger(__name__)
 AMAP_MCP_ROUTE_TOOL = "amap.route_plan"
 AMAP_MCP_GEO_TOOL = "amap.geo"
 AMAP_MCP_REGEO_TOOL = "amap.regeo"
+AMAP_MCP_AROUND_TOOL = "amap.around_search"
 
 # 逆地理编码：单次尝试超时与拿地名的整体预算（须小于 query_current_location 的 background 预算 30s）。
 ADDRESS_ATTEMPT_TIMEOUT_SECONDS = 6.0
@@ -3307,12 +3308,27 @@ async def _resolve_location_name(context: ToolContext, location_data: dict) -> T
             timeout_seconds=ADDRESS_ATTEMPT_TIMEOUT_SECONDS,
         )
         if regeo["ok"]:
+            address = regeo["formatted_address"]
+            nearby_name = None
+            # 逆地理编码只到区县级时，用周边检索补一个最近 POI，给出更精确的地点。
+            nearby = await _nearby_place_amap(
+                mcp,
+                gcj_latitude=regeo["gcj02_latitude"],
+                gcj_longitude=regeo["gcj02_longitude"],
+                timeout_seconds=ADDRESS_ATTEMPT_TIMEOUT_SECONDS,
+            )
+            if nearby:
+                nearby_name = nearby.get("name") or None
+                detail = nearby.get("address") or nearby.get("name") or ""
+                if detail and detail not in address:
+                    address = f"{address}{detail}附近" if address else f"{detail}附近"
             return ToolResult.success(
                 data={
                     "location_ready": True,
                     "provider": "device_gps",
-                    "address": regeo["formatted_address"],
+                    "address": address,
                     "address_components": regeo["components"],
+                    "nearby_poi": nearby_name,
                     "address_provider": "amap_mcp",
                     "coordinate_system": "wgs84",
                     "gcj02_latitude": regeo["gcj02_latitude"],
@@ -3320,7 +3336,7 @@ async def _resolve_location_name(context: ToolContext, location_data: dict) -> T
                     "accuracy_meters": location_data.get("accuracy_meters"),
                     "error": None,
                 },
-                message=f"你当前位于{regeo['formatted_address']}。",
+                message=f"你当前位于{address}。",
             )
         last_error = regeo["error"]
         if not regeo.get("retryable") or time.monotonic() >= deadline:
@@ -3664,14 +3680,19 @@ def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
         try:
             tool_names = {tool.name for tool in configured_gateway.list_tools()}
             if AMAP_MCP_ROUTE_TOOL in tool_names:
-                # 已配置网关可能只注册了 geo/route，补上逆地理编码工具，避免 query_current_location 拿不到地名。
-                if AMAP_MCP_REGEO_TOOL not in tool_names:
-                    try:
-                        configured_gateway.register_tool(
-                            McpToolSpec(name=AMAP_MCP_REGEO_TOOL, server="amap", target_name="maps_regeocode")
-                        )
-                    except Exception:
-                        pass
+                # 已配置网关可能只注册了 geo/route，补上逆地理编码和周边检索工具，
+                # 否则 query_current_location 拿不到地名或拿不到更精确的 POI。
+                for missing_name, target in (
+                    (AMAP_MCP_REGEO_TOOL, "maps_regeocode"),
+                    (AMAP_MCP_AROUND_TOOL, "maps_around_search"),
+                ):
+                    if missing_name not in tool_names:
+                        try:
+                            configured_gateway.register_tool(
+                                McpToolSpec(name=missing_name, server="amap", target_name=target)
+                            )
+                        except Exception:
+                            pass
                 return configured_gateway
         except Exception:
             pass
@@ -3696,6 +3717,7 @@ def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_GEO_TOOL, server="amap", target_name="maps_geo"))
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_ROUTE_TOOL, server="amap", target_name="maps_direction_walking"))
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_REGEO_TOOL, server="amap", target_name="maps_regeocode"))
+    gateway.register_tool(McpToolSpec(name=AMAP_MCP_AROUND_TOOL, server="amap", target_name="maps_around_search"))
     return gateway
 
 
@@ -4048,8 +4070,55 @@ async def _reverse_geocode_amap(
     result["ok"] = True
     result["formatted_address"] = formatted
     result["components"] = components
-    logger.info("query_current_location regeo ok location=%s address=%s", location_arg, formatted)
+    logger.info(
+        "query_current_location regeo ok location=%s address=%s raw=%s",
+        location_arg,
+        formatted,
+        _amap_regeo_debug(call_result),
+    )
     return result
+
+
+async def _nearby_place_amap(mcp: Any, *, gcj_latitude: float, gcj_longitude: float, timeout_seconds: float) -> dict | None:
+    """用高德周边检索取最近 POI，给 district 级地址补一个可识别的地点名。
+
+    主要逻辑：maps_regeocode 在部分高德 MCP 实现里只返回区县级，这里用
+    maps_around_search 取最近 POI（名称/地址）补精度。best-effort：失败返回 None。
+    参数：`gcj_latitude/gcj_longitude` 为 GCJ-02 坐标；`timeout_seconds` 为等待预算。
+    返回值：{name, address} 或 None。
+    异常情况：无（任何失败收敛成 None）。
+    """
+
+    location_arg = f"{gcj_longitude:.6f},{gcj_latitude:.6f}"
+    try:
+        gateway = _resolve_amap_mcp_gateway(mcp)
+        call_result = await asyncio.wait_for(
+            asyncio.to_thread(
+                gateway.call,
+                tool_name=AMAP_MCP_AROUND_TOOL,
+                arguments={"location": location_arg, "radius": "1000"},
+                timeout_seconds=max(0.2, timeout_seconds),
+            ),
+            timeout=timeout_seconds,
+        )
+        parsed = _mcp_text_json(call_result)
+    except Exception as exc:  # noqa: BLE001 - 周边检索只是锦上添花，失败保持区县级
+        logger.info("query_current_location around failed location=%s error=%s", location_arg, exc)
+        return None
+    pois = parsed.get("pois")
+    if isinstance(pois, dict):
+        pois = [pois]
+    if not isinstance(pois, list):
+        return None
+    for poi in pois:
+        if not isinstance(poi, dict):
+            continue
+        name = str(poi.get("name") or "").strip()
+        address = str(poi.get("address") or "").strip()
+        if name or address:
+            logger.info("query_current_location around ok location=%s name=%s address=%s", location_arg, name, address)
+            return {"name": name, "address": address}
+    return None
 
 
 class SearchConversationHistoryInput(BaseModel):

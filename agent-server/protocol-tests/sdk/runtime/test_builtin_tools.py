@@ -486,6 +486,78 @@ def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch)
     assert abs(sent_lng - 121.410163) < 1e-4
 
 
+def test_query_current_location_enriches_district_with_nearby_poi(tmp_path, monkeypatch) -> None:
+    """测试目标：逆地理编码只到区县级时，用周边检索补最近 POI 给出更精确地点。
+
+    测试方法：FakeMcp 让 amap.regeo 只返回 district=徐汇区，amap.around_search 返回最近 POI。
+    预期结果：最终 address 含 POI（如“…漕河泾开发区附近”），而不是只有“徐汇区”。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    user_id = "user-location-poi"
+    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-location-poi")
+    register_endpoint(
+        app,
+        endpoint,
+        properties={"realtime_agent.location": True, "realtime_agent.location_commands": ["device.location.get_current"]},
+    )
+
+    def text_result(obj: dict) -> dict:
+        return {"result": {"content": [{"type": "text", "text": json.dumps(obj, ensure_ascii=False)}]}}
+
+    class FakeMcp:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def call(self, tool_name, arguments, timeout_seconds=None):
+            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments)})
+            if tool_name == "amap.regeo":
+                return text_result({"regeocode": {"addressComponent": {"district": "徐汇区"}}})
+            if tool_name == "amap.around_search":
+                return text_result({"pois": [{"name": "漕河泾开发区", "address": "桂平路426号"}]})
+            return text_result({})
+
+    fake_mcp = FakeMcp()
+    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: fake_mcp)
+
+    async def _run():
+        task = asyncio.create_task(
+            app.tool_gateway.call(
+                name="query_current_location",
+                user_id=user_id,
+                session_id="session-location",
+                input_data={"timeout_seconds": 1},
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        command = endpoint.events[-1]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-location-poi",
+                payload={
+                    "command_id": command.payload["command_id"],
+                    "command": "device.location.get_current",
+                    "location": {"latitude": 31.173648, "longitude": 121.405517, "accuracy": 19.5},
+                },
+            )
+        )
+        return await asyncio.wait_for(task, timeout=2)
+
+    result = asyncio.run(_run())
+
+    assert result.ok is True
+    assert result.data["location_ready"] is True
+    assert "徐汇区" in result.data["address"]
+    assert "桂平路426号" in result.data["address"]
+    assert result.data["nearby_poi"] == "漕河泾开发区"
+    assert any(call["tool_name"] == "amap.around_search" for call in fake_mcp.calls)
+
+
 def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> None:
     """测试目标：验证路线规划 Tool 可直接使用 AMAP_MCP 环境变量调用 MCP。
 
