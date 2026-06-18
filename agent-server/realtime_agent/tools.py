@@ -2893,6 +2893,10 @@ AMAP_MCP_ROUTE_TOOL = "amap.route_plan"
 AMAP_MCP_GEO_TOOL = "amap.geo"
 AMAP_MCP_REGEO_TOOL = "amap.regeo"
 
+# 逆地理编码：单次尝试超时与拿地名的整体预算（须小于 query_current_location 的 background 预算 30s）。
+ADDRESS_ATTEMPT_TIMEOUT_SECONDS = 6.0
+ADDRESS_RESOLVE_BUDGET_SECONDS = 24.0
+
 
 class SearchWebInput(BaseModel):
     """联网搜索 Tool 输入参数。"""
@@ -3110,14 +3114,9 @@ class QueryCurrentLocationInput(BaseModel):
 class QueryCurrentLocationOutput(BaseModel):
     """当前位置查询 Tool 输出结构。"""
 
-    location_ready: bool = Field(description="是否拿到可用于导航的当前位置。")
-    provider: str = Field(description="定位来源，例如 device_gps、no_capable_device、timeout。")
-    latitude: float | None = Field(default=None, description="纬度（WGS-84，端侧原始坐标）。")
-    longitude: float | None = Field(default=None, description="经度（WGS-84，端侧原始坐标）。")
-    coordinate_system: str | None = Field(default=None, description="latitude/longitude 所用坐标系，端侧固定为 wgs84。")
-    gcj02_latitude: float | None = Field(default=None, description="转换后的 GCJ-02 纬度（高德所用火星坐标）。")
-    gcj02_longitude: float | None = Field(default=None, description="转换后的 GCJ-02 经度（高德所用火星坐标）。")
-    address: str | None = Field(default=None, description="高德逆地理编码得到的地点名称/格式化地址。")
+    location_ready: bool = Field(description="是否拿到可用于回答用户的当前位置（必须有地点名称）。")
+    provider: str = Field(description="结果来源，例如 device_gps、no_capable_device、address_unavailable。")
+    address: str | None = Field(default=None, description="高德逆地理编码得到的地点名称/格式化地址；这是回答用户的唯一可用信息。")
     address_components: dict | None = Field(default=None, description="行政区划（省/市/区/街道）。")
     accuracy_meters: float | None = Field(default=None, description="定位精度，单位米。")
     error: str | None = Field(default=None, description="失败或不可用原因。")
@@ -3139,32 +3138,36 @@ class QueryCurrentLocationTool(BaseTool):
         capability_type="tool",
         tags=["location", "gps", "navigation"],
         progress_message=("我先获取一下当前位置。", "稍等，我请求一下设备定位。"),
-        # 定位后还要调高德逆地理编码，整体可能超过前台等待窗口（3s）。
-        # 声明 background：快则前台直接返回，慢则先回“正在查询”，地名稍后随 follow-up 送达，避免被前台超时杀掉。
+        # 定位后必须拿到地点名称才返回（不回退裸经纬度），逆地理编码整体可能超过前台等待窗口（3s）。
+        # 声明 background：拿到地名则前台直接返回；慢则先回 running_message，地名稍后随 follow-up 送达。
         late_result_policy="background",
         background_timeout_seconds=30,
         follow_up_ttl_seconds=300,
+        running_message="正在查询中，有点慢，请稍后。",
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
         """请求端侧当前位置。
 
-        主要逻辑：先根据设备注册 properties 判断是否有端侧声明可消费定位命令；
-        没有则立即返回提醒；有则发送 `device.location.get_current` 标准命令并等待终态。
+        主要逻辑：先发 `device.location.get_current` 拿端侧坐标；拿到后必须经高德逆
+        地理编码转成地点名称才返回，绝不回退裸经纬度（坐标对用户无意义）。逆地理编码
+        失败但可重试时持续重试，整体由 background 预算兜底，慢则先回 running_message。
         参数：`context` 为 SDK 注入上下文；`input_data` 包含超时和高精度偏好。
-        返回值：成功时返回经纬度和精度；失败、未授权、无人消费或超时时返回结构化原因。
-        异常情况：设备选择或命令等待异常会转成 ToolResult 成功态下的不可用数据，
-        便于模型继续追问用户。
+        返回值：成功返回地点名称；无设备/无能力/最终拿不到地名时返回不含坐标的结构化原因。
+        异常情况：命令或逆地理编码异常都收敛成 ToolResult，便于模型继续追问用户。
         """
 
         timeout_seconds = float(input_data.get("timeout_seconds") or 6)
         high_accuracy = bool(input_data.get("high_accuracy", True))
-        return await _request_device_location(
+        base = await _request_device_location(
             context,
             timeout_seconds=timeout_seconds,
             high_accuracy=high_accuracy,
-            resolve_address=True,
         )
+        if not base.data.get("location_ready"):
+            # 无设备 / 未声明能力 / 定位失败：沿用既有提示（本就不含坐标地名）。
+            return base
+        return await _resolve_location_name(context, base.data)
 
 
 async def _request_device_location(
@@ -3172,8 +3175,6 @@ async def _request_device_location(
     *,
     timeout_seconds: float,
     high_accuracy: bool,
-    resolve_address: bool = False,
-    address_timeout_seconds: float = 4.0,
 ) -> ToolResult:
     """请求端侧返回一次当前位置。
 
@@ -3261,7 +3262,7 @@ async def _request_device_location(
             },
             message="端侧返回的定位结果不完整，请告诉我明确的出发地点。",
         )
-    # 端侧 CoreLocation/浏览器返回 WGS-84，这里补一份高德所用的 GCJ-02 坐标。
+    # 端侧 CoreLocation/浏览器返回 WGS-84，这里补一份高德所用的 GCJ-02 坐标（供路线规划等下游使用）。
     gcj_lat, gcj_lng = _wgs84_to_gcj02(location["latitude"], location["longitude"])
     data = {
         "location_ready": True,
@@ -3274,29 +3275,70 @@ async def _request_device_location(
         "accuracy_meters": location.get("accuracy_meters"),
         "timestamp_ms": location.get("timestamp_ms"),
         "command_id": result.command_id,
-        "address": None,
         "raw": location.get("raw") or {},
         "error": None,
     }
-    message = f"已获取当前位置：{location['longitude']},{location['latitude']}"
-    if resolve_address:
+    return ToolResult.success(data=data, message=f"已获取当前位置坐标：{location['longitude']},{location['latitude']}")
+
+
+async def _resolve_location_name(context: ToolContext, location_data: dict) -> ToolResult:
+    """把端侧坐标解析成地点名称后返回，绝不回退裸经纬度。
+
+    主要逻辑：用高德逆地理编码把坐标转成地名；成功即返回地名。可重试失败（超时等）时
+    在整体预算内持续重试——因为工具是 background，超过前台窗口会先回 running_message，
+    地名稍后随 follow-up 送达。最终仍拿不到地名时返回不含坐标的“查不到”提示。
+    参数：`context` 为工具上下文；`location_data` 为 `_request_device_location` 的成功数据。
+    返回值：成功返回带 address 的 ToolResult；失败返回 location_ready=False 且不含经纬度。
+    异常情况：无（逆地理编码异常已在内部收敛）。
+    """
+
+    latitude = location_data["latitude"]
+    longitude = location_data["longitude"]
+    mcp = getattr(context, "mcp", None)
+    deadline = time.monotonic() + ADDRESS_RESOLVE_BUDGET_SECONDS
+    attempts = 0
+    last_error: str | None = None
+    while True:
+        attempts += 1
         regeo = await _reverse_geocode_amap(
-            getattr(context, "mcp", None),
-            latitude=location["latitude"],
-            longitude=location["longitude"],
-            timeout_seconds=address_timeout_seconds,
+            mcp,
+            latitude=latitude,
+            longitude=longitude,
+            timeout_seconds=ADDRESS_ATTEMPT_TIMEOUT_SECONDS,
         )
-        data["gcj02_latitude"] = regeo["gcj02_latitude"]
-        data["gcj02_longitude"] = regeo["gcj02_longitude"]
         if regeo["ok"]:
-            data["address"] = regeo["formatted_address"]
-            data["address_components"] = regeo["components"]
-            data["address_provider"] = "amap_mcp"
-            message = f"你当前位于{regeo['formatted_address']}（{location['longitude']},{location['latitude']}）。"
-        else:
-            data["address_provider"] = "amap_unavailable"
-            data["address_error"] = regeo["error"]
-    return ToolResult.success(data=data, message=message)
+            return ToolResult.success(
+                data={
+                    "location_ready": True,
+                    "provider": "device_gps",
+                    "address": regeo["formatted_address"],
+                    "address_components": regeo["components"],
+                    "address_provider": "amap_mcp",
+                    "coordinate_system": "wgs84",
+                    "gcj02_latitude": regeo["gcj02_latitude"],
+                    "gcj02_longitude": regeo["gcj02_longitude"],
+                    "accuracy_meters": location_data.get("accuracy_meters"),
+                    "error": None,
+                },
+                message=f"你当前位于{regeo['formatted_address']}。",
+            )
+        last_error = regeo["error"]
+        if not regeo.get("retryable") or time.monotonic() >= deadline:
+            logger.info(
+                "query_current_location address unavailable attempts=%s error=%s",
+                attempts,
+                last_error,
+            )
+            return ToolResult.success(
+                data={
+                    "location_ready": False,
+                    "provider": "address_unavailable",
+                    "address": None,
+                    "error": last_error or "无法解析当前位置名称。",
+                },
+                message="暂时查询不到你所在的位置名称，请稍后再试。",
+            )
+        await asyncio.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
 
 
 def _device_supports_location(device: DeviceSnapshot) -> bool:
@@ -3968,6 +4010,8 @@ async def _reverse_geocode_amap(
         "formatted_address": None,
         "components": None,
         "error": None,
+        # 仅超时视为可重试（短暂慢）；配置缺失/工具不存在/返回无地址等重试也无用，标记不可重试。
+        "retryable": False,
     }
     location_arg = f"{gcj_lng:.6f},{gcj_lat:.6f}"
     try:
@@ -3983,6 +4027,7 @@ async def _reverse_geocode_amap(
         )
     except (asyncio.TimeoutError, TimeoutError) as exc:
         result["error"] = f"高德逆地理编码超时：{exc}" if str(exc) else "高德逆地理编码超时。"
+        result["retryable"] = True
         logger.info("query_current_location regeo timeout location=%s error=%s", location_arg, result["error"])
         return result
     except Exception as exc:  # noqa: BLE001 - 逆地理编码失败只降级为无地名，不阻断定位

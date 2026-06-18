@@ -279,12 +279,13 @@ def test_query_current_location_returns_message_without_capable_device(tmp_path)
     assert endpoint.events == []
 
 
-def test_query_current_location_sends_command_and_reads_device_result(tmp_path) -> None:
-    """测试目标：验证定位 Tool 会向声明定位能力的端侧发命令并读取回报。
+def test_query_current_location_without_amap_returns_no_coordinates(tmp_path) -> None:
+    """测试目标：验证拿到端侧坐标但无法逆地理编码时不回退裸经纬度。
 
-    测试方法：注册带 `realtime_agent.location=true` 的设备，异步调用 Tool 后手工
-    回发 `command.completed`。
-    预期结果：Tool 返回 location_ready=True，包含端侧经纬度和精度。
+    测试方法：注册带 `realtime_agent.location=true` 的设备并回发坐标，但不配置高德 MCP，
+    逆地理编码会因网关不可用而失败。
+    预期结果：Tool 发出定位命令并读取坐标，但因拿不到地名返回 location_ready=False、
+    provider=address_unavailable，且结果里不含经纬度（坐标对用户无意义）。
     """
 
     app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
@@ -322,17 +323,18 @@ def test_query_current_location_sends_command_and_reads_device_result(tmp_path) 
                 },
             )
         )
-        return await asyncio.wait_for(task, timeout=1)
+        return await asyncio.wait_for(task, timeout=2)
 
     result = asyncio.run(_run())
 
     assert endpoint.events[-1].payload["command"] == "device.location.get_current"
     assert result.ok is True
-    assert result.data["location_ready"] is True
-    assert result.data["provider"] == "device_gps"
-    assert result.data["latitude"] == 31.164033
-    assert result.data["longitude"] == 121.410553
-    assert result.data["accuracy_meters"] == 18.5
+    assert result.data["location_ready"] is False
+    assert result.data["provider"] == "address_unavailable"
+    assert result.data["address"] is None
+    # 关键：绝不回退裸经纬度。
+    assert "latitude" not in result.data
+    assert "longitude" not in result.data
 
 
 def test_wgs84_to_gcj02_matches_known_shanghai_point() -> None:
