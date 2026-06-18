@@ -3139,6 +3139,11 @@ class QueryCurrentLocationTool(BaseTool):
         capability_type="tool",
         tags=["location", "gps", "navigation"],
         progress_message=("我先获取一下当前位置。", "稍等，我请求一下设备定位。"),
+        # 定位后还要调高德逆地理编码，整体可能超过前台等待窗口（3s）。
+        # 声明 background：快则前台直接返回，慢则先回“正在查询”，地名稍后随 follow-up 送达，避免被前台超时杀掉。
+        late_result_policy="background",
+        background_timeout_seconds=30,
+        follow_up_ttl_seconds=300,
     )
 
     async def run(self, context: ToolContext, input_data: dict) -> ToolResult:
