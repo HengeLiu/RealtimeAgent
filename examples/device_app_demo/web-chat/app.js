@@ -41,6 +41,7 @@ const elements = {
   copyDiagnosticsButton: document.getElementById("copyDiagnosticsButton"),
   copyLogsButton: document.getElementById("copyLogsButton"),
   clearLogsButton: document.getElementById("clearLogsButton"),
+  fetchLocationButton: document.getElementById("fetchLocationButton"),
 };
 
 class WebChatRuntime {
@@ -306,6 +307,44 @@ class WebChatRuntime {
     this.appendLog("logs cleared");
   }
 
+  async logDeviceLocation() {
+    if (this.locationBusy) {
+      this.appendLog("location read ignored (in progress)");
+      return;
+    }
+    if (!navigator.geolocation) {
+      this.appendLog("GPS read failed: 浏览器不支持 geolocation");
+      return;
+    }
+    if (!window.isSecureContext) {
+      this.appendLog("GPS read warning: 非安全上下文(需 https 或 localhost)，浏览器可能拒绝定位");
+    }
+    this.locationBusy = true;
+    this.appendLog("read gps location ...");
+    try {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 10000,
+          maximumAge: 30000,
+        });
+      });
+      const c = position.coords;
+      const alt = c.altitude == null ? "-" : `${c.altitude.toFixed(1)}m`;
+      const speed = c.speed == null ? "-" : `${c.speed.toFixed(1)}m/s`;
+      const heading = c.heading == null ? "-" : `${Math.round(c.heading)}°`;
+      this.appendLog(
+        `GPS lat=${c.latitude.toFixed(6)} lng=${c.longitude.toFixed(6)} ` +
+          `acc=${c.accuracy.toFixed(1)}m alt=${alt} speed=${speed} heading=${heading} (WGS-84)`,
+      );
+    } catch (error) {
+      const code = error && typeof error.code === "number" ? ` code=${error.code}` : "";
+      this.appendLog(`GPS read failed: ${error?.message || error}${code}`);
+    } finally {
+      this.locationBusy = false;
+    }
+  }
+
   async copyLogs() {
     await navigator.clipboard.writeText(this.logs.slice().reverse().join("\n"));
     this.appendLog("logs copied");
@@ -336,6 +375,9 @@ elements.copyLogsButton.addEventListener("click", () => {
   void runtime.copyLogs();
 });
 elements.clearLogsButton.addEventListener("click", () => runtime.clearLogs());
+elements.fetchLocationButton.addEventListener("click", () => {
+  void runtime.logDeviceLocation();
+});
 window.addEventListener("beforeunload", () => {
   void runtime.client?.close({force: true});
 });

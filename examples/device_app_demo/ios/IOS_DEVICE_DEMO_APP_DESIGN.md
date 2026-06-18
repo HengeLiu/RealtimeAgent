@@ -93,7 +93,7 @@ App 启动后停在空闲态，等待用户首次点击主按钮后执行（`sta
    - `audioInput: .enabled()`
    - `speaker: .enabled(buffer: .default, duplexMode: .fullDuplexServerBargeIn)`
    - `camera: .enabled(source: previewFrameSource)`
-   - `properties` 中声明定位能力 `realtime_agent.location: true` 与 `realtime_agent.location_commands: ["device.location.get_current"]`，与 web-chat 对齐；`device.location.get_current` 标准命令由 Swift SDK 用 CoreLocation 内置处理，App 无需注册 handler（需在 Info.plist 配置 `NSLocationWhenInUseUsageDescription`）。端侧只回报 **WGS-84** 原始坐标（缓存优先 + 持续更新取首帧，避免冷启动超时）；坐标系转换（WGS-84→GCJ-02）和逆地理编码（高德 MCP）由服务端 `query_current_location` 工具负责。
+   - `properties` 中声明定位能力 `realtime_agent.location: true` 与 `realtime_agent.location_commands: ["device.location.get_current"]`，与 web-chat 对齐；`device.location.get_current` 标准命令由 Swift SDK 用 CoreLocation 内置处理，App 无需注册 handler（需在 Info.plist 配置 `NSLocationWhenInUseUsageDescription`）。端侧只回报 **WGS-84** 原始坐标（缓存优先 + 持续更新取首帧，避免冷启动超时）；坐标系转换（WGS-84→GCJ-02）和地点名称解析（高德 MCP 周边检索 maps_around_search）由服务端 `query_current_location` 工具负责。
 3. 注册 `onCustomCommand` 和 `onEvent("custom.*")` 示例 handler。
 4. 调用 `client.requestPermissions()`。
 5. 权限成功后调用 `client.register()`。
