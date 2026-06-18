@@ -34,7 +34,9 @@
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Device Demo 需要使用麦克风作为实时对话的音频输入。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>Device Demo 需要使用定位以响应实时对话中的位置查询。</string>
+	<string>Device Demo 需要使用定位以响应实时对话中的位置查询，以及在调试页读取 GPS 信息。</string>
+	<key>NSMotionUsageDescription</key>
+	<string>Device Demo 需要读取设备姿态(陀螺仪/加速度计)用于调试页展示。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Device Demo 需要访问局域网内的 realtime-agent server。</string>
 	<key>NSAppTransportSecurity</key>

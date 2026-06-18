@@ -332,6 +332,7 @@ try await client.requestConversationClose(reason: "app_idle_timeout")
 - 清空日志。
 - 重新注册。
 - 请求结束通话。
+- 获取定位与姿态：用 CoreLocation 取一次 GPS、CoreMotion 取一次设备姿态(roll/pitch/yaw、gravity、rotationRate)，结果打印到日志区。该读取是 App 层调试能力，独立于 SDK 的 `device.location.get_current` 命令处理。
 
 调试面板不能成为业务状态源，只能读取 ViewModel 和 SDK diagnostics。
 

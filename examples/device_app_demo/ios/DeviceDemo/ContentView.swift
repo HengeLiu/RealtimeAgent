@@ -188,6 +188,10 @@ private struct DebugSheet: View {
                 }
 
                 Section("操作") {
+                    Button("获取定位与姿态") {
+                        runtime.logDeviceSensors()
+                    }
+
                     Button("复制日志") {
                         UIPasteboard.general.string = runtime.logs.reversed().joined(separator: "\n")
                     }
