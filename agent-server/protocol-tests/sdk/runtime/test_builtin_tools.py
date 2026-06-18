@@ -352,6 +352,43 @@ def test_wgs84_to_gcj02_matches_known_shanghai_point() -> None:
     assert _wgs84_to_gcj02(37.0, -122.0) == (37.0, -122.0)
 
 
+def test_extract_amap_address_tolerates_shapes() -> None:
+    """测试目标：逆地理编码解析兼容多种高德 MCP 返回结构。
+
+    测试方法：分别用 regeocode 包裹、扁平 components(无 formatted_address)、纯文本、
+    isError 四种 content。
+    预期结果：前三种都能解析出地名；isError 返回空地址和错误。
+    """
+
+    from realtime_agent.tools import _extract_amap_address
+
+    def wrap(text: str, is_error: bool = False) -> dict:
+        return {"result": {"isError": is_error, "content": [{"type": "text", "text": text}]}}
+
+    nested = wrap(json.dumps({"regeocode": {"formatted_address": "上海市徐汇区桂平路"}}, ensure_ascii=False))
+    assert _extract_amap_address(nested)[0] == "上海市徐汇区桂平路"
+
+    # 只有行政区划、没有 formatted_address 时用区划拼地名（这正是之前只回经纬度的根因之一）。
+    components_only = wrap(
+        json.dumps(
+            {"addressComponent": {"province": "上海市", "city": [], "district": "徐汇区", "township": "漕河泾街道"}},
+            ensure_ascii=False,
+        )
+    )
+    formatted, components, error = _extract_amap_address(components_only)
+    assert error is None
+    assert formatted == "上海市徐汇区漕河泾街道"
+    assert components["district"] == "徐汇区"
+
+    # 纯文本地址直接采用。
+    assert _extract_amap_address(wrap("上海市徐汇区漕河泾"))[0] == "上海市徐汇区漕河泾"
+
+    # isError 返回空地址和错误文本。
+    formatted_err, _, error_err = _extract_amap_address(wrap("rate limit", is_error=True))
+    assert formatted_err == ""
+    assert error_err
+
+
 def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch) -> None:
     """测试目标：验证定位 Tool 拿到端侧 WGS-84 后转 GCJ-02 并用高德逆地理编码出地名。
 
