@@ -4,8 +4,8 @@ import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from realtime_agent.conversation.context.models import ModelContext, estimate_tokens, normalize_history_message, normalize_tool_call
-from realtime_agent.conversation.context.policy import ContextPolicy, _drop_orphan_tool_messages
+from realtime_agent.conversation.context.models import ModelContext, normalize_history_message
+from realtime_agent.conversation.context.policy import ContextPolicy
 from realtime_agent.conversation.context.registry import PromptRegistry
 from realtime_agent.conversation.context.sources import make_source
 
@@ -81,13 +81,8 @@ class ContextCompiler:
                     )
                 )
 
-        # --- 长期记忆：按 token_budget_memory 截断 ---
         memory_fragment = self._load_memory_fragment(request=request, warnings=warnings)
         if memory_fragment:
-            memory_tokens = estimate_tokens(memory_fragment)
-            if memory_tokens > self.policy.token_budget_memory:
-                memory_fragment = _truncate_text(memory_fragment, self.policy.token_budget_memory)
-                truncations.append({"source": "long_term_memory", "reason": "token_budget_memory", "tokens_before": memory_tokens, "tokens_after": estimate_tokens(memory_fragment)})
             instructions = f"{instructions}\n\n{memory_fragment}" if instructions else memory_fragment
             sources.append(
                 make_source(
@@ -99,14 +94,8 @@ class ContextCompiler:
                 )
             )
 
-        # --- 历史摘要：按 token_budget_memory 共享预算截断 ---
         summary_fragment = self._load_summary_fragment(request=request, warnings=warnings)
         if summary_fragment:
-            summary_tokens = estimate_tokens(summary_fragment)
-            remaining_memory_budget = max(0, self.policy.token_budget_memory - estimate_tokens(memory_fragment))
-            if summary_tokens > remaining_memory_budget:
-                summary_fragment = _truncate_text(summary_fragment, remaining_memory_budget)
-                truncations.append({"source": "history_summary", "reason": "token_budget_memory", "tokens_before": summary_tokens, "tokens_after": estimate_tokens(summary_fragment)})
             instructions = f"{instructions}\n\n{summary_fragment}" if instructions else summary_fragment
             sources.append(
                 make_source(
@@ -118,20 +107,7 @@ class ContextCompiler:
                 )
             )
 
-        # --- instructions 整体预算检查 ---
-        instructions_tokens = estimate_tokens(instructions)
-        if instructions_tokens > self.policy.token_budget_instructions:
-            instructions = _truncate_text(instructions, self.policy.token_budget_instructions)
-            truncations.append({"source": "instructions", "reason": "token_budget_instructions", "tokens_before": instructions_tokens, "tokens_after": estimate_tokens(instructions)})
-
         active_messages = self._load_active_messages(request=request, warnings=warnings)
-        # --- messages 预算裁剪 ---
-        messages_tokens = sum(estimate_tokens(msg) for msg in active_messages)
-        if messages_tokens > self.policy.token_budget_messages:
-            active_messages, dropped = _trim_messages_by_token_budget(active_messages, self.policy.token_budget_messages)
-            if dropped > 0:
-                truncations.append({"source": "active_messages", "reason": "token_budget_messages", "messages_dropped": dropped, "tokens_after": sum(estimate_tokens(msg) for msg in active_messages)})
-
         messages = self._build_messages(request=request, active_messages=active_messages)
         if active_messages:
             sources.append(
@@ -149,13 +125,7 @@ class ContextCompiler:
             sources.append(current_source)
 
         tools = self._build_tools(request=request)
-        # --- tools 预算裁剪 ---
-        if request.include_tools and tools:
-            tools_tokens = estimate_tokens(tools)
-            if tools_tokens > self.policy.token_budget_tools:
-                tools, dropped = _trim_tools_by_token_budget(tools, self.policy.token_budget_tools)
-                if dropped > 0:
-                    truncations.append({"source": "tool_schema", "reason": "token_budget_tools", "tools_dropped": dropped, "tokens_after": estimate_tokens(tools)})
+        if request.include_tools:
             sources.append(
                 make_source(
                     source_id="tools:provider_schema",
@@ -188,7 +158,7 @@ class ContextCompiler:
             warnings.append(
                 {
                     "code": "context_token_budget_exceeded",
-                    "message": "上下文估算 token 超过总预算（各分区裁剪后仍超限）。",
+                    "message": "上下文估算 token 超过预算，第一版仅记录不自动裁剪。",
                     "token_estimate": token_estimate,
                     "token_budget_total": self.policy.token_budget_total,
                 }
@@ -345,90 +315,6 @@ def _resolve_base_instructions(registry: PromptRegistry, prompt_name: str, inlin
 def _resolve_prompt(registry: PromptRegistry, prompt_name: str) -> str:
     asset = registry.maybe_get(prompt_name)
     return asset.content if asset is not None else ""
-
-
-def _truncate_text(text: str, token_budget: int) -> str:
-    """按 token 预算截断文本，保留前缀并附加截断标记。
-
-    参数：`text` 为原始文本；`token_budget` 为目标 token 数。
-    返回值：截断后的文本。
-    异常情况：无。
-    """
-
-
-    if estimate_tokens(text) <= token_budget:
-        return text
-    # 粗略按字符数截断：token_budget * 4 是保守的字符上限（ASCII 场景最多 4 字符/token）
-    char_budget = max(100, token_budget * 2)  # 混合场景取 2 字符/token 作为中间值
-    truncated = text[:char_budget]
-    # 往前找到一个合理的断句点
-    for sep in ("\n\n", "\n", "。", "；", ".", ";", " "):
-        idx = truncated.rfind(sep)
-        if idx > char_budget // 2:
-            truncated = truncated[: idx + len(sep)]
-            break
-    return truncated + "\n…（已截断）"
-
-
-def _trim_messages_by_token_budget(messages: list[dict[str, Any]], token_budget: int) -> tuple[list[dict[str, Any]], int]:
-    """按 token 预算从旧到新裁剪消息列表。
-
-    参数：`messages` 为原始消息列表；`token_budget` 为目标 token 数。
-    返回值：(保留的消息列表, 被丢弃的消息数)。
-    异常情况：无。
-    """
-
-
-    if not messages:
-        return messages, 0
-    total = sum(estimate_tokens(msg) for msg in messages)
-    if total <= token_budget:
-        return messages, 0
-    # 从最旧的消息开始丢弃，保留 tool result 与其 tool_call 的配对
-    remaining = total
-    drop_count = 0
-    for i, msg in enumerate(messages):
-        msg_tokens = estimate_tokens(msg)
-        if remaining - msg_tokens <= token_budget:
-            # 丢弃这条后就达标了，但要检查是否是孤立的 tool result
-            break
-        remaining -= msg_tokens
-        drop_count = i + 1
-    # 确保不会从 tool_calls 中间截断：如果 drop 位置落在 tool result 上，回退
-    while drop_count > 0 and drop_count < len(messages):
-        msg = messages[drop_count]
-        if msg.get("role") == "tool":
-            drop_count -= 1
-        else:
-            break
-    if drop_count <= 0:
-        return messages, 0
-    trimmed = _drop_orphan_tool_messages(list(messages[drop_count:]))
-    return trimmed, drop_count
-
-
-def _trim_tools_by_token_budget(tools: list[dict[str, Any]], token_budget: int) -> tuple[list[dict[str, Any]], int]:
-    """按 token 预算从末尾裁剪工具列表。
-
-    参数：`tools` 为原始工具列表；`token_budget` 为目标 token 数。
-    返回值：(保留的工具列表, 被丢弃的工具数)。
-    异常情况：无。
-    """
-
-
-    if not tools:
-        return tools, 0
-    total = estimate_tokens(tools)
-    if total <= token_budget:
-        return tools, 0
-    # 逐步从末尾移除工具直到满足预算
-    remaining = total
-    for i in range(len(tools) - 1, -1, -1):
-        tool_tokens = estimate_tokens(tools[i])
-        remaining -= tool_tokens
-        if remaining <= token_budget:
-            return tools[:i], len(tools) - i
-    return [], len(tools)
 
 
 def _tool_schema_name(schema: dict[str, Any]) -> str:

@@ -2751,7 +2751,7 @@ class OmniRealtimeAgentCore:
             )
         except Exception:
             return []
-        messages = [_normalize_history_message(record) for record in records]
+        messages = [normalize_history_message(record) for record in records]
         return [message for message in messages if message is not None]
 
     def _load_message_summary_fragment(self, *, user_id: str, session_id: str) -> str:
