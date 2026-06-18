@@ -69,7 +69,8 @@ final class DeviceDemoRuntime: ObservableObject {
     private var diagnosticsTask: Task<Void, Never>?
     private var bootstrapTask: Task<Void, Never>?
     private let sensorsReader = DeviceSensorsReader()
-    private var sensorsTask: Task<Void, Never>?
+    private var locationTask: Task<Void, Never>?
+    private var attitudeTask: Task<Void, Never>?
     private let logFileURL: URL
     private let logFileQueue = DispatchQueue(label: "realtime-agent.device-demo.log-file")
     private let logger = Logger(subsystem: "dev.realtimeagent.device-demo", category: "runtime")
@@ -231,24 +232,39 @@ final class DeviceDemoRuntime: ObservableObject {
         }
     }
 
-    /// 读取手机 GPS 定位和姿态信息并打印到日志页。
+    /// 读取手机 GPS 定位并打印到日志页。
     ///
-    /// 主要逻辑：通过 `DeviceSensorsReader` 各取一次 GPS 定位和设备姿态(roll/pitch/yaw)，
-    /// 成功与失败都写入日志，便于真机排查传感器数据。读取在独立 Task 中执行并去重，避免重复点击叠加。
-    func logDeviceSensors() {
-        guard sensorsTask == nil else {
-            appendLog("sensors read ignored (in progress)")
+    /// 主要逻辑：先打印授权/精度/缓存状态便于排查，再通过 `DeviceSensorsReader` 取一次定位；
+    /// 成功与失败都写入日志。读取在独立 Task 中执行并去重，避免重复点击叠加。
+    func logDeviceLocation() {
+        guard locationTask == nil else {
+            appendLog("location read ignored (in progress)")
             return
         }
-        appendLog("read device sensors (gps + attitude) ...")
-        sensorsTask = Task { [weak self] in
-            await self?.readAndLogSensors()
-            await MainActor.run { self?.sensorsTask = nil }
+        appendLog("read gps location ... \(sensorsReader.authorizationSummary)")
+        locationTask = Task { [weak self] in
+            await self?.readAndLogLocation()
+            await MainActor.run { self?.locationTask = nil }
         }
     }
 
-    private func readAndLogSensors() async {
-        let degrees = 180.0 / Double.pi
+    /// 读取手机设备姿态并打印到日志页。
+    ///
+    /// 主要逻辑：通过 `DeviceSensorsReader` 取一次设备姿态(roll/pitch/yaw、gravity、rotationRate)；
+    /// 成功与失败都写入日志。读取在独立 Task 中执行并去重。
+    func logDeviceAttitude() {
+        guard attitudeTask == nil else {
+            appendLog("attitude read ignored (in progress)")
+            return
+        }
+        appendLog("read device attitude ...")
+        attitudeTask = Task { [weak self] in
+            await self?.readAndLogAttitude()
+            await MainActor.run { self?.attitudeTask = nil }
+        }
+    }
+
+    private func readAndLogLocation() async {
         do {
             let location = try await sensorsReader.currentLocation()
             appendLog(String(
@@ -263,7 +279,10 @@ final class DeviceDemoRuntime: ObservableObject {
         } catch {
             appendLog("GPS read failed: \(error.localizedDescription)")
         }
+    }
 
+    private func readAndLogAttitude() async {
+        let degrees = 180.0 / Double.pi
         do {
             let motion = try await sensorsReader.currentDeviceMotion()
             let attitude = motion.attitude

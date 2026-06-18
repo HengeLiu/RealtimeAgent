@@ -335,6 +335,118 @@ def test_query_current_location_sends_command_and_reads_device_result(tmp_path) 
     assert result.data["accuracy_meters"] == 18.5
 
 
+def test_wgs84_to_gcj02_matches_known_shanghai_point() -> None:
+    """测试目标：锁定 WGS-84→GCJ-02 转换结果，避免回归。
+
+    测试方法：用已在高德上核对过的上海坐标做转换，并验证境外坐标按原值返回。
+    预期结果：转换后坐标与高德实测一致（误差 <1e-4），境外坐标不变。
+    """
+
+    from realtime_agent.tools import _out_of_china, _wgs84_to_gcj02
+
+    gcj_lat, gcj_lng = _wgs84_to_gcj02(31.173648, 121.405517)
+    assert abs(gcj_lat - 31.171785) < 1e-4
+    assert abs(gcj_lng - 121.410163) < 1e-4
+    # 境外坐标 GCJ-02 与 WGS-84 一致，直接返回。
+    assert _out_of_china(37.0, -122.0) is True
+    assert _wgs84_to_gcj02(37.0, -122.0) == (37.0, -122.0)
+
+
+def test_query_current_location_resolves_address_via_amap(tmp_path, monkeypatch) -> None:
+    """测试目标：验证定位 Tool 拿到端侧 WGS-84 后转 GCJ-02 并用高德逆地理编码出地名。
+
+    测试方法：注册声明定位能力的端侧并回发 WGS-84 坐标，替换 AMap MCP Gateway 记录
+    regeo 调用并返回 formatted_address。
+    预期结果：送给高德的是转换后的 GCJ-02 坐标，输出带 address 和行政区划。
+    """
+
+    app = RealtimeAgentApp(RealtimeAgentConfig(runs_root=str(tmp_path / "runs")))
+    user_id = "user-location-addr"
+    endpoint = RecordingEndpoint(user_id=user_id, device_id="dev-location-addr")
+    register_endpoint(
+        app,
+        endpoint,
+        properties={"realtime_agent.location": True, "realtime_agent.location_commands": ["device.location.get_current"]},
+    )
+
+    class FakeMcp:
+        def __init__(self) -> None:
+            self.calls = []
+
+        def call(self, tool_name, arguments, timeout_seconds=None):
+            self.calls.append({"tool_name": tool_name, "arguments": dict(arguments), "timeout_seconds": timeout_seconds})
+            return {
+                "result": {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "regeocode": {
+                                        "formatted_address": "上海市徐汇区漕河泾街道桂平路",
+                                        "addressComponent": {
+                                            "province": "上海市",
+                                            "city": [],
+                                            "district": "徐汇区",
+                                            "township": "漕河泾街道",
+                                        },
+                                    }
+                                },
+                                ensure_ascii=False,
+                            ),
+                        }
+                    ]
+                }
+            }
+
+    fake_mcp = FakeMcp()
+    monkeypatch.setattr("realtime_agent.tools._resolve_amap_mcp_gateway", lambda configured_gateway: fake_mcp)
+
+    async def _run():
+        task = asyncio.create_task(
+            app.tool_gateway.call(
+                name="query_current_location",
+                user_id=user_id,
+                session_id="session-location",
+                input_data={"timeout_seconds": 1},
+            )
+        )
+        deadline = asyncio.get_running_loop().time() + 1
+        while not endpoint.events and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.01)
+        assert endpoint.events
+        command = endpoint.events[-1]
+        app.publish_control_event(
+            Event(
+                event_name="command.completed",
+                user_id=user_id,
+                producer_id="dev-location-addr",
+                payload={
+                    "command_id": command.payload["command_id"],
+                    "command": "device.location.get_current",
+                    "location": {"latitude": 31.173648, "longitude": 121.405517, "accuracy": 19.5},
+                },
+            )
+        )
+        return await asyncio.wait_for(task, timeout=2)
+
+    result = asyncio.run(_run())
+
+    assert result.ok is True
+    assert result.data["location_ready"] is True
+    assert result.data["address"] == "上海市徐汇区漕河泾街道桂平路"
+    assert result.data["address_components"]["district"] == "徐汇区"
+    # 直辖市 city 返回空列表时回退到 province。
+    assert result.data["address_components"]["city"] == "上海市"
+    assert result.data["coordinate_system"] == "wgs84"
+    assert abs(result.data["gcj02_longitude"] - 121.410163) < 1e-4
+    # 送给高德的是转换后的 GCJ-02 坐标，而非原始 WGS-84。
+    regeo_calls = [call for call in fake_mcp.calls if call["tool_name"] == "amap.regeo"]
+    assert regeo_calls
+    sent_lng = float(regeo_calls[-1]["arguments"]["location"].split(",")[0])
+    assert abs(sent_lng - 121.410163) < 1e-4
+
+
 def test_query_route_plan_uses_amap_mcp_environment(tmp_path, monkeypatch) -> None:
     """测试目标：验证路线规划 Tool 可直接使用 AMAP_MCP 环境变量调用 MCP。
 

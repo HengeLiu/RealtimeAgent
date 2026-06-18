@@ -93,7 +93,7 @@ App 启动后停在空闲态，等待用户首次点击主按钮后执行（`sta
    - `audioInput: .enabled()`
    - `speaker: .enabled(buffer: .default, duplexMode: .fullDuplexServerBargeIn)`
    - `camera: .enabled(source: previewFrameSource)`
-   - `properties` 中声明定位能力 `realtime_agent.location: true` 与 `realtime_agent.location_commands: ["device.location.get_current"]`，与 web-chat 对齐；`device.location.get_current` 标准命令由 Swift SDK 用 CoreLocation 内置处理，App 无需注册 handler（需在 Info.plist 配置 `NSLocationWhenInUseUsageDescription`）。
+   - `properties` 中声明定位能力 `realtime_agent.location: true` 与 `realtime_agent.location_commands: ["device.location.get_current"]`，与 web-chat 对齐；`device.location.get_current` 标准命令由 Swift SDK 用 CoreLocation 内置处理，App 无需注册 handler（需在 Info.plist 配置 `NSLocationWhenInUseUsageDescription`）。端侧只回报 **WGS-84** 原始坐标（缓存优先 + 持续更新取首帧，避免冷启动超时）；坐标系转换（WGS-84→GCJ-02）和逆地理编码（高德 MCP）由服务端 `query_current_location` 工具负责。
 3. 注册 `onCustomCommand` 和 `onEvent("custom.*")` 示例 handler。
 4. 调用 `client.requestPermissions()`。
 5. 权限成功后调用 `client.register()`。
@@ -332,7 +332,10 @@ try await client.requestConversationClose(reason: "app_idle_timeout")
 - 清空日志。
 - 重新注册。
 - 请求结束通话。
-- 获取定位与姿态：用 CoreLocation 取一次 GPS、CoreMotion 取一次设备姿态(roll/pitch/yaw、gravity、rotationRate)，结果打印到日志区。该读取是 App 层调试能力，独立于 SDK 的 `device.location.get_current` 命令处理。
+- 获取 GPS 定位：用 CoreLocation 取一次定位(缓存优先，否则持续更新取首帧、十米级精度)，结果打印到日志区；失败时先打印授权/精度/服务状态和真实 CLError 便于排查。
+- 获取设备姿态：用 CoreMotion 取一次设备姿态(roll/pitch/yaw、gravity、rotationRate)，结果打印到日志区。
+
+以上两项是 App 层调试能力，独立于 SDK 的 `device.location.get_current` 命令处理。
 
 调试面板不能成为业务状态源，只能读取 ViewModel 和 SDK diagnostics。
 

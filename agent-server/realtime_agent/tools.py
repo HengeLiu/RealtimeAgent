@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import inspect
 import json
+import math
 import os
 import pkgutil
 import threading
@@ -2887,6 +2888,7 @@ def _validate_tool_late_result_policy(
 BOCHA_SEARCH_API_URL_DEFAULT = "https://api.bochaai.com/v1/web-search"
 AMAP_MCP_ROUTE_TOOL = "amap.route_plan"
 AMAP_MCP_GEO_TOOL = "amap.geo"
+AMAP_MCP_REGEO_TOOL = "amap.regeo"
 
 
 class SearchWebInput(BaseModel):
@@ -3107,8 +3109,13 @@ class QueryCurrentLocationOutput(BaseModel):
 
     location_ready: bool = Field(description="是否拿到可用于导航的当前位置。")
     provider: str = Field(description="定位来源，例如 device_gps、no_capable_device、timeout。")
-    latitude: float | None = Field(default=None, description="纬度。")
-    longitude: float | None = Field(default=None, description="经度。")
+    latitude: float | None = Field(default=None, description="纬度（WGS-84，端侧原始坐标）。")
+    longitude: float | None = Field(default=None, description="经度（WGS-84，端侧原始坐标）。")
+    coordinate_system: str | None = Field(default=None, description="latitude/longitude 所用坐标系，端侧固定为 wgs84。")
+    gcj02_latitude: float | None = Field(default=None, description="转换后的 GCJ-02 纬度（高德所用火星坐标）。")
+    gcj02_longitude: float | None = Field(default=None, description="转换后的 GCJ-02 经度（高德所用火星坐标）。")
+    address: str | None = Field(default=None, description="高德逆地理编码得到的地点名称/格式化地址。")
+    address_components: dict | None = Field(default=None, description="行政区划（省/市/区/街道）。")
     accuracy_meters: float | None = Field(default=None, description="定位精度，单位米。")
     error: str | None = Field(default=None, description="失败或不可用原因。")
 
@@ -3144,10 +3151,22 @@ class QueryCurrentLocationTool(BaseTool):
 
         timeout_seconds = float(input_data.get("timeout_seconds") or 6)
         high_accuracy = bool(input_data.get("high_accuracy", True))
-        return await _request_device_location(context, timeout_seconds=timeout_seconds, high_accuracy=high_accuracy)
+        return await _request_device_location(
+            context,
+            timeout_seconds=timeout_seconds,
+            high_accuracy=high_accuracy,
+            resolve_address=True,
+        )
 
 
-async def _request_device_location(context: ToolContext, *, timeout_seconds: float, high_accuracy: bool) -> ToolResult:
+async def _request_device_location(
+    context: ToolContext,
+    *,
+    timeout_seconds: float,
+    high_accuracy: bool,
+    resolve_address: bool = False,
+    address_timeout_seconds: float = 4.0,
+) -> ToolResult:
     """请求端侧返回一次当前位置。
 
     主要逻辑：先检查当前用户是否有在线设备以及设备是否声明定位能力；没有可消费端
@@ -3189,7 +3208,7 @@ async def _request_device_location(context: ToolContext, *, timeout_seconds: flo
         result = await context.devices.commands.call(
             name="device.location.get_current",
             selector=selector,
-            params={"high_accuracy": high_accuracy},
+            params={"high_accuracy": high_accuracy, "timeout_ms": int(max(1.0, timeout_seconds) * 1000)},
             timeout_seconds=timeout_seconds,
             require_single=True,
         )
@@ -3234,20 +3253,42 @@ async def _request_device_location(context: ToolContext, *, timeout_seconds: flo
             },
             message="端侧返回的定位结果不完整，请告诉我明确的出发地点。",
         )
-    return ToolResult.success(
-        data={
-            "location_ready": True,
-            "provider": "device_gps",
-            "latitude": location["latitude"],
-            "longitude": location["longitude"],
-            "accuracy_meters": location.get("accuracy_meters"),
-            "timestamp_ms": location.get("timestamp_ms"),
-            "command_id": result.command_id,
-            "raw": location.get("raw") or {},
-            "error": None,
-        },
-        message=f"已获取当前位置：{location['longitude']},{location['latitude']}",
-    )
+    # 端侧 CoreLocation/浏览器返回 WGS-84，这里补一份高德所用的 GCJ-02 坐标。
+    gcj_lat, gcj_lng = _wgs84_to_gcj02(location["latitude"], location["longitude"])
+    data = {
+        "location_ready": True,
+        "provider": "device_gps",
+        "latitude": location["latitude"],
+        "longitude": location["longitude"],
+        "coordinate_system": "wgs84",
+        "gcj02_latitude": gcj_lat,
+        "gcj02_longitude": gcj_lng,
+        "accuracy_meters": location.get("accuracy_meters"),
+        "timestamp_ms": location.get("timestamp_ms"),
+        "command_id": result.command_id,
+        "address": None,
+        "raw": location.get("raw") or {},
+        "error": None,
+    }
+    message = f"已获取当前位置：{location['longitude']},{location['latitude']}"
+    if resolve_address:
+        regeo = await _reverse_geocode_amap(
+            getattr(context, "mcp", None),
+            latitude=location["latitude"],
+            longitude=location["longitude"],
+            timeout_seconds=address_timeout_seconds,
+        )
+        data["gcj02_latitude"] = regeo["gcj02_latitude"]
+        data["gcj02_longitude"] = regeo["gcj02_longitude"]
+        if regeo["ok"]:
+            data["address"] = regeo["formatted_address"]
+            data["address_components"] = regeo["components"]
+            data["address_provider"] = "amap_mcp"
+            message = f"你当前位于{regeo['formatted_address']}（{location['longitude']},{location['latitude']}）。"
+        else:
+            data["address_provider"] = "amap_unavailable"
+            data["address_error"] = regeo["error"]
+    return ToolResult.success(data=data, message=message)
 
 
 def _device_supports_location(device: DeviceSnapshot) -> bool:
@@ -3596,6 +3637,7 @@ def _resolve_amap_mcp_gateway(configured_gateway: Any) -> Any:
     )
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_GEO_TOOL, server="amap", target_name="maps_geo"))
     gateway.register_tool(McpToolSpec(name=AMAP_MCP_ROUTE_TOOL, server="amap", target_name="maps_direction_walking"))
+    gateway.register_tool(McpToolSpec(name=AMAP_MCP_REGEO_TOOL, server="amap", target_name="maps_regeocode"))
     return gateway
 
 
@@ -3753,6 +3795,138 @@ def _mcp_first_text(result: dict) -> str:
         if isinstance(item, dict) and item.get("type") == "text":
             return str(item.get("text") or "").strip()
     return ""
+
+
+_GCJ02_A = 6378245.0
+_GCJ02_EE = 0.00669342162296594323
+
+
+def _out_of_china(latitude: float, longitude: float) -> bool:
+    """判断坐标是否在中国大陆范围之外。
+
+    主要用途：GCJ-02 偏移只在中国境内生效，境外 WGS-84 与 GCJ-02 一致，直接跳过转换。
+    """
+
+    return not (73.66 < longitude < 135.05 and 3.86 < latitude < 53.55)
+
+
+def _gcj02_transform_lat(x: float, y: float) -> float:
+    ret = -100.0 + 2.0 * x + 3.0 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(y * math.pi) + 40.0 * math.sin(y / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (160.0 * math.sin(y / 12.0 * math.pi) + 320.0 * math.sin(y * math.pi / 30.0)) * 2.0 / 3.0
+    return ret
+
+
+def _gcj02_transform_lng(x: float, y: float) -> float:
+    ret = 300.0 + x + 2.0 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * math.sqrt(abs(x))
+    ret += (20.0 * math.sin(6.0 * x * math.pi) + 20.0 * math.sin(2.0 * x * math.pi)) * 2.0 / 3.0
+    ret += (20.0 * math.sin(x * math.pi) + 40.0 * math.sin(x / 3.0 * math.pi)) * 2.0 / 3.0
+    ret += (150.0 * math.sin(x / 12.0 * math.pi) + 300.0 * math.sin(x / 30.0 * math.pi)) * 2.0 / 3.0
+    return ret
+
+
+def _wgs84_to_gcj02(latitude: float, longitude: float) -> tuple[float, float]:
+    """把 WGS-84(GPS 国际标准)坐标转成 GCJ-02(高德/腾讯所用火星坐标)。
+
+    主要用途：端侧 CoreLocation/浏览器返回 WGS-84，高德 REST/MCP 只接受 GCJ-02，
+    送高德前必须转换，否则会偏移数百米。境外坐标按原值返回。
+    返回值：(gcj02_latitude, gcj02_longitude)。
+    """
+
+    if _out_of_china(latitude, longitude):
+        return latitude, longitude
+    d_lat = _gcj02_transform_lat(longitude - 105.0, latitude - 35.0)
+    d_lng = _gcj02_transform_lng(longitude - 105.0, latitude - 35.0)
+    rad_lat = latitude / 180.0 * math.pi
+    magic = math.sin(rad_lat)
+    magic = 1 - _GCJ02_EE * magic * magic
+    sqrt_magic = math.sqrt(magic)
+    d_lat = (d_lat * 180.0) / ((_GCJ02_A * (1 - _GCJ02_EE)) / (magic * sqrt_magic) * math.pi)
+    d_lng = (d_lng * 180.0) / (_GCJ02_A / sqrt_magic * math.cos(rad_lat) * math.pi)
+    return latitude + d_lat, longitude + d_lng
+
+
+def _amap_component_text(value: Any) -> str:
+    """把高德 addressComponent 字段归一成字符串。
+
+    主要逻辑：高德对直辖市等会把 city 返回成空列表，这里把列表/None 统一成字符串。
+    """
+
+    if isinstance(value, list):
+        return "".join(str(item) for item in value if item)
+    if value is None:
+        return ""
+    return str(value)
+
+
+async def _reverse_geocode_amap(
+    mcp: Any,
+    *,
+    latitude: float,
+    longitude: float,
+    timeout_seconds: float,
+) -> dict:
+    """用高德 MCP 逆地理编码把端侧 WGS-84 坐标转成地点名称。
+
+    主要逻辑：先把 WGS-84 转成 GCJ-02(高德坐标系)，再调用 maps_regeocode，
+    解析 formatted_address 和行政区划。
+    参数：`mcp` 为 ToolContext 注入的 MCP Gateway；`latitude/longitude` 为端侧
+    上报的 WGS-84 坐标；`timeout_seconds` 为逆地理编码等待预算。
+    返回值：始终包含 gcj02 坐标；成功时附 formatted_address 和 components，
+    失败时 `ok=False` 并带 error，便于上层只读降级。
+    异常情况：无（任何失败都收敛成 ok=False）。
+    """
+
+    gcj_lat, gcj_lng = _wgs84_to_gcj02(latitude, longitude)
+    result: dict[str, Any] = {
+        "ok": False,
+        "gcj02_latitude": gcj_lat,
+        "gcj02_longitude": gcj_lng,
+        "formatted_address": None,
+        "components": None,
+        "error": None,
+    }
+    try:
+        gateway = _resolve_amap_mcp_gateway(mcp)
+        call_result = await asyncio.wait_for(
+            asyncio.to_thread(
+                gateway.call,
+                tool_name=AMAP_MCP_REGEO_TOOL,
+                arguments={"location": f"{gcj_lng:.6f},{gcj_lat:.6f}"},
+                timeout_seconds=max(0.2, timeout_seconds),
+            ),
+            timeout=timeout_seconds,
+        )
+        parsed = _mcp_text_json(call_result)
+    except (asyncio.TimeoutError, TimeoutError) as exc:
+        result["error"] = f"高德逆地理编码超时：{exc}" if str(exc) else "高德逆地理编码超时。"
+        return result
+    except Exception as exc:  # noqa: BLE001 - 逆地理编码失败只降级为无地名，不阻断定位
+        result["error"] = str(exc) or "高德逆地理编码不可用。"
+        return result
+
+    regeocode = parsed.get("regeocode") if isinstance(parsed.get("regeocode"), dict) else parsed
+    formatted = str(regeocode.get("formatted_address") or regeocode.get("formattedAddress") or "").strip()
+    component = regeocode.get("addressComponent") or regeocode.get("address_component") or {}
+    if not isinstance(component, dict):
+        component = {}
+    province = _amap_component_text(component.get("province"))
+    city = _amap_component_text(component.get("city")) or province
+    district = _amap_component_text(component.get("district"))
+    township = _amap_component_text(component.get("township"))
+    if not formatted:
+        result["error"] = "高德返回结果缺少地址。"
+        return result
+    result["ok"] = True
+    result["formatted_address"] = formatted
+    result["components"] = {
+        "province": province,
+        "city": city,
+        "district": district,
+        "township": township,
+    }
+    return result
 
 
 class SearchConversationHistoryInput(BaseModel):

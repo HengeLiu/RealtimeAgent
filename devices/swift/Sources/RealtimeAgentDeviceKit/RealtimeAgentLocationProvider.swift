@@ -75,7 +75,11 @@ final class RealtimeAgentLocationProvider: NSObject, CLLocationManagerDelegate {
         guard status == .authorizedWhenInUse || status == .authorizedAlways else {
             throw LocationError.denied
         }
-        manager.desiredAccuracy = highAccuracy ? kCLLocationAccuracyBest : kCLLocationAccuracyHundredMeters
+        // 最近 60s 内的缓存定位直接返回，避免重新冷启动 GPS 导致命令超时。
+        if let cached = manager.location, -cached.timestamp.timeIntervalSinceNow < 60 {
+            return RealtimeAgentLocationPayload(fields: Self.payload(from: cached))
+        }
+        manager.desiredAccuracy = highAccuracy ? kCLLocationAccuracyBest : kCLLocationAccuracyNearestTenMeters
         let location = try await requestOnce(timeoutMS: timeoutMS)
         return RealtimeAgentLocationPayload(fields: Self.payload(from: location))
     }
@@ -92,7 +96,8 @@ final class RealtimeAgentLocationProvider: NSObject, CLLocationManagerDelegate {
     private func requestOnce(timeoutMS: Int) async throws -> CLLocation {
         try await withCheckedThrowingContinuation { continuation in
             locationContinuation = continuation
-            manager.requestLocation()
+            // 用持续更新取首帧，比 requestLocation 更易在室内/弱信号下拿到粗定位。
+            manager.startUpdatingLocation()
             let nanoseconds = UInt64(max(timeoutMS, 1)) * 1_000_000
             Task { @MainActor [weak self] in
                 try? await Task.sleep(nanoseconds: nanoseconds)
@@ -104,6 +109,7 @@ final class RealtimeAgentLocationProvider: NSObject, CLLocationManagerDelegate {
     private func finishLocation(_ result: Result<CLLocation, Error>) {
         guard let continuation = locationContinuation else { return }
         locationContinuation = nil
+        manager.stopUpdatingLocation()
         continuation.resume(with: result)
     }
 
@@ -124,6 +130,10 @@ final class RealtimeAgentLocationProvider: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_: CLLocationManager, didFailWithError error: Error) {
         MainActor.assumeIsolated {
+            // 持续更新下 locationUnknown 是暂时性错误，继续等待后续更新或超时，不立即失败。
+            if let clError = error as? CLError, clError.code == .locationUnknown {
+                return
+            }
             finishLocation(.failure(LocationError.failed(error.localizedDescription)))
         }
     }

@@ -188,8 +188,12 @@ private struct DebugSheet: View {
                 }
 
                 Section("操作") {
-                    Button("获取定位与姿态") {
-                        runtime.logDeviceSensors()
+                    Button("获取 GPS 定位") {
+                        runtime.logDeviceLocation()
+                    }
+
+                    Button("获取设备姿态") {
+                        runtime.logDeviceAttitude()
                     }
 
                     Button("复制日志") {

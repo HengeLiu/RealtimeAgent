@@ -50,11 +50,23 @@ final class DeviceSensorsReader: NSObject, CLLocationManagerDelegate {
         locationManager.delegate = self
     }
 
+    /// 当前定位授权与服务状态摘要。
+    ///
+    /// 主要用途：定位失败时先打印授权/精度/服务开关，便于区分是权限、精度授权还是信号问题。
+    var authorizationSummary: String {
+        let accuracy = locationManager.accuracyAuthorization == .fullAccuracy ? "full" : "reduced"
+        let cached = locationManager.location.map { String(format: "%.0fs", -$0.timestamp.timeIntervalSinceNow) } ?? "none"
+        return "auth=\(describeAuthorization(locationManager.authorizationStatus)) accuracy=\(accuracy) "
+            + "services=\(CLLocationManager.locationServicesEnabled()) cached_age=\(cached)"
+    }
+
     /// 取一次当前 GPS 定位。
     ///
+    /// 主要逻辑：先用较新的缓存定位秒回；否则改用持续更新取首帧(比 `requestLocation` 更易在室内拿到
+    /// 粗定位)，并把精度降到十米级、超时拉长到系统内部超时之外，避免提前误判超时。
     /// 参数：`timeoutMS` 为定位超时(毫秒)。
     /// 异常情况：服务未开启、授权被拒、超时或系统错误时抛出 `SensorsError`。
-    func currentLocation(timeoutMS: Int = 8000) async throws -> CLLocation {
+    func currentLocation(timeoutMS: Int = 15000) async throws -> CLLocation {
         guard CLLocationManager.locationServicesEnabled() else {
             throw SensorsError.locationServicesDisabled
         }
@@ -62,10 +74,14 @@ final class DeviceSensorsReader: NSObject, CLLocationManagerDelegate {
         guard status == .authorizedWhenInUse || status == .authorizedAlways else {
             throw SensorsError.locationDenied
         }
-        locationManager.desiredAccuracy = kCLLocationAccuracyBest
+        // 最近 60s 内的缓存定位直接返回，避免重新冷启动 GPS。
+        if let cached = locationManager.location, -cached.timestamp.timeIntervalSinceNow < 60 {
+            return cached
+        }
+        locationManager.desiredAccuracy = kCLLocationAccuracyNearestTenMeters
         return try await withCheckedThrowingContinuation { continuation in
             locationContinuation = continuation
-            locationManager.requestLocation()
+            locationManager.startUpdatingLocation()
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(timeoutMS)) { [weak self] in
                 self?.finishLocation(.failure(SensorsError.locationTimeout))
             }
@@ -118,7 +134,32 @@ final class DeviceSensorsReader: NSObject, CLLocationManagerDelegate {
     private func finishLocation(_ result: Result<CLLocation, Error>) {
         guard let continuation = locationContinuation else { return }
         locationContinuation = nil
+        locationManager.stopUpdatingLocation()
         continuation.resume(with: result)
+    }
+
+    private func describeAuthorization(_ status: CLAuthorizationStatus) -> String {
+        switch status {
+        case .notDetermined: return "notDetermined"
+        case .restricted: return "restricted"
+        case .denied: return "denied"
+        case .authorizedAlways: return "authorizedAlways"
+        case .authorizedWhenInUse: return "authorizedWhenInUse"
+        @unknown default: return "unknown"
+        }
+    }
+
+    private func describeLocationError(_ error: Error) -> String {
+        guard let clError = error as? CLError else { return error.localizedDescription }
+        let reason: String
+        switch clError.code {
+        case .denied: reason = "denied(定位权限或服务被关闭)"
+        case .locationUnknown: reason = "locationUnknown(暂时无法定位)"
+        case .network: reason = "network(网络问题)"
+        case .headingFailure: reason = "headingFailure"
+        default: reason = "code=\(clError.code.rawValue)"
+        }
+        return "CLError \(reason)"
     }
 
     nonisolated func locationManagerDidChangeAuthorization(_: CLLocationManager) {
@@ -138,7 +179,11 @@ final class DeviceSensorsReader: NSObject, CLLocationManagerDelegate {
 
     nonisolated func locationManager(_: CLLocationManager, didFailWithError error: Error) {
         MainActor.assumeIsolated {
-            finishLocation(.failure(SensorsError.locationFailed(error.localizedDescription)))
+            // 持续更新下 locationUnknown 是暂时性错误，继续等待后续更新或超时，不立即失败。
+            if let clError = error as? CLError, clError.code == .locationUnknown {
+                return
+            }
+            finishLocation(.failure(SensorsError.locationFailed(describeLocationError(error))))
         }
     }
 }
