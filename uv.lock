@@ -1112,9 +1112,9 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "dashscope" },
+    { name = "numpy" },
     { name = "onnxruntime" },
     { name = "openai" },
-    { name = "opencv-python" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "silero-vad" },
@@ -1123,6 +1123,9 @@ dependencies = [
 [package.optional-dependencies]
 gui = [
     { name = "pyside6" },
+]
+vision = [
+    { name = "opencv-python" },
 ]
 
 [package.dev-dependencies]
@@ -1134,15 +1137,16 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9.0" },
     { name = "dashscope", specifier = ">=1.25.0" },
+    { name = "numpy", specifier = ">=1.24.0" },
     { name = "onnxruntime", specifier = ">=1.17.0" },
     { name = "openai", specifier = ">=1.30.0,<2" },
-    { name = "opencv-python", specifier = ">=4.9.0" },
+    { name = "opencv-python", marker = "extra == 'vision'", specifier = ">=4.9.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pyside6", marker = "extra == 'gui'", specifier = ">=6.7.0" },
     { name = "pyyaml", specifier = ">=6.0.0" },
     { name = "silero-vad", specifier = ">=6.2.1" },
 ]
-provides-extras = ["gui"]
+provides-extras = ["gui", "vision"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = ">=8.0.0" }]

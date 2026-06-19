@@ -2,6 +2,11 @@
 
 ## 0.1.0rc1
 
+### 打包与发布
+
+- 完善 PyPI 发布元数据：`readme`、`authors`、`keywords`、`classifiers` 与 `project.urls`。
+- 依赖瘦身：`opencv-python` 下放为可选 extra `vision`（仅 Omni 超大图压缩与 python-phone mock 视觉用到）；`numpy` 提升为核心依赖（核心 VAD 路径使用，此前仅靠传递依赖）；`onnxruntime` 保留（silero VAD `onnx=True` 运行期必需）。
+
 ### 架构变更点
 
 - 新增 conversation 音视频对话运行时方向，支持 Omni Manual 与 VL 链路逐步统一到 `SpeechInputDelta` 输入模型。

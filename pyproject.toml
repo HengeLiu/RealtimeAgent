@@ -2,18 +2,36 @@
 name = "realtime-agent"
 version = "0.1.0rc1"
 description = "Server-side Python SDK for realtime-agent voice and device sessions."
+readme = "README.md"
 requires-python = ">=3.11,<3.13"
 license = { file = "LICENSE" }
+authors = [{ name = "Henge Liu", email = "eliohenge@gmail.com" }]
+keywords = ["realtime", "agent", "voice", "asr", "vad", "dashscope", "qwen", "omni"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+    "Topic :: Software Development :: Libraries :: Application Frameworks",
+]
 dependencies = [
     "aiohttp>=3.9.0",
     "dashscope>=1.25.0",
+    "numpy>=1.24.0",
     "onnxruntime>=1.17.0",
     "openai>=1.30.0,<2",
-    "opencv-python>=4.9.0",
     "pydantic>=2.0.0",
     "pyyaml>=6.0.0",
     "silero-vad>=6.2.1",
 ]
+
+[project.urls]
+Homepage = "https://github.com/HengeLiu/RealtimeAgent"
+Repository = "https://github.com/HengeLiu/RealtimeAgent"
+Changelog = "https://github.com/HengeLiu/RealtimeAgent/blob/main/CHANGELOG.md"
 
 [project.scripts]
 "realtime-agent.config.sync" = "realtime_agent.cli.config:sync"
@@ -45,6 +63,11 @@ dev = [
 [project.optional-dependencies]
 gui = [
     "pyside6>=6.7.0",
+]
+# Image decoding/compression for the Omni Realtime oversized-image path and the
+# python-phone device mock vision tools. Core SDK degrades gracefully without it.
+vision = [
+    "opencv-python>=4.9.0",
 ]
 
 [build-system]
